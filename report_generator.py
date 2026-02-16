@@ -234,8 +234,9 @@ def _split_by_type(results):
     return prop, liab
 
 
-def create_incurred_by_type_year_chart(results, tmpdir):
-    """Split Property (top) and Liability (bottom) with avg, total incurred, and claim count."""
+def create_incurred_by_type_year_chart(results, tmpdir, min_policy_year=None):
+    """Split Property (top) and Liability (bottom) with avg, total incurred, and claim count.
+    Always shows ALL years from min to max policy year, even if no claims in some years."""
     data = defaultdict(lambda: {"Property": {"incurred": 0, "count": 0}, "Liability": {"incurred": 0, "count": 0}})
     for r in results:
         f = r["fields"]
@@ -246,7 +247,25 @@ def create_incurred_by_type_year_chart(results, tmpdir):
             data[year][ctype]["count"] += 1
     if not data:
         return None
-    years = sorted(data.keys())
+
+    # Determine full year range - include all years even with 0 claims
+    numeric_years = []
+    for y in data.keys():
+        try:
+            numeric_years.append(int(y))
+        except (ValueError, TypeError):
+            pass
+    if numeric_years:
+        yr_min = min(numeric_years)
+        yr_max = max(numeric_years)
+        if min_policy_year and min_policy_year < yr_min:
+            yr_min = min_policy_year
+        current_year = datetime.now().year
+        if yr_max < current_year:
+            yr_max = current_year
+        years = [str(y) for y in range(yr_min, yr_max + 1)]
+    else:
+        years = sorted(data.keys())
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 10))
 
@@ -276,6 +295,9 @@ def create_incurred_by_type_year_chart(results, tmpdir):
                 ha="right", va="top", fontsize=9, fontweight="bold",
                 bbox=dict(boxstyle="round,pad=0.3", facecolor="lightyellow", edgecolor="gray"))
 
+        # Set y-axis minimum to 0
+        ax.set_ylim(bottom=0)
+
         # Annotate bars with incurred amount
         for bar, inc_val in zip(bars, incurred):
             h = bar.get_height()
@@ -287,6 +309,7 @@ def create_incurred_by_type_year_chart(results, tmpdir):
         ax_twin = ax.twinx()
         ax_twin.plot(x, counts, color="#003366", marker="o", linewidth=2, label="Claim Count")
         ax_twin.set_ylabel("Claim Count", color="#003366")
+        ax_twin.set_ylim(bottom=0)  # Ensure count axis starts at 0
         avg_count = np.mean(counts) if counts else 0
         ax_twin.axhline(y=avg_count, color="#003366", linewidth=1, linestyle=":", alpha=0.6, label=f"Avg Count: {avg_count:.1f}")
 
@@ -324,8 +347,13 @@ def create_location_impact_chart(results, tmpdir):
         (ax2, liab_loc, "Liability - Location Impact", LIAB_BAR_COLOR),
     ]:
         if not loc_data:
-            ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
+            ax.text(0.5, 0.5, "No claims in filtered results", ha="center", va="center",
+                   transform=ax.transAxes, fontsize=10, color="gray", style="italic")
             ax.set_title(title)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            for spine in ax.spines.values():
+                spine.set_visible(False)
             continue
         sorted_locs = sorted(loc_data.items(), key=lambda x: x[1]["incurred"], reverse=True)[:10]
         labels = [sanitize_for_pdf(l[0][:28]) for l in sorted_locs]
@@ -390,10 +418,21 @@ def create_cause_of_loss_chart(results, tmpdir):
         ax_bar = axes[row][1]
 
         if not cause_data:
-            ax_pie.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax_pie.transAxes)
-            ax_bar.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax_bar.transAxes)
-            ax_pie.set_title(f"{type_name} - Incurred by Cause")
-            ax_bar.set_title(f"{type_name} - Frequency by Cause")
+            ax_pie.text(0.5, 0.5, "No claims in filtered results", ha="center", va="center",
+                       transform=ax_pie.transAxes, fontsize=10, color="gray", style="italic")
+            ax_bar.text(0.5, 0.5, "No claims in filtered results", ha="center", va="center",
+                       transform=ax_bar.transAxes, fontsize=10, color="gray", style="italic")
+            ax_pie.set_title(f"{type_name} - Incurred by Cause of Loss")
+            ax_bar.set_title(f"{type_name} - Claim Frequency by Cause")
+            # Remove axes for cleaner look
+            ax_pie.set_xticks([])
+            ax_pie.set_yticks([])
+            ax_bar.set_xticks([])
+            ax_bar.set_yticks([])
+            for spine in ax_pie.spines.values():
+                spine.set_visible(False)
+            for spine in ax_bar.spines.values():
+                spine.set_visible(False)
             continue
 
         sorted_causes = sorted(cause_data.items(), key=lambda x: x[1]["incurred"], reverse=True)[:8]
@@ -434,8 +473,9 @@ def create_cause_of_loss_chart(results, tmpdir):
     return path
 
 
-def create_claim_trending_chart(results, tmpdir):
-    """Split Property (top) and Liability (bottom). Shows incurred with avg line + claim count with avg line."""
+def create_claim_trending_chart(results, tmpdir, min_policy_year=None):
+    """Split Property (top) and Liability (bottom). Shows incurred with avg line + claim count with avg line.
+    Always shows ALL years from min to max policy year, even if no claims in some years."""
     data = defaultdict(lambda: {"Property": {"incurred": 0, "count": 0}, "Liability": {"incurred": 0, "count": 0}})
     for r in results:
         f = r["fields"]
@@ -447,7 +487,26 @@ def create_claim_trending_chart(results, tmpdir):
     if not data:
         return None
 
-    years = sorted(data.keys())
+    # Determine full year range - include all years even with 0 claims
+    numeric_years = []
+    for y in data.keys():
+        try:
+            numeric_years.append(int(y))
+        except (ValueError, TypeError):
+            pass
+    if numeric_years:
+        yr_min = min(numeric_years)
+        yr_max = max(numeric_years)
+        # If min_policy_year specified, use it as floor
+        if min_policy_year and min_policy_year < yr_min:
+            yr_min = min_policy_year
+        # Extend to current year if needed
+        current_year = datetime.now().year
+        if yr_max < current_year:
+            yr_max = current_year
+        years = [str(y) for y in range(yr_min, yr_max + 1)]
+    else:
+        years = sorted(data.keys())
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 10))
 
@@ -473,6 +532,9 @@ def create_claim_trending_chart(results, tmpdir):
         avg_inc = np.mean(incurred) if incurred else 0
         ax.axhline(y=avg_inc, color="orange", linewidth=1.5, linestyle="--", label=f"Avg Incurred: ${avg_inc:,.0f}")
 
+        # Set y-axis minimum to 0
+        ax.set_ylim(bottom=0)
+
         # Annotate incurred on bars
         for bar, inc_val in zip(bars, incurred):
             h = bar.get_height()
@@ -484,6 +546,7 @@ def create_claim_trending_chart(results, tmpdir):
         ax_twin = ax.twinx()
         ax_twin.plot(x, counts, color="#003366", marker="o", linewidth=2, label="Claim Count")
         ax_twin.set_ylabel("Claim Count", color="#003366")
+        ax_twin.set_ylim(bottom=0)  # Ensure count axis starts at 0
 
         # Avg claim count line
         avg_count = np.mean(counts) if counts else 0
@@ -528,6 +591,12 @@ def create_development_chart(results, tmpdir):
             cause = get_val(f, "Cause of Loss Rollup Output", "")
             if cause == "N/A":
                 cause = get_val(f, "Cause of Loss (from Cause of Loss)", "")
+            hazard = get_val(f, "Risk/Hazard (From Risk/Hazard)", "")
+
+            # Build cause + hazard label
+            cause_hazard = sanitize_for_pdf(cause[:20])
+            if hazard and hazard != "N/A":
+                cause_hazard = sanitize_for_pdf(f"{cause[:18]} / {hazard[:15]}")
 
             label = sanitize_for_pdf(claim_num[-10:]) if len(claim_num) > 10 else sanitize_for_pdf(claim_num)
             dev_data.append({
@@ -536,7 +605,7 @@ def create_development_chart(results, tmpdir):
                 "dol": sanitize_for_pdf(dol[:10]),
                 "corp": sanitize_for_pdf(corp[:25]),
                 "prop": sanitize_for_pdf(prop[:25]),
-                "cause": sanitize_for_pdf(cause[:20]),
+                "cause": cause_hazard,
             })
     if not dev_data:
         return None, []
@@ -635,10 +704,10 @@ def generate_executive_pdf(client_name, results, query_params):
             dev_lookup[r.get("record_id", id(r))] = delta
 
     # Generate charts
-    chart_incurred = create_incurred_by_type_year_chart(results, tmpdir)
+    chart_incurred = create_incurred_by_type_year_chart(results, tmpdir, min_policy_year=min_py)
     chart_location = create_location_impact_chart(results, tmpdir)
     chart_cause = create_cause_of_loss_chart(results, tmpdir)
-    chart_trending = create_claim_trending_chart(results, tmpdir)
+    chart_trending = create_claim_trending_chart(results, tmpdir, min_policy_year=min_py)
     dev_result = create_development_chart(results, tmpdir)
     if isinstance(dev_result, tuple):
         chart_development, dev_table_data = dev_result
@@ -725,13 +794,18 @@ def generate_executive_pdf(client_name, results, query_params):
         if ctype == "Property": prop_rsv += rv_val
         elif ctype == "Liability": liab_rsv += rv_val
 
-    # Compute loss ratios for summary
+    # Compute loss ratios for summary using POLICY TABLE totals (not just filtered claims)
     prop_lr_list = [p for p in lr_data if p["type"] == "Property"]
     liab_lr_list = [p for p in lr_data if p["type"] == "Liability"]
     prop_prem = sum(d["base_premium"] for d in prop_lr_list)
     liab_prem = sum(d["base_premium"] for d in liab_lr_list)
-    prop_lr = prop_inc / prop_prem if prop_prem > 0 else 0
-    liab_lr = liab_inc / liab_prem if liab_prem > 0 else 0
+    # Use policy table incurred/claims totals for accurate summary (covers all claims, not just filtered)
+    prop_inc_lr = sum(d["incurred"] for d in prop_lr_list)
+    liab_inc_lr = sum(d["incurred"] for d in liab_lr_list)
+    prop_claims_lr = sum(d["claim_count"] for d in prop_lr_list)
+    liab_claims_lr = sum(d["claim_count"] for d in liab_lr_list)
+    prop_lr = prop_inc_lr / prop_prem if prop_prem > 0 else 0
+    liab_lr = liab_inc_lr / liab_prem if liab_prem > 0 else 0
 
     # Draw the box (compact to keep loss ratio in white space)
     box_h = 35
@@ -756,17 +830,21 @@ def generate_executive_pdf(client_name, results, query_params):
 
     pdf.cell(col_w, 5, f"  Attorney Rep: {attorney_count} claim(s)", ln=True)
 
-    # Property sub-section (compact)
+    # Property sub-section - use policy table totals for incurred/claims/loss ratio
     pdf.set_font("Helvetica", "B", 8)
     lr_str_p = f"{prop_lr:.0%}" if prop_prem > 0 else "N/A"
-    pdf.cell(col_w, 4, f"  PROPERTY: {len(property_claims)} claims (O:{prop_open} C:{prop_closed})", ln=False)
-    pdf.cell(col_w, 4, f"Incurred: ${prop_inc:,.0f}", ln=False)
+    prop_display_claims = prop_claims_lr if prop_claims_lr > 0 else len(property_claims)
+    prop_display_inc = prop_inc_lr if prop_inc_lr > 0 else prop_inc
+    pdf.cell(col_w, 4, f"  PROPERTY: {prop_display_claims} claims (O:{prop_open} C:{prop_closed})", ln=False)
+    pdf.cell(col_w, 4, f"Incurred: ${prop_display_inc:,.0f}", ln=False)
     pdf.cell(col_w, 4, f"Loss Ratio: {lr_str_p}", ln=True)
 
-    # Liability sub-section (compact)
+    # Liability sub-section - use policy table totals for incurred/claims/loss ratio
     lr_str_l = f"{liab_lr:.0%}" if liab_prem > 0 else "N/A"
-    pdf.cell(col_w, 4, f"  LIABILITY: {len(liability_claims)} claims (O:{liab_open} C:{liab_closed})", ln=False)
-    pdf.cell(col_w, 4, f"Incurred: ${liab_inc:,.0f}", ln=False)
+    liab_display_claims = liab_claims_lr if liab_claims_lr > 0 else len(liability_claims)
+    liab_display_inc = liab_inc_lr if liab_inc_lr > 0 else liab_inc
+    pdf.cell(col_w, 4, f"  LIABILITY: {liab_display_claims} claims (O:{liab_open} C:{liab_closed})", ln=False)
+    pdf.cell(col_w, 4, f"Incurred: ${liab_display_inc:,.0f}", ln=False)
     pdf.cell(col_w, 4, f"Loss Ratio: {lr_str_l}", ln=True)
 
     pdf.ln(4)
@@ -938,14 +1016,14 @@ def generate_executive_pdf(client_name, results, query_params):
     if dev_table_data:
         pdf.ln(4)
         # Column widths centered on portrait page (210mm)
-        dc = [22, 22, 28, 28, 26, 22, 22, 20]  # total = 190
+        dc = [20, 22, 26, 26, 34, 22, 22, 18]  # total = 190 - wider cause/hazard column
         table_w = sum(dc)
         margin_x = (pdf.w - table_w) / 2
         pdf.set_x(margin_x)
         pdf.set_font("Helvetica", "B", 8)
         pdf.set_fill_color(*HUB_DARK_BLUE)
         pdf.set_text_color(*HUB_WHITE)
-        headers = ["DOL", "Claim #", "Claimant", "Property", "Cause", "Total Inc.", "15mo Dev", "Dev %"]
+        headers = ["DOL", "Claim #", "Claimant", "Property", "Cause / Hazard", "Total Inc.", "15mo Dev", "Dev %"]
         for i, h in enumerate(headers):
             align = "R" if i >= 5 else "L"
             pdf.cell(dc[i], 6, h, fill=True, border=1, align=align)
@@ -962,7 +1040,7 @@ def generate_executive_pdf(client_name, results, query_params):
             pdf.cell(dc[1], 5, d["label"][:14], fill=True, border=1)
             pdf.cell(dc[2], 5, d["claimant"][:20], fill=True, border=1)
             pdf.cell(dc[3], 5, d["prop"][:20], fill=True, border=1)
-            pdf.cell(dc[4], 5, d["cause"][:18], fill=True, border=1)
+            pdf.cell(dc[4], 5, d["cause"][:28], fill=True, border=1)
             pdf.cell(dc[5], 5, f"${d['current']:,.0f}", fill=True, border=1, align="R")
             pdf.cell(dc[6], 5, f"${d['delta']:+,.0f}", fill=True, border=1, align="R")
             pdf.cell(dc[7], 5, dev_pct, fill=True, border=1, align="R")
@@ -1088,7 +1166,7 @@ def generate_executive_pdf(client_name, results, query_params):
                 elif delta < 0:
                     pdf.set_fill_color(204, 255, 204)  # light green
                 # else keep current bg
-                pdf.cell(cw[9], 5, f"${delta:+,.0f}" if delta != 0 else "-", fill=True, border=1, align="R")
+                pdf.cell(cw[10], 5, f"${delta:+,.0f}" if delta != 0 else "-", fill=True, border=1, align="R")
                 # Reset fill color for next row
                 pdf.set_fill_color(*bg)
 
@@ -1109,7 +1187,11 @@ def generate_executive_pdf(client_name, results, query_params):
     def render_detailed_claims(claims_list, section_title):
         if not claims_list:
             return
-        pdf.add_page()
+        pdf.add_page()  # Portrait page
+        # Reset margins explicitly after landscape pages
+        pdf.set_left_margin(10)
+        pdf.set_right_margin(10)
+        pdf.set_x(10)
         pdf.set_font("Helvetica", "B", 14)
         pdf.set_text_color(*HUB_DARK_BLUE)
         pdf.cell(0, 10, section_title, ln=True)
@@ -1119,6 +1201,9 @@ def generate_executive_pdf(client_name, results, query_params):
             flds = r["fields"]
             if pdf.get_y() > 210:
                 pdf.add_page()
+                pdf.set_left_margin(10)
+                pdf.set_right_margin(10)
+                pdf.set_x(10)
 
             dol = sanitize_for_pdf(get_val(flds, "Incident Date", "N/A"))
             if dol == "N/A":
@@ -1189,6 +1274,7 @@ def generate_executive_pdf(client_name, results, query_params):
             if raw_activity:
                 valuations = parse_claims_development(raw_activity)
                 if valuations:
+                    pdf.set_x(pdf.l_margin)  # Ensure left-aligned
                     pdf.set_font("Helvetica", "B", 7)
                     pdf.cell(0, 5, "Claims Development:", ln=True)
                     pdf.set_font("Helvetica", "", 7)
@@ -1205,6 +1291,7 @@ def generate_executive_pdf(client_name, results, query_params):
 
                 comments = parse_activity_comments(raw_activity)
                 if comments:
+                    pdf.set_x(pdf.l_margin)  # Ensure left-aligned
                     pdf.set_font("Helvetica", "B", 7)
                     pdf.cell(0, 5, "Activity Comments:", ln=True)
                     pdf.set_font("Helvetica", "", 7)
