@@ -1,0 +1,5 @@
+python-telegram-bot==21.3
+requests==2.31.0
+fpdf2==2.7.9
+matplotlib>=3.7.0
+numpy>=1.24.0
