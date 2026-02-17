@@ -71,8 +71,9 @@ except ImportError:
 try:
     from proposal_handler import get_proposal_conversation_handler
     HAS_PROPOSAL = True
-except ImportError:
+except Exception as _proposal_err:
     HAS_PROPOSAL = False
+    logging.getLogger(__name__).warning(f"Proposal module import failed: {_proposal_err}")
 
 # ── Configuration (from environment variables) ────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
