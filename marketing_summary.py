@@ -206,10 +206,11 @@ def _sanitize_for_formula(text: str) -> str:
 def search_opportunity(client_name: str) -> list:
     """Search for opportunities matching a client name (partial match)."""
     safe_name = _sanitize_for_formula(client_name)
+    dq = '"'
     formula = (
         f"OR("
-        f"SEARCH(LOWER("{safe_name}"), LOWER({{Opportunity Name}})),"
-        f"SEARCH(LOWER("{safe_name}"), LOWER({{Corporate Name}}))"
+        f"SEARCH(LOWER({dq}{safe_name}{dq}), LOWER({{Opportunity Name}})),"
+        f"SEARCH(LOWER({dq}{safe_name}{dq}), LOWER({{Corporate Name}}))"
         f")"
     )
 
@@ -237,10 +238,11 @@ def search_opportunity(client_name: str) -> list:
 def fetch_policies_for_client(client_name: str) -> list:
     """Fetch all policies related to a client name by searching the Policies table."""
     safe_name = _sanitize_for_formula(client_name)
+    dq = '"'
     formula = (
         f"OR("
-        f"SEARCH(LOWER("{safe_name}"), LOWER({{Name}})),"
-        f"SEARCH(LOWER("{safe_name}"), LOWER({{Companies}}))"
+        f"SEARCH(LOWER({dq}{safe_name}{dq}), LOWER({{Name}})),"
+        f"SEARCH(LOWER({dq}{safe_name}{dq}), LOWER({{Companies}}))"
         f")"
     )
     logger.info(f"Searching policies for: '{client_name}' with formula: {formula}")
