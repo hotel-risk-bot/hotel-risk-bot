@@ -203,22 +203,31 @@ def _sanitize_for_formula(text: str) -> str:
     return text.replace('"', '\\"')
 
 
-def search_opportunity(client_name: str) -> list:
-    """Search for opportunities matching a client name (partial match)."""
+def search_opportunity(client_name: str, upcoming_only: bool = True) -> list:
+    """Search for opportunities matching a client name (partial match).
+    
+    Args:
+        client_name: Partial or full client name to search for.
+        upcoming_only: If True, only return opportunities with future effective dates.
+    """
     safe_name = _sanitize_for_formula(client_name)
     dq = '"'
-    formula = (
+    search_part = (
         f"OR("
         f"SEARCH(LOWER({dq}{safe_name}{dq}), LOWER({{Opportunity Name}})),"
-        f"SEARCH(LOWER({dq}{safe_name}{dq}), LOWER({{Corporate Name}}))"
+        f"SEARCH(LOWER({dq}{safe_name}{dq}), LOWER(ARRAYJOIN({{Corporate Name}},{dq}{dq})))"
         f")"
     )
+    if upcoming_only:
+        formula = f"AND({search_part}, {{Days to Expiration}} >= 0)"
+    else:
+        formula = search_part
 
     url = f"https://api.airtable.com/v0/{SALES_BASE_ID}/{OPPORTUNITIES_TABLE_ID}"
     params = {
         "filterByFormula": formula,
         "sort[0][field]": "Effective Date",
-        "sort[0][direction]": "desc",
+        "sort[0][direction]": "asc",
         "pageSize": 20,
     }
 
@@ -242,7 +251,7 @@ def fetch_policies_for_client(client_name: str) -> list:
     formula = (
         f"OR("
         f"SEARCH(LOWER({dq}{safe_name}{dq}), LOWER({{Name}})),"
-        f"SEARCH(LOWER({dq}{safe_name}{dq}), LOWER({{Companies}}))"
+        f"SEARCH(LOWER({dq}{safe_name}{dq}), LOWER(ARRAYJOIN({{Companies}},{dq}{dq})))"
         f")"
     )
     logger.info(f"Searching policies for: '{client_name}' with formula: {formula}")
