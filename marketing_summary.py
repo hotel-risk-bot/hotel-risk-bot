@@ -198,12 +198,18 @@ def _coverage_sort_key(coverage_type):
 
 # ── Airtable API calls ─────────────────────────────────────────────────
 
+def _sanitize_for_formula(text: str) -> str:
+    """Sanitize text for use in Airtable formula strings."""
+    return text.replace("'", "\\'")
+
+
 def search_opportunity(client_name: str) -> list:
-    """Search for opportunities matching a client name."""
+    """Search for opportunities matching a client name (partial match)."""
+    safe_name = _sanitize_for_formula(client_name)
     formula = (
         f"OR("
-        f"SEARCH(LOWER('{client_name}'), LOWER({{Opportunity Name}})),"
-        f"SEARCH(LOWER('{client_name}'), LOWER({{Corporate Name}}))"
+        f"SEARCH(LOWER('{safe_name}'), LOWER({{Opportunity Name}})),"
+        f"SEARCH(LOWER('{safe_name}'), LOWER({{Corporate Name}}))"
         f")"
     )
 
@@ -215,10 +221,14 @@ def search_opportunity(client_name: str) -> list:
         "pageSize": 20,
     }
 
+    logger.info(f"Searching opportunities for: '{client_name}' with formula: {formula}")
+
     try:
         resp = http_requests.get(url, headers=airtable_headers(), params=params, timeout=30)
         resp.raise_for_status()
-        return resp.json().get("records", [])
+        records = resp.json().get("records", [])
+        logger.info(f"Found {len(records)} opportunities for '{client_name}'")
+        return records
     except Exception as e:
         logger.error(f"Error searching opportunities: {e}")
         return []
@@ -226,12 +236,14 @@ def search_opportunity(client_name: str) -> list:
 
 def fetch_policies_for_client(client_name: str) -> list:
     """Fetch all policies related to a client name by searching the Policies table."""
+    safe_name = _sanitize_for_formula(client_name)
     formula = (
         f"OR("
-        f"SEARCH(LOWER('{client_name}'), LOWER({{Name}})),"
-        f"SEARCH(LOWER('{client_name}'), LOWER({{Companies}}))"
+        f"SEARCH(LOWER('{safe_name}'), LOWER({{Name}})),"
+        f"SEARCH(LOWER('{safe_name}'), LOWER({{Companies}}))"
         f")"
     )
+    logger.info(f"Searching policies for: '{client_name}' with formula: {formula}")
 
     url = f"https://api.airtable.com/v0/{SALES_BASE_ID}/{POLICIES_TABLE_ID}"
     all_records = []
@@ -633,7 +645,13 @@ def build_marketing_summary(policies: list, client_name: str = "",
 
 
 async def get_marketing_summary(client_name: str) -> str:
-    """Main entry point: get marketing summary for a client/opportunity."""
+    """Main entry point: get marketing summary for a client/opportunity.
+    
+    Supports partial name matching - e.g., 'Pritchard' will find 'Pritchard Hospitality'.
+    If no results found with full search term, tries individual words.
+    """
+    logger.info(f"get_marketing_summary called for: '{client_name}'")
+    
     # First, search for the opportunity
     opportunities = search_opportunity(client_name)
 
@@ -642,9 +660,11 @@ async def get_marketing_summary(client_name: str) -> str:
         opp = opportunities[0]
         opp_fields = opp.get("fields", {})
         opp_name = opp_fields.get("Opportunity Name", opp_fields.get("Name", client_name))
+        logger.info(f"Found opportunity: '{opp_name}'")
 
         # Get linked Policy record IDs from the Opportunity
         policy_ids = opp_fields.get("Policies", [])
+        logger.info(f"Opportunity has {len(policy_ids)} linked policy IDs")
 
         if policy_ids:
             # Fetch policies by their record IDs
@@ -653,8 +673,35 @@ async def get_marketing_summary(client_name: str) -> str:
             # Fall back to name-based search
             policies = fetch_policies_for_client(client_name)
 
-        return build_marketing_summary(policies, client_name, opp_name)
-    else:
-        # No opportunity found, search policies directly
-        policies = fetch_policies_for_client(client_name)
+        if policies:
+            return build_marketing_summary(policies, client_name, opp_name)
+
+    # No opportunity found or no policies from opportunity - search policies directly
+    logger.info(f"Trying direct policy search for '{client_name}'")
+    policies = fetch_policies_for_client(client_name)
+    
+    if policies:
         return build_marketing_summary(policies, client_name)
+    
+    # Still nothing - try searching with individual words (for partial matches)
+    words = client_name.strip().split()
+    if len(words) > 1:
+        for word in words:
+            if len(word) >= 3:  # Skip very short words
+                logger.info(f"Trying individual word search: '{word}'")
+                opportunities = search_opportunity(word)
+                if opportunities:
+                    opp = opportunities[0]
+                    opp_fields = opp.get("fields", {})
+                    opp_name = opp_fields.get("Opportunity Name", opp_fields.get("Name", client_name))
+                    policy_ids = opp_fields.get("Policies", [])
+                    if policy_ids:
+                        policies = fetch_policies_by_record_ids(policy_ids)
+                        if policies:
+                            return build_marketing_summary(policies, client_name, opp_name)
+                
+                policies = fetch_policies_for_client(word)
+                if policies:
+                    return build_marketing_summary(policies, client_name)
+    
+    return f"No policies found for {client_name}."
