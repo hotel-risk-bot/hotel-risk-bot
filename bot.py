@@ -56,6 +56,7 @@ try:
     from daily_briefing import (
         run_morning_briefing, run_afternoon_debrief,
         fetch_upcoming_renewals, classify_renewals,
+        send_telegram_message, escape_telegram_markdown,
     )
     HAS_BRIEFING = True
 except ImportError:
@@ -67,9 +68,10 @@ try:
 except ImportError:
     HAS_MARKETING = False
 
-# ââ Configuration (from environment variables) ââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Configuration (from environment variables) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 AIRTABLE_PAT = os.environ.get("AIRTABLE_PAT", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # Airtable Base IDs
 SALES_BASE_ID = "appnFKEzmdLbR4CHY"
@@ -136,7 +138,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ââ Telegram Helpers ââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Telegram Helpers Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 def escape_telegram_dollars(text: str) -> str:
     """Escape dollar signs to prevent Telegram from rendering them as LaTeX.
@@ -165,7 +167,7 @@ async def safe_reply_text(message, text: str, parse_mode: str = None, **kwargs):
             logger.error(f"Plain text send also failed: {e2}")
 
 
-# ââ Airtable REST API Functions âââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Airtable REST API Functions Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 def airtable_headers():
     return {
@@ -245,7 +247,7 @@ def airtable_create_record(base_id: str, table_id: str, fields: dict) -> dict | 
         return None
 
 
-# ââ Consulting Query Functions ââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Consulting Query Functions Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 def build_filter_formula(client_name: str, status: str = None,
                          min_incurred: float = None, max_incurred: float = None,
@@ -321,7 +323,7 @@ def search_incidents(client_name: str, status: str = None,
     return results
 
 
-# ââ Claims Development Parser ââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Claims Development Parser Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 def parse_claims_development(raw_data: str) -> list:
     """Parse Activity Rollup Raw Data to extract valuation entries."""
@@ -374,7 +376,7 @@ def format_claims_development(valuations: list) -> str:
     if not valuations:
         return ""
 
-    lines = ["ð *Claims Development*"]
+    lines = ["Ã°ÂÂÂ *Claims Development*"]
 
     for v in valuations:
         detail_parts = []
@@ -386,12 +388,12 @@ def format_claims_development(valuations: list) -> str:
             detail_parts.append(f"Exp: ${v['expenses']:,.0f}")
 
         detail_str = f" ({', '.join(detail_parts)})" if detail_parts else ""
-        lines.append(f"â¢ {v['date']}: *${v['total_incurred']:,.0f}*{detail_str}")
+        lines.append(f"Ã¢ÂÂ¢ {v['date']}: *${v['total_incurred']:,.0f}*{detail_str}")
 
     return "\n".join(lines)
 
 
-# ââ Report Formatting ââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Report Formatting Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 def get_val(f: dict, field_name: str, default: str = "N/A") -> str:
     """Extract a field value from an Airtable record, handling lists."""
@@ -457,18 +459,18 @@ def format_claim_report(rec: dict) -> str:
     attorney_rep = f.get("Attorney Representation", False)
     attorney_demand = get_val(f, "Attorney Demand")
 
-    status_emoji = "â" if status == "Open" else "ð´" if status == "Closed" else "âª"
+    status_emoji = "Ã¢ÂÂ" if status == "Open" else "Ã°ÂÂÂ´" if status == "Closed" else "Ã¢ÂÂª"
 
-    # Build the report â matching exact user-requested format
+    # Build the report Ã¢ÂÂ matching exact user-requested format
     lines = []
-    lines.append(f"{'â' * 35}")
+    lines.append(f"{'Ã¢ÂÂ' * 35}")
 
-    # ââ Date of Loss (first) ââ
-    lines.append(f"ð *Date of Loss:* {incident_date}")
+    # Ã¢ÂÂÃ¢ÂÂ Date of Loss (first) Ã¢ÂÂÃ¢ÂÂ
+    lines.append(f"Ã°ÂÂÂ *Date of Loss:* {incident_date}")
     lines.append("")
 
-    # ââ Claim Details (with location info grouped here) ââ
-    lines.append(f"ð *Claim Details*")
+    # Ã¢ÂÂÃ¢ÂÂ Claim Details (with location info grouped here) Ã¢ÂÂÃ¢ÂÂ
+    lines.append(f"Ã°ÂÂÂ *Claim Details*")
     lines.append(f"Claim #: `{claim_num}`")
     lines.append(f"Status: {status_emoji} {status}")
     lines.append(f"Type: {claim_type}")
@@ -490,42 +492,42 @@ def format_claim_report(rec: dict) -> str:
         lines.append(f"Address: {full_addr}")
     lines.append("")
 
-    # ââ Incident Details ââ
-    lines.append(f"ð *Incident Details*")
+    # Ã¢ÂÂÃ¢ÂÂ Incident Details Ã¢ÂÂÃ¢ÂÂ
+    lines.append(f"Ã°ÂÂÂ *Incident Details*")
     lines.append(f"Claimant: {involved_party}")
     lines.append(f"Cause of Loss: {cause_of_loss}")
     if risk_hazard != "N/A":
-        lines.append(f"â ï¸ Hazard: {risk_hazard}")
+        lines.append(f"Ã¢ÂÂ Ã¯Â¸Â Hazard: {risk_hazard}")
     if location_of_incident != "N/A":
-        lines.append(f"ð¢ Location of Incident: {location_of_incident}")
+        lines.append(f"Ã°ÂÂÂ¢ Location of Incident: {location_of_incident}")
     if brief_desc != "N/A":
         lines.append(f"Description: {brief_desc}")
     lines.append("")
 
-    # ââ Financial Summary ââ
-    lines.append(f"ð° *Financial Summary*")
-    lines.append(f"â¢ Total Incurred: ${incurred:,.0f}")
+    # Ã¢ÂÂÃ¢ÂÂ Financial Summary Ã¢ÂÂÃ¢ÂÂ
+    lines.append(f"Ã°ÂÂÂ° *Financial Summary*")
+    lines.append(f"Ã¢ÂÂ¢ Total Incurred: ${incurred:,.0f}")
     if paid != "N/A":
         try:
-            lines.append(f"â¢ Paid: ${float(paid):,.0f}")
+            lines.append(f"Ã¢ÂÂ¢ Paid: ${float(paid):,.0f}")
         except (ValueError, TypeError):
-            lines.append(f"â¢ Paid: {paid}")
+            lines.append(f"Ã¢ÂÂ¢ Paid: {paid}")
     try:
-        lines.append(f"â¢ Reserved: ${float(reserved):,.0f}")
+        lines.append(f"Ã¢ÂÂ¢ Reserved: ${float(reserved):,.0f}")
     except (ValueError, TypeError):
-        lines.append(f"â¢ Reserved: {reserved}")
+        lines.append(f"Ã¢ÂÂ¢ Reserved: {reserved}")
     if expenses != "N/A":
         try:
             exp_vals = f.get("Expenses Helper", [])
             if isinstance(exp_vals, list) and exp_vals:
-                lines.append(f"â¢ Expenses: ${float(exp_vals[-1]):,.0f}")
+                lines.append(f"Ã¢ÂÂ¢ Expenses: ${float(exp_vals[-1]):,.0f}")
             else:
-                lines.append(f"â¢ Expenses: ${float(expenses):,.0f}")
+                lines.append(f"Ã¢ÂÂ¢ Expenses: ${float(expenses):,.0f}")
         except (ValueError, TypeError):
             pass
     lines.append("")
 
-    # ââ Claims Development ââ
+    # Ã¢ÂÂÃ¢ÂÂ Claims Development Ã¢ÂÂÃ¢ÂÂ
     raw_activity = f.get("Activity Rollup Raw Data", "")
     if raw_activity:
         valuations = parse_claims_development(raw_activity)
@@ -534,23 +536,23 @@ def format_claim_report(rec: dict) -> str:
             lines.append(dev_text)
             lines.append("")
 
-    # ââ Summary of Facts ââ
+    # Ã¢ÂÂÃ¢ÂÂ Summary of Facts Ã¢ÂÂÃ¢ÂÂ
     if summary_of_facts != "N/A" and len(summary_of_facts) > 5:
         sf = summary_of_facts[:500]
         if len(summary_of_facts) > 500:
             sf += "..."
-        lines.append(f"ð *Summary of Facts:*")
+        lines.append(f"Ã°ÂÂÂ *Summary of Facts:*")
         lines.append(sf)
         lines.append("")
 
-    # ââ Attorney Representation ââ
+    # Ã¢ÂÂÃ¢ÂÂ Attorney Representation Ã¢ÂÂÃ¢ÂÂ
     if attorney_rep:
-        lines.append(f"âï¸ *Attorney Representation:* Yes")
+        lines.append(f"Ã¢ÂÂÃ¯Â¸Â *Attorney Representation:* Yes")
         if attorney_demand != "N/A":
             lines.append(f"Attorney Demand: ${attorney_demand}")
         lines.append("")
 
-    # ââ Carrier / Policy ââ
+    # Ã¢ÂÂÃ¢ÂÂ Carrier / Policy Ã¢ÂÂÃ¢ÂÂ
     if carrier != "N/A":
         lines.append(f"Carrier: {carrier}")
     if policy_num != "N/A":
@@ -559,7 +561,7 @@ def format_claim_report(rec: dict) -> str:
     return "\n".join(lines)
 
 
-# ââ Sales System Functions âââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Sales System Functions Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 def search_sales(query: str) -> list:
     """Search the Sales System (Opportunities table)."""
@@ -582,8 +584,8 @@ def format_sales_record(rec: dict) -> str:
     nr = get_val(f, "N/R")
 
     lines = []
-    lines.append(f"{'â' * 35}")
-    lines.append(f"ð¢ *{opp_name}*")
+    lines.append(f"{'Ã¢ÂÂ' * 35}")
+    lines.append(f"Ã°ÂÂÂ¢ *{opp_name}*")
     if dba != "N/A":
         lines.append(f"DBA: {dba}")
     lines.append(f"Status: {status}")
@@ -607,7 +609,7 @@ def format_sales_record(rec: dict) -> str:
     return "\n".join(lines)
 
 
-# ââ Argument Parser ââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Argument Parser Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 def parse_consulting_args(raw_args: list) -> dict:
     """Parse consulting command arguments with natural language support."""
@@ -757,7 +759,7 @@ def parse_consulting_args(raw_args: list) -> dict:
     }
 
 
-# ââ PDF Report Generator ââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ PDF Report Generator Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 def generate_executive_pdf(client_name: str, results: list, query_params: dict) -> str:
     """Generate an executive client report as PDF. Returns file path."""
@@ -1007,37 +1009,37 @@ def generate_executive_pdf(client_name: str, results: list, query_params: dict) 
     return filepath
 
 
-# ââ Command Handlers âââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Command Handlers Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command."""
     welcome = (
-        "ð¨ *Hotel Risk Advisor Bot*\n"
-        "âââââââââââââââââââââââââââ\n"
+        "Ã°ÂÂÂ¨ *Hotel Risk Advisor Bot*\n"
+        "Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ\n"
         "Welcome! I can help you query the HUB International hotel insurance databases.\n\n"
         "*Claims & Reports:*\n"
-        "â¢ /consulting `query` â Search Claims\n"
-        "â¢ /report `query` â Executive PDF Report\n"
-        "â¢ /sales `query` â Search Sales System\n"
-        "â¢ /marketing `client` â Marketing Summary\n\n"
+        "Ã¢ÂÂ¢ /consulting `query` Ã¢ÂÂ Search Claims\n"
+        "Ã¢ÂÂ¢ /report `query` Ã¢ÂÂ Executive PDF Report\n"
+        "Ã¢ÂÂ¢ /sales `query` Ã¢ÂÂ Search Sales System\n"
+        "Ã¢ÂÂ¢ /marketing `client` Ã¢ÂÂ Marketing Summary\n\n"
         "*Task Management:*\n"
-        "â¢ /task `Client | Task | Priority` â Add task\n"
-        "â¢ /done `number` â Complete a task\n"
-        "â¢ /mytasks â View active tasks\n"
-        "â¢ /update â Get Airtable task list\n"
-        "â¢ /status â View progress\n\n"
+        "Ã¢ÂÂ¢ /task `Client | Task | Priority` Ã¢ÂÂ Add task\n"
+        "Ã¢ÂÂ¢ /done `number` Ã¢ÂÂ Complete a task\n"
+        "Ã¢ÂÂ¢ /mytasks Ã¢ÂÂ View active tasks\n"
+        "Ã¢ÂÂ¢ /update Ã¢ÂÂ Get Airtable task list\n"
+        "Ã¢ÂÂ¢ /status Ã¢ÂÂ View progress\n\n"
         "*Business Development:*\n"
-        "â¢ /newbiz `Client | Desc | Revenue` â Add opportunity\n"
-        "â¢ /lead `Client | Contact | Source | Desc` â Add lead\n"
-        "â¢ /renewals â Upcoming renewals (120 days)\n"
-        "â¢ /pipeline â View new business pipeline\n\n"
-        "â¢ /help â Show this message\n\n"
+        "Ã¢ÂÂ¢ /newbiz `Client | Desc | Revenue` Ã¢ÂÂ Add opportunity\n"
+        "Ã¢ÂÂ¢ /lead `Client | Contact | Source | Desc` Ã¢ÂÂ Add lead\n"
+        "Ã¢ÂÂ¢ /renewals Ã¢ÂÂ Upcoming renewals (120 days)\n"
+        "Ã¢ÂÂ¢ /pipeline Ã¢ÂÂ View new business pipeline\n\n"
+        "Ã¢ÂÂ¢ /help Ã¢ÂÂ Show this message\n\n"
         "*Query Examples:*\n"
-        "â¢ `/consulting Jasmin open liability`\n"
-        "â¢ `/report Ocean Partners last 5 years`\n"
-        "â¢ `/marketing Triton Hospitality`\n"
-        "â¢ `/task Premier | Send loss runs | Urgent`\n"
-        "â¢ `/newbiz Hilton Garden | Property pkg | 15000`\n"
+        "Ã¢ÂÂ¢ `/consulting Jasmin open liability`\n"
+        "Ã¢ÂÂ¢ `/report Ocean Partners last 5 years`\n"
+        "Ã¢ÂÂ¢ `/marketing Triton Hospitality`\n"
+        "Ã¢ÂÂ¢ `/task Premier | Send loss runs | Urgent`\n"
+        "Ã¢ÂÂ¢ `/newbiz Hilton Garden | Property pkg | 15000`\n"
     )
     await safe_reply_text(update.message, welcome, parse_mode="Markdown")
 
@@ -1048,7 +1050,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /update - Get task list from Sales system."""
-    await update.message.reply_text("â³ Fetching task list from Sales System...")
+    await update.message.reply_text("Ã¢ÂÂ³ Fetching task list from Sales System...")
 
     records = airtable_list_records(
         SALES_BASE_ID, TASKS_TABLE_ID,
@@ -1060,7 +1062,7 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No open tasks found.")
         return
 
-    lines = ["ð *Open Tasks*\n"]
+    lines = ["Ã°ÂÂÂ *Open Tasks*\n"]
     for rec in records:
         f = rec.get("fields", {})
         name = f.get("Name", "Unnamed")
@@ -1069,8 +1071,8 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         due = f.get("Due Date", "N/A")
         cam = f.get("CAM", "N/A")
 
-        status_emoji = {"Todo": "ð´", "In progress": "ð¡"}.get(task_status, "âª")
-        pri_emoji = {"High": "ð¥", "Medium": "â¡", "Low": "ð¤"}.get(priority, "")
+        status_emoji = {"Todo": "Ã°ÂÂÂ´", "In progress": "Ã°ÂÂÂ¡"}.get(task_status, "Ã¢ÂÂª")
+        pri_emoji = {"High": "Ã°ÂÂÂ¥", "Medium": "Ã¢ÂÂ¡", "Low": "Ã°ÂÂÂ¤"}.get(priority, "")
 
         lines.append(f"{status_emoji} {pri_emoji} *{name}*")
         if due != "N/A":
@@ -1087,7 +1089,7 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /status - View progress summary."""
-    await update.message.reply_text("â³ Fetching status from Sales System...")
+    await update.message.reply_text("Ã¢ÂÂ³ Fetching status from Sales System...")
 
     records = airtable_list_records(
         SALES_BASE_ID, TASKS_TABLE_ID, max_records=100,
@@ -1103,12 +1105,12 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     todo = sum(1 for r in records if r.get("fields", {}).get("Task Status") == "Todo")
 
     msg = (
-        "ð *Task Progress*\n"
-        "âââââââââââââââââââââââââââ\n"
+        "Ã°ÂÂÂ *Task Progress*\n"
+        "Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ\n"
         f"Total Tasks: {total}\n"
-        f"â Done: {done}\n"
-        f"ð¡ In Progress: {in_progress}\n"
-        f"ð´ Todo: {todo}\n"
+        f"Ã¢ÂÂ Done: {done}\n"
+        f"Ã°ÂÂÂ¡ In Progress: {in_progress}\n"
+        f"Ã°ÂÂÂ´ Todo: {todo}\n"
     )
     await safe_reply_text(update.message, msg, parse_mode="Markdown")
 
@@ -1140,7 +1142,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     valid_priorities = {"high": "High", "medium": "Medium", "low": "Low"}
     priority = valid_priorities.get(priority.lower(), "Medium")
 
-    await update.message.reply_text(f"â³ Adding task for {company}...")
+    await update.message.reply_text(f"Ã¢ÂÂ³ Adding task for {company}...")
 
     result = airtable_create_record(SALES_BASE_ID, TODO_TABLE_ID, {
         "Notes": f"{task_desc}\n\nAdded via Telegram Bot on {datetime.now().strftime('%m/%d/%Y %I:%M %p')}",
@@ -1150,15 +1152,15 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if result:
         await update.message.reply_text(
-            f"â Task added successfully!\n"
-            f"ð {task_desc}\n"
+            f"Ã¢ÂÂ Task added successfully!\n"
+            f"Ã°ÂÂÂ {task_desc}\n"
             f"Priority: {priority}",
         )
     else:
-        await update.message.reply_text("â Failed to add task. Please try again.")
+        await update.message.reply_text("Ã¢ÂÂ Failed to add task. Please try again.")
 
 
-# ââ Consulting Query Handler âââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Consulting Query Handler Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 async def run_consulting_query(args: list) -> tuple:
     """Run a consulting query and return (results, params, query_desc)."""
@@ -1174,7 +1176,7 @@ async def run_consulting_query(args: list) -> tuple:
     if params["max_incurred"] is not None:
         query_desc += f" | Max Incurred: *${params['max_incurred']:,.0f}*"
     if params["min_policy_year"] is not None:
-        query_desc += f" | Policy Year â¥ *{params['min_policy_year']}*"
+        query_desc += f" | Policy Year Ã¢ÂÂ¥ *{params['min_policy_year']}*"
 
     results = search_incidents(
         params["client_name"],
@@ -1192,22 +1194,22 @@ async def consulting_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Handle /consulting command."""
     if not context.args:
         await update.message.reply_text(
-            "ð *Consulting System Query*\n\n"
+            "Ã°ÂÂÂ *Consulting System Query*\n\n"
             "Usage:\n"
-            "â¢ `/consulting ClientName` â All claims\n"
-            "â¢ `/consulting ClientName open` â Open claims\n"
-            "â¢ `/consulting ClientName closed` â Closed claims\n"
-            "â¢ `/consulting ClientName liability` â Liability only\n"
-            "â¢ `/consulting ClientName property` â Property only\n"
-            "â¢ `/consulting ClientName open liability greater than 25000`\n"
-            "â¢ `/consulting ClientName last 5 years`\n"
-            "â¢ `/consulting ClientName closed property last 3 years`\n\n"
+            "Ã¢ÂÂ¢ `/consulting ClientName` Ã¢ÂÂ All claims\n"
+            "Ã¢ÂÂ¢ `/consulting ClientName open` Ã¢ÂÂ Open claims\n"
+            "Ã¢ÂÂ¢ `/consulting ClientName closed` Ã¢ÂÂ Closed claims\n"
+            "Ã¢ÂÂ¢ `/consulting ClientName liability` Ã¢ÂÂ Liability only\n"
+            "Ã¢ÂÂ¢ `/consulting ClientName property` Ã¢ÂÂ Property only\n"
+            "Ã¢ÂÂ¢ `/consulting ClientName open liability greater than 25000`\n"
+            "Ã¢ÂÂ¢ `/consulting ClientName last 5 years`\n"
+            "Ã¢ÂÂ¢ `/consulting ClientName closed property last 3 years`\n\n"
             "Searches across Client Name, Corporate Name, DBA, and Company fields.",
             parse_mode="Markdown",
         )
         return
 
-    await safe_reply_text(update.message, "â³ Searching Consulting System...", parse_mode="Markdown")
+    await safe_reply_text(update.message, "Ã¢ÂÂ³ Searching Consulting System...", parse_mode="Markdown")
 
     results, params, query_desc = await run_consulting_query(context.args)
 
@@ -1220,8 +1222,8 @@ async def consulting_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     total_incurred = sum(r["incurred"] for r in results)
     header = (
-        f"ð¨ *Consulting System Results*\n"
-        f"âââââââââââââââââââââââââââ\n"
+        f"Ã°ÂÂÂ¨ *Consulting System Results*\n"
+        f"Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ\n"
         f"Found *{len(results)}* claim(s)\n"
         f"Total Incurred: *${total_incurred:,.0f}*\n"
         f"{query_desc}\n"
@@ -1258,24 +1260,24 @@ async def consulting_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
 
 
-# ââ Report Command Handler ââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Report Command Handler Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /report command â generate executive PDF report."""
+    """Handle /report command Ã¢ÂÂ generate executive PDF report."""
     if not context.args:
         await safe_reply_text(update.message,
-            "ð *Executive PDF Report*\n\n"
+            "Ã°ÂÂÂ *Executive PDF Report*\n\n"
             "Usage: `/report ClientName [filters]`\n\n"
             "Examples:\n"
-            "â¢ `/report Ocean Partners` â Full report\n"
-            "â¢ `/report Jasmin open liability` â Filtered\n"
-            "â¢ `/report Jasmin last 5 years`\n"
-            "â¢ `/report Jasmin closed greater than 25000`\n",
+            "Ã¢ÂÂ¢ `/report Ocean Partners` Ã¢ÂÂ Full report\n"
+            "Ã¢ÂÂ¢ `/report Jasmin open liability` Ã¢ÂÂ Filtered\n"
+            "Ã¢ÂÂ¢ `/report Jasmin last 5 years`\n"
+            "Ã¢ÂÂ¢ `/report Jasmin closed greater than 25000`\n",
             parse_mode="Markdown",
             )
         return
 
-    await safe_reply_text(update.message, "â³ Generating executive PDF report...", parse_mode="Markdown")
+    await safe_reply_text(update.message, "Ã¢ÂÂ³ Generating executive PDF report...", parse_mode="Markdown")
 
     results, params, query_desc = await run_consulting_query(context.args)
 
@@ -1291,7 +1293,7 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         total_incurred = sum(r["incurred"] for r in results)
         caption = (
-            f"ð Executive Claims Report â {params['client_name']}\n"
+            f"Ã°ÂÂÂ Executive Claims Report Ã¢ÂÂ {params['client_name']}\n"
             f"{len(results)} claims | Total Incurred: ${total_incurred:,.0f}"
         )
 
@@ -1306,31 +1308,31 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error generating PDF: {e}")
         await safe_reply_text(update.message,
-            f"â ï¸ Error generating PDF report: {str(e)}\n\n"
+            f"Ã¢ÂÂ Ã¯Â¸Â Error generating PDF report: {str(e)}\n\n"
             f"The query found *{len(results)}* claims. Try `/consulting` to view them in chat.",
             parse_mode="Markdown",
             )
 
 
-# ââ Sales Query Handler âââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Sales Query Handler Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 async def sales_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /sales command."""
     if not context.args:
         await safe_reply_text(update.message,
-            "ð *Sales System Query*\n\n"
+            "Ã°ÂÂÂ *Sales System Query*\n\n"
             "Usage: `/sales search term`\n\n"
             "Examples:\n"
-            "â¢ `/sales Marriott`\n"
-            "â¢ `/sales Best Western`\n"
-            "â¢ `/sales Premier Resorts`",
+            "Ã¢ÂÂ¢ `/sales Marriott`\n"
+            "Ã¢ÂÂ¢ `/sales Best Western`\n"
+            "Ã¢ÂÂ¢ `/sales Premier Resorts`",
             parse_mode="Markdown",
             )
         return
 
     query = " ".join(context.args)
     await safe_reply_text(update.message,
-        f"â³ Searching Sales System for: *{query}*...",
+        f"Ã¢ÂÂ³ Searching Sales System for: *{query}*...",
         parse_mode="Markdown",
         )
 
@@ -1341,8 +1343,8 @@ async def sales_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     header = (
-        f"ð¢ *Sales System Results*\n"
-        f"âââââââââââââââââââââââââââ\n"
+        f"Ã°ÂÂÂ¢ *Sales System Results*\n"
+        f"Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ\n"
         f"Found *{len(records)}* result(s) for: *{query}*\n"
     )
     await safe_reply_text(update.message, header, parse_mode="Markdown")
@@ -1366,7 +1368,7 @@ async def sales_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
 
-# ââ Google Sheets Task Management Commands âââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Google Sheets Task Management Commands Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /task - Add task to Google Sheets Active Tasks."""
@@ -1376,13 +1378,13 @@ async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not context.args:
         await update.message.reply_text(
-            "ð *Add Task*\n\n"
+            "Ã°ÂÂÂ *Add Task*\n\n"
             "Usage: `/task Client | Task Description | Priority`\n\n"
             "Priority: Urgent, Today, This Week, Medium, Low\n\n"
             "Examples:\n"
-            "â¢ `/task Premier | Send loss runs to Zurich | Urgent`\n"
-            "â¢ `/task Ocean Partners | Follow up on WC audit | This Week`\n"
-            "â¢ `/task MGM | Review renewal proposal | Today`",
+            "Ã¢ÂÂ¢ `/task Premier | Send loss runs to Zurich | Urgent`\n"
+            "Ã¢ÂÂ¢ `/task Ocean Partners | Follow up on WC audit | This Week`\n"
+            "Ã¢ÂÂ¢ `/task MGM | Review renewal proposal | Today`",
             parse_mode="Markdown",
         )
         return
@@ -1408,20 +1410,20 @@ async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     priority = valid_priorities.get(priority.lower().strip(), priority.strip())
 
-    await update.message.reply_text(f"â³ Adding task for {client}...")
+    await update.message.reply_text(f"Ã¢ÂÂ³ Adding task for {client}...")
 
     success = add_active_task(client, task_desc, priority)
 
     if success:
         await safe_reply_text(update.message,
-            f"â Task added to Active Tasks!\n\n"
-            f"ð *{task_desc}*\n"
+            f"Ã¢ÂÂ Task added to Active Tasks!\n\n"
+            f"Ã°ÂÂÂ *{task_desc}*\n"
             f"Client: {client}\n"
             f"Priority: {priority}",
             parse_mode="Markdown",
             )
     else:
-        await update.message.reply_text("â Failed to add task. Check Google Sheets connection.")
+        await update.message.reply_text("Ã¢ÂÂ Failed to add task. Check Google Sheets connection.")
 
 
 async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1437,7 +1439,7 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("No active tasks to complete!")
             return
 
-        lines = ["ð *Active Tasks â Select number to complete:*\n"]
+        lines = ["Ã°ÂÂÂ *Active Tasks Ã¢ÂÂ Select number to complete:*\n"]
         for i, t in enumerate(tasks, 1):
             lines.append(f"  {i}. [{t['client']}] {t['task']}")
         lines.append("\nUsage: `/done 1` to complete task #1")
@@ -1453,7 +1455,7 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     completed = complete_task(task_num)
     if completed:
         await safe_reply_text(update.message,
-            f"â Task completed!\n\n"
+            f"Ã¢ÂÂ Task completed!\n\n"
             f"*{completed['task']}*\n"
             f"Client: {completed['client']}\n"
             f"Moved to Completed Tasks tab.",
@@ -1461,7 +1463,7 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     else:
         await safe_reply_text(update.message,
-            f"â Task #{task_num} not found. Use `/done` to see available tasks.",
+            f"Ã¢ÂÂ Task #{task_num} not found. Use `/done` to see available tasks.",
             parse_mode="Markdown",
             )
 
@@ -1472,11 +1474,11 @@ async def mytasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Google Sheets integration not available.")
         return
 
-    await update.message.reply_text("â³ Fetching active tasks...")
+    await update.message.reply_text("Ã¢ÂÂ³ Fetching active tasks...")
     tasks = get_active_tasks()
 
     if not tasks:
-        await update.message.reply_text("ð No active tasks. Inbox zero! ð")
+        await update.message.reply_text("Ã°ÂÂÂ No active tasks. Inbox zero! Ã°ÂÂÂ")
         return
 
     # Group by priority
@@ -1484,11 +1486,11 @@ async def mytasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     this_week = [t for t in tasks if t.get("priority", "").lower() in ["this week", "high"]]
     other = [t for t in tasks if t not in urgent and t not in this_week]
 
-    lines = [f"ð *Active Tasks ({len(tasks)} total)*\n"]
+    lines = [f"Ã°ÂÂÂ *Active Tasks ({len(tasks)} total)*\n"]
     idx = 1
 
     if urgent:
-        lines.append("ð¥ *URGENT/TODAY:*")
+        lines.append("Ã°ÂÂÂ¥ *URGENT/TODAY:*")
         for t in urgent:
             due = f" (Due: {t['due_date']})" if t.get('due_date') else ""
             lines.append(f"  {idx}. [{t['client']}] {t['task']}{due}")
@@ -1496,7 +1498,7 @@ async def mytasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append("")
 
     if this_week:
-        lines.append("â¡ *THIS WEEK:*")
+        lines.append("Ã¢ÂÂ¡ *THIS WEEK:*")
         for t in this_week:
             due = f" (Due: {t['due_date']})" if t.get('due_date') else ""
             lines.append(f"  {idx}. [{t['client']}] {t['task']}{due}")
@@ -1504,7 +1506,7 @@ async def mytasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append("")
 
     if other:
-        lines.append("ð *OTHER:*")
+        lines.append("Ã°ÂÂÂ *OTHER:*")
         for t in other:
             due = f" (Due: {t['due_date']})" if t.get('due_date') else ""
             lines.append(f"  {idx}. [{t['client']}] {t['task']}{due}")
@@ -1526,11 +1528,11 @@ async def newbiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not context.args:
         await safe_reply_text(update.message,
-            "ð¼ *Add New Business Opportunity*\n\n"
+            "Ã°ÂÂÂ¼ *Add New Business Opportunity*\n\n"
             "Usage: `/newbiz Client | Description | Est Revenue`\n\n"
             "Examples:\n"
-            "â¢ `/newbiz Hilton Garden Inn | Property & GL pkg | 15000`\n"
-            "â¢ `/newbiz Best Western Plus | Full commercial pkg | 25000`",
+            "Ã¢ÂÂ¢ `/newbiz Hilton Garden Inn | Property & GL pkg | 15000`\n"
+            "Ã¢ÂÂ¢ `/newbiz Best Western Plus | Full commercial pkg | 25000`",
             parse_mode="Markdown",
             )
         return
@@ -1557,14 +1559,14 @@ async def newbiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if success:
         rev_display = f" | Est Revenue: ${est_revenue}" if est_revenue else ""
         await safe_reply_text(update.message,
-            f"â New business opportunity added!\n\n"
-            f"ð¼ *{client}*\n"
+            f"Ã¢ÂÂ New business opportunity added!\n\n"
+            f"Ã°ÂÂÂ¼ *{client}*\n"
             f"{description}{rev_display}\n"
             f"Type: New Business",
             parse_mode="Markdown",
             )
     else:
-        await update.message.reply_text("â Failed to add opportunity. Check Google Sheets connection.")
+        await update.message.reply_text("Ã¢ÂÂ Failed to add opportunity. Check Google Sheets connection.")
 
 
 async def lead_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1575,11 +1577,11 @@ async def lead_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not context.args:
         await safe_reply_text(update.message,
-            "ð¯ *Add New Lead*\n\n"
+            "Ã°ÂÂÂ¯ *Add New Lead*\n\n"
             "Usage: `/lead Client | Contact | Source | Description`\n\n"
             "Examples:\n"
-            "â¢ `/lead Marriott Courtyard | John Smith | Referral | 50 room property in Tampa`\n"
-            "â¢ `/lead Holiday Inn Express | GM Jane | Cold Call | New build opening Q3`",
+            "Ã¢ÂÂ¢ `/lead Marriott Courtyard | John Smith | Referral | 50 room property in Tampa`\n"
+            "Ã¢ÂÂ¢ `/lead Holiday Inn Express | GM Jane | Cold Call | New build opening Q3`",
             parse_mode="Markdown",
             )
         return
@@ -1603,15 +1605,15 @@ async def lead_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if success:
         await safe_reply_text(update.message,
-            f"â Lead added!\n\n"
-            f"ð¯ *{client}*\n"
+            f"Ã¢ÂÂ Lead added!\n\n"
+            f"Ã°ÂÂÂ¯ *{client}*\n"
             f"Contact: {contact}\n"
             f"Source: {source}\n"
             f"{description}",
             parse_mode="Markdown",
             )
     else:
-        await update.message.reply_text("â Failed to add lead. Check Google Sheets connection.")
+        await update.message.reply_text("Ã¢ÂÂ Failed to add lead. Check Google Sheets connection.")
 
 
 async def pipeline_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1620,14 +1622,14 @@ async def pipeline_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Google Sheets integration not available.")
         return
 
-    await update.message.reply_text("â³ Fetching pipeline...")
+    await update.message.reply_text("Ã¢ÂÂ³ Fetching pipeline...")
     items = get_new_business()
 
     if not items:
-        await update.message.reply_text("ð¼ No new business opportunities in pipeline.")
+        await update.message.reply_text("Ã°ÂÂÂ¼ No new business opportunities in pipeline.")
         return
 
-    lines = [f"ð¼ *New Business Pipeline ({len(items)} opportunities)*\n"]
+    lines = [f"Ã°ÂÂÂ¼ *New Business Pipeline ({len(items)} opportunities)*\n"]
     total_revenue = 0
     for nb in items:
         rev = nb.get("est_revenue", "")
@@ -1636,11 +1638,11 @@ async def pipeline_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 rev_val = float(str(rev).replace("$", "").replace(",", ""))
                 total_revenue += rev_val
-                rev_display = f" â ${rev_val:,.0f}"
+                rev_display = f" Ã¢ÂÂ ${rev_val:,.0f}"
             except (ValueError, TypeError):
-                rev_display = f" â {rev}"
+                rev_display = f" Ã¢ÂÂ {rev}"
 
-        nr_flag = "ð" if nb.get("nr") == "N" else "ð"
+        nr_flag = "Ã°ÂÂÂ" if nb.get("nr") == "N" else "Ã°ÂÂÂ"
         lines.append(f"  {nr_flag} *{nb['client']}*{rev_display}")
         if nb.get("description"):
             lines.append(f"    {nb['description']}")
@@ -1648,7 +1650,7 @@ async def pipeline_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append("")
 
     if total_revenue > 0:
-        lines.append(f"\nð° *Total Pipeline: ${total_revenue:,.0f}*")
+        lines.append(f"\nÃ°ÂÂÂ° *Total Pipeline: ${total_revenue:,.0f}*")
 
     msg = "\n".join(lines)
     if len(msg) > 4000:
@@ -1656,7 +1658,7 @@ async def pipeline_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safe_reply_text(update.message, msg, parse_mode="Markdown")
 
 
-# ââ Renewals Command âââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Renewals Command Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 async def renewals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /renewals - Show upcoming renewals from Airtable."""
@@ -1664,7 +1666,7 @@ async def renewals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Briefing module not available.")
         return
 
-    await update.message.reply_text("â³ Fetching upcoming renewals from Sales System...")
+    await update.message.reply_text("Ã¢ÂÂ³ Fetching upcoming renewals from Sales System...")
 
     records = fetch_upcoming_renewals(120)
     if not records:
@@ -1676,29 +1678,29 @@ async def renewals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     submit_alerts = renewals_data.get("submit_alerts", [])
     high_revenue = renewals_data.get("high_revenue", [])
 
-    lines = [f"ð *Upcoming Renewals â Next 120 Days ({len(all_renewals)} total)*\n"]
+    lines = [f"Ã°ÂÂÂ *Upcoming Renewals Ã¢ÂÂ Next 120 Days ({len(all_renewals)} total)*\n"]
 
     if submit_alerts:
-        lines.append(f"ð´ *EXPOSED â NEEDS SUBMISSION ({len(submit_alerts)}):*")
+        lines.append(f"Ã°ÂÂÂ´ *EXPOSED Ã¢ÂÂ NEEDS SUBMISSION ({len(submit_alerts)}):*")
         for r in submit_alerts:
             days = f"{r['days_until']}d" if r.get('days_until') else "TBD"
-            rev = f" â ${r['revenue']:,.0f}" if r.get('revenue') else ""
-            lines.append(f"  â¼ï¸ [{days}] {r['name']}{rev}")
+            rev = f" Ã¢ÂÂ ${r['revenue']:,.0f}" if r.get('revenue') else ""
+            lines.append(f"  Ã¢ÂÂ¼Ã¯Â¸Â [{days}] {r['name']}{rev}")
         lines.append("")
 
     if high_revenue:
-        lines.append(f"ð° *HIGH REVENUE >$5K ({len(high_revenue)}):*")
+        lines.append(f"Ã°ÂÂÂ° *HIGH REVENUE >$5K ({len(high_revenue)}):*")
         for r in high_revenue[:10]:
             days = f"{r['days_until']}d" if r.get('days_until') else "TBD"
-            lines.append(f"  $ [{days}] {r['name']} â ${r['revenue']:,.0f} ({r['status']})")
+            lines.append(f"  $ [{days}] {r['name']} Ã¢ÂÂ ${r['revenue']:,.0f} ({r['status']})")
         lines.append("")
 
     lines.append("*All Renewals:*")
     sorted_renewals = sorted(all_renewals, key=lambda x: x.get("days_until") or 999)
     for r in sorted_renewals[:25]:
         days = f"{r['days_until']}d" if r.get('days_until') else "TBD"
-        rev = f" â ${r['revenue']:,.0f}" if r.get('revenue') else ""
-        flag = " ð´" if r.get('status', '').lower() in ['submit', 'submitted'] else ""
+        rev = f" Ã¢ÂÂ ${r['revenue']:,.0f}" if r.get('revenue') else ""
+        flag = " Ã°ÂÂÂ´" if r.get('status', '').lower() in ['submit', 'submitted'] else ""
         lines.append(f"  [{days}] {r['name']}{rev}{flag}")
 
     if len(all_renewals) > 25:
@@ -1710,7 +1712,7 @@ async def renewals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safe_reply_text(update.message, msg, parse_mode="Markdown")
 
 
-# ââ Marketing Summary Command ââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Marketing Summary Command Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 async def marketing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /marketing - Get marketing summary for a client/opportunity."""
@@ -1720,20 +1722,20 @@ async def marketing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not context.args:
         await update.message.reply_text(
-            "ð *Marketing Summary*\n\n"
+            "Ã°ÂÂÂ *Marketing Summary*\n\n"
             "Usage: `/marketing Client Name`\n\n"
             "Shows carrier status for all policy types:\n"
             "Incumbent, Market, Submit, Blocked, Declined, Quoted, Proposed, Bound\n\n"
             "Examples:\n"
-            "â¢ `/marketing Triton Hospitality`\n"
-            "â¢ `/marketing Ocean Partners`\n"
-            "â¢ `/marketing Premier Resorts`",
+            "Ã¢ÂÂ¢ `/marketing Triton Hospitality`\n"
+            "Ã¢ÂÂ¢ `/marketing Ocean Partners`\n"
+            "Ã¢ÂÂ¢ `/marketing Premier Resorts`",
             parse_mode="Markdown",
         )
         return
 
     client_name = " ".join(context.args)
-    await safe_reply_text(update.message, f"â³ Generating marketing summary for *{client_name}*...", parse_mode="Markdown")
+    await safe_reply_text(update.message, f"Ã¢ÂÂ³ Generating marketing summary for *{client_name}*...", parse_mode="Markdown")
 
     try:
         summary = await get_marketing_summary(client_name)
@@ -1756,11 +1758,11 @@ async def marketing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error generating marketing summary: {e}")
         await update.message.reply_text(
-            f"â ï¸ Error generating marketing summary: {str(e)}",
+            f"Ã¢ÂÂ Ã¯Â¸Â Error generating marketing summary: {str(e)}",
         )
 
 
-# ââ Daily Briefing Command (manual trigger) ââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Daily Briefing Command (manual trigger) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /briefing - Manually trigger morning briefing."""
@@ -1768,7 +1770,7 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Briefing modules not available.")
         return
 
-    await update.message.reply_text("â³ Generating briefing...")
+    await update.message.reply_text("Ã¢ÂÂ³ Generating briefing...")
 
     tasks = get_active_tasks()
     new_business = get_new_business() if HAS_SHEETS else []
@@ -1776,9 +1778,9 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     success, body = run_morning_briefing(tasks, new_business)
 
     if success:
-        await update.message.reply_text("â Morning briefing email sent!")
+        await update.message.reply_text("Ã¢ÂÂ Morning briefing email sent!")
     else:
-        await update.message.reply_text("â ï¸ Email send failed. Here's the briefing:\n\n" + body[:3500])
+        await update.message.reply_text("Ã¢ÂÂ Ã¯Â¸Â Email send failed. Here's the briefing:\n\n" + body[:3500])
 
 
 async def debrief_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1787,7 +1789,7 @@ async def debrief_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Briefing modules not available.")
         return
 
-    await update.message.reply_text("â³ Generating debrief...")
+    await update.message.reply_text("Ã¢ÂÂ³ Generating debrief...")
 
     tasks = get_active_tasks()
     completed = get_completed_tasks_today()
@@ -1795,38 +1797,61 @@ async def debrief_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     success, body = run_afternoon_debrief(tasks, completed)
 
     if success:
-        await update.message.reply_text("â Afternoon debrief email sent!")
+        await update.message.reply_text("Ã¢ÂÂ Afternoon debrief email sent!")
     else:
-        await update.message.reply_text("â ï¸ Email send failed. Here's the debrief:\n\n" + body[:3500])
+        await update.message.reply_text("Ã¢ÂÂ Ã¯Â¸Â Email send failed. Here's the debrief:\n\n" + body[:3500])
 
 
-# ââ Scheduled Jobs âââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Scheduled Jobs Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 def scheduled_morning_briefing():
-    """Scheduled job: Run morning briefing at 7 AM EST."""
+    """Scheduled job: Run morning briefing at 7 AM EST. Sends email + Telegram."""
     logger.info("Running scheduled morning briefing...")
     try:
         tasks = get_active_tasks() if HAS_SHEETS else []
         new_business = get_new_business() if HAS_SHEETS else []
         success, body = run_morning_briefing(tasks, new_business)
-        logger.info(f"Morning briefing result: {success}")
+        logger.info(f"Morning briefing email result: {success}")
+
+        # Also send via Telegram
+        if TELEGRAM_CHAT_ID and body:
+            try:
+                # Truncate if too long for Telegram (4096 char limit)
+                tg_body = body if len(body) <= 4000 else body[:3950] + "\n\n... [truncated - see email for full briefing]"
+                asyncio.get_event_loop().create_task(
+                    send_telegram_message(tg_body, chat_id=TELEGRAM_CHAT_ID)
+                )
+                logger.info("Morning briefing also sent via Telegram")
+            except Exception as te:
+                logger.error(f"Telegram morning briefing error: {te}")
     except Exception as e:
         logger.error(f"Scheduled morning briefing error: {e}")
 
 
 def scheduled_afternoon_debrief():
-    """Scheduled job: Run afternoon debrief at 4 PM EST."""
+    """Scheduled job: Run afternoon debrief at 4 PM EST. Sends email + Telegram."""
     logger.info("Running scheduled afternoon debrief...")
     try:
         tasks = get_active_tasks() if HAS_SHEETS else []
         completed = get_completed_tasks_today() if HAS_SHEETS else []
         success, body = run_afternoon_debrief(tasks, completed)
-        logger.info(f"Afternoon debrief result: {success}")
+        logger.info(f"Afternoon debrief email result: {success}")
+
+        # Also send via Telegram
+        if TELEGRAM_CHAT_ID and body:
+            try:
+                tg_body = body if len(body) <= 4000 else body[:3950] + "\n\n... [truncated - see email for full debrief]"
+                asyncio.get_event_loop().create_task(
+                    send_telegram_message(tg_body, chat_id=TELEGRAM_CHAT_ID)
+                )
+                logger.info("Afternoon debrief also sent via Telegram")
+            except Exception as te:
+                logger.error(f"Telegram afternoon debrief error: {te}")
     except Exception as e:
         logger.error(f"Scheduled afternoon debrief error: {e}")
 
 
-# ââ Fallback Message Handler ââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Fallback Message Handler Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle non-command messages, including @command style."""
@@ -1905,18 +1930,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# ââ Error Handler âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Error Handler Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Log errors."""
     logger.error(f"Update {update} caused error: {context.error}")
     if update and update.message:
         await update.message.reply_text(
-            "â ï¸ An error occurred. Please try again."
+            "Ã¢ÂÂ Ã¯Â¸Â An error occurred. Please try again."
         )
 
 
-# ââ Main âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# Ã¢ÂÂÃ¢ÂÂ Main Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 def main():
     """Start the bot."""
@@ -2014,3 +2039,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
