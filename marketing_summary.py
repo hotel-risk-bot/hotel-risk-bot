@@ -200,7 +200,7 @@ def _coverage_sort_key(coverage_type):
 
 def _sanitize_for_formula(text: str) -> str:
     """Sanitize text for use in Airtable formula strings."""
-    return text.replace("'", "\\'")
+    return text.replace('"', '\\"')
 
 
 def search_opportunity(client_name: str) -> list:
@@ -208,8 +208,8 @@ def search_opportunity(client_name: str) -> list:
     safe_name = _sanitize_for_formula(client_name)
     formula = (
         f"OR("
-        f"SEARCH(LOWER('{safe_name}'), LOWER({{Opportunity Name}})),"
-        f"SEARCH(LOWER('{safe_name}'), LOWER({{Corporate Name}}))"
+        f"SEARCH(LOWER("{safe_name}"), LOWER({{Opportunity Name}})),"
+        f"SEARCH(LOWER("{safe_name}"), LOWER({{Corporate Name}}))"
         f")"
     )
 
@@ -239,8 +239,8 @@ def fetch_policies_for_client(client_name: str) -> list:
     safe_name = _sanitize_for_formula(client_name)
     formula = (
         f"OR("
-        f"SEARCH(LOWER('{safe_name}'), LOWER({{Name}})),"
-        f"SEARCH(LOWER('{safe_name}'), LOWER({{Companies}}))"
+        f"SEARCH(LOWER("{safe_name}"), LOWER({{Name}})),"
+        f"SEARCH(LOWER("{safe_name}"), LOWER({{Companies}}))"
         f")"
     )
     logger.info(f"Searching policies for: '{client_name}' with formula: {formula}")
