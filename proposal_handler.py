@@ -401,12 +401,26 @@ async def adjust_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Generate the final DOCX proposal."""
+    logger.info(f"generate_doc called by user {update.effective_user.id}")
     chat_id = update.effective_chat.id
     session = get_session(chat_id)
     
-    if not session or not session.extracted_data:
-        await update.message.reply_text("No extracted data available. Run /extract first.")
-        return REVIEWING_EXTRACTION
+    if not session:
+        await update.message.reply_text("No active proposal session. Start one with /proposal [Client Name]")
+        return ConversationHandler.END
+    
+    # Auto-extract if not done yet
+    if not session.extracted_data:
+        if not session.uploaded_files:
+            await update.message.reply_text("No files uploaded yet. Please upload documents first, then /extract or /generate.")
+            return WAITING_FOR_FILES
+        
+        logger.info("Auto-extracting data before generating document")
+        # Run extraction first
+        result = await extract_data(update, context)
+        session = get_session(chat_id)  # Re-fetch in case extraction updated it
+        if not session or not session.extracted_data:
+            return result if result is not None else WAITING_FOR_FILES
     
     await update.message.reply_text(
         "📝 **Generating proposal document...**\n\n"
@@ -498,6 +512,7 @@ def get_proposal_conversation_handler() -> ConversationHandler:
             WAITING_FOR_FILES: [
                 MessageHandler(filters.Document.ALL, receive_file),
                 CommandHandler("extract", extract_data),
+                CommandHandler("generate", generate_doc),  # Auto-extract if needed
                 CommandHandler("proposal_cancel", proposal_cancel),
             ],
             REVIEWING_EXTRACTION: [
@@ -508,6 +523,8 @@ def get_proposal_conversation_handler() -> ConversationHandler:
             ],
         },
         fallbacks=[
+            CommandHandler("extract", extract_data),
+            CommandHandler("generate", generate_doc),
             CommandHandler("proposal_cancel", proposal_cancel),
             CommandHandler("proposal", proposal_start),  # Restart
         ],
