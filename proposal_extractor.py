@@ -18,9 +18,23 @@ from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
-# Initialize OpenAI client
-client = OpenAI()
+# OpenAI client (lazy initialization)
+_client = None
 GPT_MODEL = "gpt-4.1-mini"
+
+
+def _get_openai_client():
+    """Lazy-initialize the OpenAI client."""
+    global _client
+    if _client is None:
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "OPENAI_API_KEY environment variable not set. "
+                "Please add it to your Railway environment variables."
+            )
+        _client = OpenAI(api_key=api_key)
+    return _client
 
 
 def extract_text_from_pdf(pdf_path: str) -> str:
@@ -312,7 +326,7 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
     
     # Step 2: Send to GPT for structured extraction
     try:
-        response = client.chat.completions.create(
+        response = _get_openai_client().chat.completions.create(
             model=GPT_MODEL,
             messages=[
                 {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
@@ -475,7 +489,7 @@ def format_verification_message(data: dict) -> str:
 async def apply_corrections(data: dict, corrections_text: str) -> dict:
     """Use GPT to apply user corrections to the extracted data."""
     try:
-        response = client.chat.completions.create(
+        response = _get_openai_client().chat.completions.create(
             model=GPT_MODEL,
             messages=[
                 {"role": "system", "content": "You are an insurance data correction assistant. Apply the user's corrections to the extracted data JSON. Return the corrected JSON object. Only modify the fields mentioned in the corrections, keep everything else the same."},
