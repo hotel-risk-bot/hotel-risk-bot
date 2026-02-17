@@ -108,6 +108,8 @@ async def safe_reply(update: Update, text: str, **kwargs):
 
 async def proposal_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start a new proposal session: /proposal [Client Name]"""
+    logger.info(f"proposal_start called by user {update.effective_user.id} in chat {update.effective_chat.id}")
+    logger.info(f"Raw message text: {update.message.text}")
     args = context.args
     if not args:
         await update.message.reply_text(
@@ -148,6 +150,7 @@ async def proposal_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle uploaded files (PDF or Excel)."""
+    logger.info(f"receive_file called by user {update.effective_user.id}")
     chat_id = update.effective_chat.id
     session = get_session(chat_id)
     
@@ -203,6 +206,7 @@ async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 async def extract_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Process uploaded files and extract insurance data."""
+    logger.info(f"extract_data called by user {update.effective_user.id}")
     chat_id = update.effective_chat.id
     session = get_session(chat_id)
     
