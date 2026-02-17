@@ -3,11 +3,15 @@
 Hotel Insurance Proposal - Document Extraction & GPT Data Structuring
 Extracts text from uploaded PDFs and Excel files, then uses GPT to structure
 the data into a standardized format for proposal generation.
+
+Key feature: Smart page-level extraction that identifies quote summary pages
+and prioritizes them over forms/endorsements boilerplate.
 """
 
 import os
 import json
 import logging
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -37,8 +41,194 @@ def _get_openai_client():
     return _client
 
 
+# Keywords that indicate a page contains important quote data (high priority)
+QUOTE_PAGE_KEYWORDS = [
+    "QUOTATION", "QUOTE", "PROPOSAL", "INDICATION",
+    "COVERAGE –", "COVERAGE -", "COVERAGE:", "COVERAGE SUMMARY",
+    "PREMIUM BREAKDOWN", "PREMIUM SUMMARY", "TOTAL PREMIUM",
+    "Total Cost of Policy", "Total General Liability Premium",
+    "Total Property Premium", "Total Umbrella Premium",
+    "LIMITS OF INSURANCE", "LIMITS OF LIABILITY",
+    "GENERAL LIABILITY LIMITS", "PROPERTY LIMITS",
+    "DEDUCTIBLE", "DEDUCTIBLES",
+    "SCHEDULE OF LOCATIONS", "SCHEDULE OF VALUES",
+    "INSURED INFORMATION", "NAMED INSURED",
+    "EFFECTIVE DATE", "EXPIRATION DATE",
+    "AGENCY INFORMATION", "BROKER",
+    "PREMIUM:", "RATE:", "EXPOSURE:",
+    "DECLARATIONS", "DECLARATION PAGE",
+    "COMMERCIAL GENERAL LIABILITY DECLARATIONS",
+    "COMMERCIAL PROPERTY DECLARATIONS",
+    "WORKERS COMPENSATION DECLARATIONS",
+    "COMMERCIAL AUTO DECLARATIONS",
+    "UMBRELLA DECLARATIONS",
+    "PREMIUM BREAKDOWN",
+    "SCHEDULE OF FORMS",
+    "SUBJECTIVITIES", "SUBJECTIVES",
+    "BINDING REQUIREMENTS",
+    "CLASS CODE", "CLASSIFICATION",
+    "OPTIONAL COVERAGES",
+    "ADDITIONAL COVERAGES",
+    "UNDERLYING INSURANCE",
+    "TOWER STRUCTURE",
+    "RATING BASIS",
+    "PAYROLL",
+]
+
+# Keywords that indicate boilerplate forms/endorsements (low priority)
+BOILERPLATE_KEYWORDS = [
+    "THIS ENDORSEMENT CHANGES THE POLICY",
+    "PLEASE READ IT CAREFULLY",
+    "THIS ENDORSEMENT MODIFIES INSURANCE",
+    "COMMON POLICY CONDITIONS",
+    "COMMERCIAL GENERAL LIABILITY COVERAGE FORM",
+    "COMMERCIAL PROPERTY CONDITIONS",
+    "COMMERCIAL PROPERTY COVERAGE FORM",
+    "CAUSES OF LOSS",
+    "TERRORISM RISK INSURANCE ACT",
+    "NUCLEAR HAZARD EXCLUSION",
+    "EXCLUSION OF TERRORISM",
+    "POLICYHOLDER DISCLOSURE",
+    "NOTICE OF TERRORISM",
+    "Section 102(1) of the Act",
+    "means activities against persons",
+    "intimidate or coerce a government",
+    "© Insurance Services Office",
+    "© ISO Properties",
+    "Includes copyrighted material",
+]
+
+
+def _score_page(page_text: str) -> float:
+    """
+    Score a PDF page based on how likely it contains important quote data.
+    Higher score = more important.
+    """
+    text_upper = page_text.upper()
+    score = 0.0
+
+    # Positive signals: quote/summary content
+    for keyword in QUOTE_PAGE_KEYWORDS:
+        if keyword.upper() in text_upper:
+            score += 2.0
+
+    # Strong positive: contains dollar amounts with commas (premium figures)
+    dollar_amounts = re.findall(r'\$\s*[\d,]+(?:\.\d{2})?', page_text)
+    if dollar_amounts:
+        score += min(len(dollar_amounts) * 0.5, 5.0)
+
+    # Strong positive: contains percentage rates
+    rates = re.findall(r'\d+\.\d{2,4}\s*%?', page_text)
+    if rates:
+        score += min(len(rates) * 0.3, 3.0)
+
+    # Negative signals: boilerplate forms
+    for keyword in BOILERPLATE_KEYWORDS:
+        if keyword.upper() in text_upper:
+            score -= 3.0
+
+    # Negative: very long pages with mostly prose (forms text)
+    if len(page_text) > 3000 and score < 2:
+        # Check if it's mostly prose (few numbers, lots of text)
+        num_count = len(re.findall(r'\d+', page_text))
+        word_count = len(page_text.split())
+        if word_count > 0 and num_count / word_count < 0.05:
+            score -= 2.0
+
+    return score
+
+
+def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 80000) -> str:
+    """
+    Smart PDF text extraction that prioritizes quote summary pages
+    over forms/endorsements boilerplate.
+
+    Extracts text page-by-page, scores each page, and returns the
+    highest-scoring pages up to max_chars.
+    """
+    try:
+        # Get total page count
+        result = subprocess.run(
+            ["pdfinfo", pdf_path],
+            capture_output=True, text=True, timeout=30
+        )
+        pages_match = re.search(r"Pages:\s+(\d+)", result.stdout)
+        total_pages = int(pages_match.group(1)) if pages_match else 0
+
+        if total_pages == 0:
+            # Fallback to full extraction
+            return extract_text_from_pdf(pdf_path)
+
+        logger.info(f"PDF has {total_pages} pages, extracting page-by-page for scoring")
+
+        # Extract text page by page
+        page_texts = []
+        for page_num in range(1, total_pages + 1):
+            result = subprocess.run(
+                ["pdftotext", "-layout", "-f", str(page_num), "-l", str(page_num), pdf_path, "-"],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                page_text = result.stdout.strip()
+                if page_text:
+                    score = _score_page(page_text)
+                    page_texts.append({
+                        "page": page_num,
+                        "text": page_text,
+                        "score": score,
+                        "chars": len(page_text)
+                    })
+
+        if not page_texts:
+            logger.warning("No text extracted from any pages")
+            return ""
+
+        # Sort by score (highest first), then by page number for ties
+        page_texts.sort(key=lambda x: (-x["score"], x["page"]))
+
+        # Log the top and bottom scored pages
+        logger.info(f"Page scoring results ({len(page_texts)} pages with text):")
+        for p in page_texts[:10]:
+            logger.info(f"  Page {p['page']}: score={p['score']:.1f}, chars={p['chars']}")
+        if len(page_texts) > 10:
+            logger.info(f"  ... {len(page_texts) - 10} more pages")
+            for p in page_texts[-3:]:
+                logger.info(f"  Page {p['page']}: score={p['score']:.1f}, chars={p['chars']} (lowest)")
+
+        # Select pages up to max_chars, prioritizing high-score pages
+        selected_pages = []
+        total_chars = 0
+        for p in page_texts:
+            if total_chars + p["chars"] > max_chars:
+                # If we haven't selected any pages yet, take at least the first one
+                if not selected_pages:
+                    selected_pages.append(p)
+                break
+            selected_pages.append(p)
+            total_chars += p["chars"]
+
+        # Re-sort selected pages by page number for coherent reading order
+        selected_pages.sort(key=lambda x: x["page"])
+
+        logger.info(
+            f"Selected {len(selected_pages)} of {len(page_texts)} pages "
+            f"({total_chars} chars) for GPT extraction"
+        )
+
+        # Combine selected pages with page markers
+        parts = []
+        for p in selected_pages:
+            parts.append(f"\n--- Page {p['page']} ---\n{p['text']}")
+
+        return "\n".join(parts)
+
+    except Exception as e:
+        logger.error(f"Smart PDF extraction failed, falling back to basic: {e}")
+        return extract_text_from_pdf(pdf_path)
+
+
 def extract_text_from_pdf(pdf_path: str) -> str:
-    """Extract text from a PDF file using pdftotext."""
+    """Extract text from a PDF file using pdftotext (basic full extraction)."""
     try:
         result = subprocess.run(
             ["pdftotext", "-layout", pdf_path, "-"],
@@ -95,6 +285,18 @@ def extract_document(file_path: str) -> str:
         return ""
 
 
+def extract_document_smart(file_path: str) -> str:
+    """Extract text from a document using smart extraction for PDFs."""
+    ext = Path(file_path).suffix.lower()
+    if ext == ".pdf":
+        return extract_text_from_pdf_smart(file_path)
+    elif ext in (".xlsx", ".xls"):
+        return extract_text_from_excel(file_path)
+    else:
+        logger.warning(f"Unsupported file type: {ext}")
+        return ""
+
+
 EXTRACTION_SYSTEM_PROMPT = """You are an expert insurance data extraction assistant specializing in hotel and hospitality insurance. You extract structured data from insurance quote documents.
 
 CRITICAL RULES:
@@ -114,8 +316,8 @@ Return your extraction as a JSON object with the following structure. Only inclu
 EXTRACTION_USER_PROMPT = """Extract ALL insurance data from the following quote document(s). Return a JSON object.
 
 The JSON structure should be:
-{
-  "client_info": {
+{{
+  "client_info": {{
     "named_insured": "Full legal name",
     "dba": "DBA name if any",
     "address": "Full address",
@@ -123,160 +325,148 @@ The JSON structure should be:
     "effective_date": "MM/DD/YYYY",
     "expiration_date": "MM/DD/YYYY",
     "sales_exposure_basis": "Revenue/payroll amount if shown"
-  },
-  "coverages": {
-    "property": {
+  }},
+  "coverages": {{
+    "property": {{
       "carrier": "Carrier name",
-      "carrier_admitted": true/false,
+      "carrier_admitted": true or false,
       "am_best_rating": "A+ XV or similar",
       "premium": 0,
       "taxes_fees": 0,
       "total_premium": 0,
       "tria_premium": 0,
       "limits": [
-        {"description": "Building", "limit": "$X"},
-        {"description": "Business Personal Property", "limit": "$X"},
-        {"description": "Business Income", "limit": "ALS or $X"}
+        {{"description": "Building", "limit": "$X"}},
+        {{"description": "Business Personal Property", "limit": "$X"}},
+        {{"description": "Business Income", "limit": "ALS or $X"}}
       ],
       "deductibles": [
-        {"description": "All Other Perils", "amount": "$X"},
-        {"description": "Named Storm", "amount": "X% or $X"},
-        {"description": "Wind/Hail", "amount": "$X"}
+        {{"description": "All Other Perils", "amount": "$X"}},
+        {{"description": "Named Storm", "amount": "X% or $X"}},
+        {{"description": "Wind/Hail", "amount": "$X"}}
       ],
       "additional_coverages": [
-        {"description": "Flood", "limit": "$X or NOT COVERED"},
-        {"description": "Earthquake", "limit": "$X or Excluded"},
-        {"description": "Equipment Breakdown", "limit": "$X or Included"},
-        {"description": "Ordinance or Law", "limit": "$X"},
-        {"description": "Spoilage", "limit": "$X"},
-        {"description": "Business Income Extended Period", "limit": "X days"},
-        {"description": "Sign Coverage", "limit": "$X"}
+        {{"description": "Flood", "limit": "$X or NOT COVERED"}},
+        {{"description": "Earthquake", "limit": "$X or Excluded"}},
+        {{"description": "Equipment Breakdown", "limit": "$X or Included"}},
+        {{"description": "Ordinance or Law", "limit": "$X"}},
+        {{"description": "Spoilage", "limit": "$X"}},
+        {{"description": "Business Income Extended Period", "limit": "X days"}},
+        {{"description": "Sign Coverage", "limit": "$X"}}
       ],
       "forms_endorsements": [
-        {"form_number": "CP 00 10 06/07", "description": "Building and Personal Property Coverage Form"}
+        {{"form_number": "CP 00 10 06/07", "description": "Building and Personal Property Coverage Form"}}
       ],
       "subjectivities": ["List of binding requirements"]
-    },
-    "general_liability": {
+    }},
+    "general_liability": {{
       "carrier": "Carrier name",
-      "carrier_admitted": true/false,
+      "carrier_admitted": true or false,
       "am_best_rating": "Rating",
       "premium": 0,
       "taxes_fees": 0,
       "total_premium": 0,
       "tria_premium": 0,
       "limits": [
-        {"description": "Each Occurrence", "limit": "$X"},
-        {"description": "General Aggregate", "limit": "$X"},
-        {"description": "Products/Completed Operations", "limit": "$X"},
-        {"description": "Personal & Advertising Injury", "limit": "$X"},
-        {"description": "Damage to Rented Premises", "limit": "$X"},
-        {"description": "Medical Payments", "limit": "$X"},
-        {"description": "Hired & Non-Owned Auto CSL", "limit": "$X"}
+        {{"description": "Each Occurrence", "limit": "$X"}},
+        {{"description": "General Aggregate", "limit": "$X"}},
+        {{"description": "Products/Completed Operations", "limit": "$X"}},
+        {{"description": "Personal & Advertising Injury", "limit": "$X"}},
+        {{"description": "Damage to Rented Premises", "limit": "$X"}},
+        {{"description": "Medical Payments", "limit": "$X"}}
       ],
       "aggregate_applies": "Per Location or Per Policy",
-      "schedule_of_hazards": [
-        {"location": "1", "classification": "Hotels", "code": "XXXXX", "basis": "S", "exposure": "$X"}
-      ],
       "additional_coverages": [
-        {"description": "Assault & Battery", "limit": "$X", "deductible": "$X"},
-        {"description": "Abuse & Molestation", "limit": "$X", "deductible": "$X"},
-        {"description": "Employee Benefits Liability", "limit": "$X", "deductible": "$X"}
+        {{"description": "Coverage name", "limit": "$X", "deductible": "$X"}}
       ],
       "forms_endorsements": [
-        {"form_number": "CG 00 01 04/13", "description": "Commercial General Liability Coverage Form"}
+        {{"form_number": "CG 00 01 04/13", "description": "Commercial General Liability Coverage Form"}}
       ],
       "subjectivities": []
-    },
-    "umbrella": {
+    }},
+    "umbrella": {{
       "carrier": "Carrier name",
-      "carrier_admitted": true/false,
+      "carrier_admitted": true or false,
       "am_best_rating": "Rating",
       "premium": 0,
       "taxes_fees": 0,
       "total_premium": 0,
       "tria_premium": 0,
       "limits": [
-        {"description": "Each Occurrence", "limit": "$X"},
-        {"description": "Aggregate", "limit": "$X"},
-        {"description": "Self-Insured Retention", "limit": "$X"}
+        {{"description": "Each Occurrence", "limit": "$X"}},
+        {{"description": "Aggregate", "limit": "$X"}},
+        {{"description": "Self-Insured Retention", "limit": "$X"}}
       ],
       "underlying_insurance": [
-        {"carrier": "Carrier", "coverage": "Auto Liability", "limits": "$X CSL"},
-        {"carrier": "Carrier", "coverage": "General Liability", "limits": "$X Occ / $X Agg"}
+        {{"carrier": "Carrier", "coverage": "Auto Liability", "limits": "$X CSL"}},
+        {{"carrier": "Carrier", "coverage": "General Liability", "limits": "$X Occ / $X Agg"}}
       ],
       "tower_structure": [
-        {"layer": "Primary", "carrier": "Carrier", "limits": "$XM xs $XM", "premium": 0, "total_cost": 0}
+        {{"layer": "Primary", "carrier": "Carrier", "limits": "$XM xs $XM", "premium": 0, "total_cost": 0}}
       ],
-      "first_dollar_defense": true/false,
-      "tria_included": true/false,
+      "first_dollar_defense": true,
+      "tria_included": true,
       "forms_endorsements": [],
       "subjectivities": []
-    },
-    "workers_comp": {
+    }},
+    "workers_comp": {{
       "carrier": "Carrier name",
-      "carrier_admitted": true/false,
+      "carrier_admitted": true or false,
       "am_best_rating": "Rating",
       "premium": 0,
       "taxes_fees": 0,
       "total_premium": 0,
       "limits": [
-        {"description": "Workers Compensation", "limit": "Statutory"},
-        {"description": "EL - Each Accident", "limit": "$X"},
-        {"description": "EL - Disease Policy Limit", "limit": "$X"},
-        {"description": "EL - Disease Each Employee", "limit": "$X"}
+        {{"description": "Workers Compensation", "limit": "Statutory"}},
+        {{"description": "EL - Each Accident", "limit": "$X"}},
+        {{"description": "EL - Disease Policy Limit", "limit": "$X"}},
+        {{"description": "EL - Disease Each Employee", "limit": "$X"}}
       ],
-      "deductible": {"amount": "$X", "type": "Per Claim or Per Accident"},
+      "deductible": {{"amount": "$X", "type": "Per Claim or Per Accident"}},
       "rating_basis": [
-        {"state": "XX", "location": "1", "class_code": "XXXX", "classification": "Hotels", "payroll": "$X", "rate": "X.XX"}
+        {{"state": "XX", "location": "1", "class_code": "XXXX", "classification": "Hotels", "payroll": "$X", "rate": "X.XX"}}
       ],
-      "excluded_officers": ["Name - Title"],
       "forms_endorsements": [],
       "subjectivities": []
-    },
-    "commercial_auto": {
+    }},
+    "commercial_auto": {{
       "carrier": "Carrier name",
-      "carrier_admitted": true/false,
+      "carrier_admitted": true or false,
       "am_best_rating": "Rating",
       "premium": 0,
       "taxes_fees": 0,
       "total_premium": 0,
       "limits": [
-        {"description": "Liability CSL", "limit": "$X"},
-        {"description": "Uninsured Motorist", "limit": "$X"},
-        {"description": "Medical Payments", "limit": "$X"},
-        {"description": "Comprehensive Deductible", "limit": "$X"},
-        {"description": "Collision Deductible", "limit": "$X"}
+        {{"description": "Liability CSL", "limit": "$X"}},
+        {{"description": "Uninsured Motorist", "limit": "$X"}},
+        {{"description": "Medical Payments", "limit": "$X"}}
       ],
       "vehicle_schedule": [
-        {"year": "XXXX", "make": "Make", "model": "Model", "vin": "VIN", "garage_location": "City, ST"}
-      ],
-      "driver_schedule": [
-        {"name": "Name", "dob": "MM/DD/YYYY", "license_state": "XX", "license_number": "XXXXX"}
+        {{"year": "XXXX", "make": "Make", "model": "Model", "vin": "VIN"}}
       ],
       "forms_endorsements": [],
       "subjectivities": []
-    }
-  },
+    }}
+  }},
   "named_insureds": ["List of all named insureds"],
   "additional_interests": [
-    {"type": "Mortgagee/Loss Payee/etc", "name_address": "Full name and address", "description": "Description"}
+    {{"type": "Mortgagee/Loss Payee/etc", "name_address": "Full name and address", "description": "Description"}}
   ],
   "locations": [
-    {"number": "1", "corporate_entity": "Entity name", "address": "Street", "city": "City", "state": "ST", "zip": "XXXXX", "description": "Hotel/Motel"}
+    {{"number": "1", "corporate_entity": "Entity name", "address": "Street", "city": "City", "state": "ST", "zip": "XXXXX", "description": "Hotel/Motel"}}
   ],
-  "expiring_premiums": {
+  "expiring_premiums": {{
     "property": 0,
     "general_liability": 0,
     "umbrella": 0,
     "workers_comp": 0,
     "commercial_auto": 0,
     "total": 0
-  },
+  }},
   "payment_options": [
-    {"carrier": "Carrier", "terms": "Payment terms", "mep": "Minimum earned premium"}
+    {{"carrier": "Carrier", "terms": "Payment terms", "mep": "Minimum earned premium"}}
   ]
-}
+}}
 
 IMPORTANT:
 - Only include coverage sections that appear in the documents
@@ -294,36 +484,34 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
     """
     Extract text from all uploaded documents and use GPT to structure
     the data into a standardized format for proposal generation.
-    
-    Args:
-        file_paths: List of paths to uploaded PDF/Excel files
-        
-    Returns:
-        Structured dict of extracted insurance data
+
+    Uses smart page-level extraction for PDFs to prioritize quote
+    summary pages over forms/endorsements boilerplate.
     """
-    # Step 1: Extract text from all documents
+    # Step 1: Extract text from all documents using smart extraction
     all_text = []
     for fp in file_paths:
         fname = Path(fp).name
-        text = extract_document(fp)
+        text = extract_document_smart(fp)
         if text:
             all_text.append(f"\n{'='*60}\nFILE: {fname}\n{'='*60}\n{text}")
+            logger.info(f"Smart extraction from {fname}: {len(text)} chars")
         else:
             logger.warning(f"No text extracted from: {fname}")
-    
+
     if not all_text:
         return {"error": "Could not extract text from any uploaded documents."}
-    
+
     combined_text = "\n".join(all_text)
-    
-    # Truncate if too long (GPT context limit)
-    max_chars = 120000
+
+    # Final safety truncation (should rarely be needed with smart extraction)
+    max_chars = 80000
     if len(combined_text) > max_chars:
-        logger.warning(f"Document text truncated from {len(combined_text)} to {max_chars} chars")
+        logger.warning(f"Combined text truncated from {len(combined_text)} to {max_chars} chars")
         combined_text = combined_text[:max_chars]
-    
+
     logger.info(f"Sending {len(combined_text)} chars to GPT for extraction")
-    
+
     # Step 2: Send to GPT for structured extraction
     try:
         response = _get_openai_client().chat.completions.create(
@@ -336,14 +524,26 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
             temperature=0.1,
             max_tokens=16000
         )
-        
+
         result_text = response.choices[0].message.content
+        finish_reason = response.choices[0].finish_reason
+        logger.info(f"GPT response: {len(result_text)} chars, finish_reason={finish_reason}")
+
+        if finish_reason == "length":
+            logger.warning("GPT response was truncated (hit max_tokens). Attempting to parse partial JSON.")
+
         data = json.loads(result_text)
         logger.info(f"GPT extraction successful. Coverages found: {list(data.get('coverages', {}).keys())}")
+
+        # Log coverage details
+        for key, cov in data.get("coverages", {}).items():
+            logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, premium={cov.get('premium', 0)}, total={cov.get('total_premium', 0)}")
+
         return data
-        
+
     except json.JSONDecodeError as e:
         logger.error(f"GPT returned invalid JSON: {e}")
+        logger.error(f"Raw response (first 500 chars): {result_text[:500] if 'result_text' in dir() else 'N/A'}")
         return {"error": f"Failed to parse extraction results: {e}"}
     except Exception as e:
         logger.error(f"GPT extraction failed: {e}")
@@ -357,12 +557,12 @@ def format_verification_message(data: dict) -> str:
     """
     if "error" in data:
         return f"Extraction Error: {data['error']}"
-    
+
     lines = []
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     lines.append("📋 EXTRACTED DATA — PLEASE VERIFY")
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    
+
     # Client Info
     ci = data.get("client_info", {})
     if ci:
@@ -377,7 +577,7 @@ def format_verification_message(data: dict) -> str:
             lines.append(f"  Effective: {ci['effective_date']}")
         if ci.get("expiration_date"):
             lines.append(f"  Expiration: {ci['expiration_date']}")
-    
+
     # Premium Summary
     coverages = data.get("coverages", {})
     if coverages:
@@ -385,7 +585,7 @@ def format_verification_message(data: dict) -> str:
         lines.append("▸ PREMIUM SUMMARY")
         lines.append(f"  {'Coverage':<25} {'Carrier':<20} {'Total Premium':>15}")
         lines.append(f"  {'─'*25} {'─'*20} {'─'*15}")
-        
+
         grand_total = 0
         coverage_names = {
             "property": "Property",
@@ -394,21 +594,26 @@ def format_verification_message(data: dict) -> str:
             "workers_comp": "Workers Comp",
             "commercial_auto": "Commercial Auto"
         }
-        
+
         for key, display_name in coverage_names.items():
             cov = coverages.get(key)
             if cov:
                 carrier = cov.get("carrier", "N/A")
                 total = cov.get("total_premium", 0)
+                if not isinstance(total, (int, float)):
+                    try:
+                        total = float(str(total).replace(",", "").replace("$", ""))
+                    except (ValueError, TypeError):
+                        total = 0
                 admitted = "" if cov.get("carrier_admitted", True) else " (Non-Admitted)"
                 lines.append(f"  {display_name:<25} {carrier[:20]:<20} ${total:>12,.0f}")
                 if admitted:
                     lines.append(f"  {'':25} {admitted}")
                 grand_total += total
-        
+
         lines.append(f"  {'─'*25} {'─'*20} {'─'*15}")
         lines.append(f"  {'TOTAL':<25} {'':20} ${grand_total:>12,.0f}")
-    
+
     # Coverage Details
     for key, display_name in [("property", "PROPERTY"), ("general_liability", "GENERAL LIABILITY"),
                                ("umbrella", "UMBRELLA"), ("workers_comp", "WORKERS COMP"),
@@ -416,26 +621,26 @@ def format_verification_message(data: dict) -> str:
         cov = coverages.get(key)
         if not cov:
             continue
-        
+
         lines.append("")
         lines.append(f"▸ {display_name}")
         lines.append(f"  Carrier: {cov.get('carrier', 'N/A')}")
         lines.append(f"  AM Best: {cov.get('am_best_rating', 'N/A')}")
-        
+
         # Limits
         limits = cov.get("limits", [])
         if limits:
             lines.append("  Limits:")
             for lim in limits:
                 lines.append(f"    • {lim.get('description', '')}: {lim.get('limit', '')}")
-        
+
         # Deductibles
         deductibles = cov.get("deductibles", [])
         if deductibles:
             lines.append("  Deductibles:")
             for ded in deductibles:
                 lines.append(f"    • {ded.get('description', '')}: {ded.get('amount', '')}")
-        
+
         # Additional Coverages
         addl = cov.get("additional_coverages", [])
         if addl:
@@ -443,7 +648,7 @@ def format_verification_message(data: dict) -> str:
             for ac in addl:
                 ded_str = f" (Ded: {ac['deductible']})" if ac.get("deductible") else ""
                 lines.append(f"    • {ac.get('description', '')}: {ac.get('limit', '')}{ded_str}")
-        
+
         # Forms count
         forms = cov.get("forms_endorsements", [])
         if forms:
@@ -452,7 +657,7 @@ def format_verification_message(data: dict) -> str:
                 lines.append(f"    • {f.get('form_number', '')} — {f.get('description', '')}")
             if len(forms) > 5:
                 lines.append(f"    ... and {len(forms) - 5} more")
-    
+
     # Locations
     locations = data.get("locations", [])
     if locations:
@@ -462,7 +667,7 @@ def format_verification_message(data: dict) -> str:
             lines.append(f"  {loc.get('number', '?')}. {loc.get('address', '')} {loc.get('city', '')}, {loc.get('state', '')} {loc.get('zip', '')}")
         if len(locations) > 5:
             lines.append(f"  ... and {len(locations) - 5} more")
-    
+
     # Named Insureds
     named = data.get("named_insureds", [])
     if named:
@@ -472,7 +677,7 @@ def format_verification_message(data: dict) -> str:
             lines.append(f"  • {ni}")
         if len(named) > 5:
             lines.append(f"  ... and {len(named) - 5} more")
-    
+
     lines.append("")
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     lines.append("⚠️ PLEASE VERIFY ALL DATA ABOVE")
@@ -482,7 +687,7 @@ def format_verification_message(data: dict) -> str:
     lines.append("  ✏️ Send corrections as a message")
     lines.append("  ❌ /proposal cancel — to cancel")
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    
+
     return "\n".join(lines)
 
 
@@ -514,8 +719,8 @@ class ProposalExtractor:
     """
 
     def extract_pdf_text(self, pdf_path: str) -> str:
-        """Extract text from a PDF file."""
-        return extract_text_from_pdf(pdf_path)
+        """Extract text from a PDF file using smart extraction."""
+        return extract_text_from_pdf_smart(pdf_path)
 
     def extract_excel_data(self, excel_path: str) -> str:
         """Extract text from an Excel file."""
@@ -529,7 +734,7 @@ class ProposalExtractor:
     ) -> dict:
         """
         Use GPT to structure extracted text into a standardized insurance data format.
-        
+
         Args:
             pdf_texts: List of dicts with 'filename' and 'text' keys
             excel_data: List of dicts with 'filename' and 'data' keys
@@ -551,8 +756,8 @@ class ProposalExtractor:
 
         combined_text = "\n".join(all_text_parts)
 
-        # Truncate if too long
-        max_chars = 120000
+        # Safety truncation
+        max_chars = 80000
         if len(combined_text) > max_chars:
             logger.warning(
                 f"Document text truncated from {len(combined_text)} to {max_chars} chars"
@@ -579,12 +784,20 @@ class ProposalExtractor:
             )
 
             result_text = response.choices[0].message.content
+            finish_reason = response.choices[0].finish_reason
+            logger.info(f"GPT response: {len(result_text)} chars, finish_reason={finish_reason}")
+
             data = json.loads(result_text)
             data["client_name"] = client_name
             logger.info(
                 f"GPT extraction successful. Coverages found: "
                 f"{list(data.get('coverages', {}).keys())}"
             )
+
+            # Log coverage details
+            for key, cov in data.get("coverages", {}).items():
+                logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, premium={cov.get('premium', 0)}, total={cov.get('total_premium', 0)}")
+
             return data
 
         except json.JSONDecodeError as e:
