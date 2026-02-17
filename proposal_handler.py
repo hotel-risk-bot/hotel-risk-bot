@@ -235,6 +235,9 @@ async def extract_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         for file_info in session.uploaded_files:
             if file_info["file_type"] == "pdf":
                 text = extractor.extract_pdf_text(file_info["local_path"])
+                logger.info(f"PDF '{file_info['filename']}': extracted {len(text)} chars")
+                if not text:
+                    logger.warning(f"No text extracted from PDF: {file_info['filename']}")
                 all_texts.append({
                     "filename": file_info["filename"],
                     "text": text
@@ -255,6 +258,19 @@ async def extract_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         )
         
         session.extracted_data = structured_data
+        
+        # Log extraction results
+        if "error" in structured_data:
+            logger.error(f"Extraction returned error: {structured_data['error']}")
+        else:
+            coverages_found = list(structured_data.get('coverages', {}).keys())
+            logger.info(f"Extraction successful. Coverages found: {coverages_found}")
+            for key in coverages_found:
+                cov = structured_data['coverages'][key]
+                logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, "
+                           f"premium={cov.get('premium', 0)}, "
+                           f"total_premium={cov.get('total_premium', 0)}, "
+                           f"limits={len(cov.get('limits', []))} items")
         
         # Build verification summary
         summary = build_verification_summary(structured_data)
@@ -421,6 +437,20 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         session = get_session(chat_id)  # Re-fetch in case extraction updated it
         if not session or not session.extracted_data:
             return result if result is not None else WAITING_FOR_FILES
+    
+    # Check if extraction returned an error
+    if isinstance(session.extracted_data, dict) and "error" in session.extracted_data:
+        await update.message.reply_text(
+            f"\u274c Extraction had an error: {session.extracted_data['error']}\n\n"
+            f"Please try /extract again or upload different files."
+        )
+        return WAITING_FOR_FILES
+    
+    # Log what we have
+    coverages = session.extracted_data.get('coverages', {})
+    logger.info(f"Generating document with coverages: {list(coverages.keys())}")
+    for key, cov in coverages.items():
+        logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, premium={cov.get('total_premium', 0)}")
     
     await update.message.reply_text(
         "📝 **Generating proposal document...**\n\n"

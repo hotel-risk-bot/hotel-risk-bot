@@ -310,6 +310,19 @@ def generate_cover_page(doc, data):
     # Prepared For box (using a table with eggshell background)
     box_table = doc.add_table(rows=1, cols=1)
     box_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    # Set fixed width for centering
+    for row in box_table.rows:
+        for cell in row.cells:
+            cell.width = Inches(5.5)
+    # Set table preferred width
+    tbl = box_table._tbl
+    tblPr = tbl.tblPr if tbl.tblPr is not None else parse_xml(f'<w:tblPr {nsdecls("w")}/>')
+    tblW = parse_xml(f'<w:tblW {nsdecls("w")} w:w="7920" w:type="dxa"/>')  # 5.5 inches = 7920 twips
+    # Remove existing tblW if any
+    existing_tblW = tblPr.find(qn('w:tblW'))
+    if existing_tblW is not None:
+        tblPr.remove(existing_tblW)
+    tblPr.append(tblW)
     cell = box_table.rows[0].cells[0]
     set_cell_shading(cell, EGGSHELL_HEX)
     
