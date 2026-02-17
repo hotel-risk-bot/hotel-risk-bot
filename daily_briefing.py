@@ -24,8 +24,8 @@ OPPORTUNITIES_TABLE_ID = "tblMKuUsG1cosdQPN"
 POLICIES_TABLE_ID = "tbl8vZP2oHrinwVfd"
 
 # Email Configuration
-GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS", "sburkey@riskportfolio.com")
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
+SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "sburkey@riskportfolio.com")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "sburkey@riskportfolio.com")
 
 # Telegram Configuration (for sending alerts via bot too)
@@ -363,14 +363,14 @@ def generate_afternoon_debrief(tasks: list, completed_today: list,
 
 def send_email(subject: str, body: str, to_email: str = None) -> bool:
     """Send an email via Gmail SMTP."""
-    if not GMAIL_APP_PASSWORD:
-        logger.error("GMAIL_APP_PASSWORD not set - cannot send email")
+    if not SMTP_PASSWORD:
+        logger.error("SMTP_PASSWORD not set - cannot send email")
         return False
 
     to_email = to_email or RECIPIENT_EMAIL
 
     msg = MIMEMultipart()
-    msg["From"] = GMAIL_ADDRESS
+    msg["From"] = SMTP_EMAIL
     msg["To"] = to_email
     msg["Subject"] = subject
 
@@ -379,7 +379,7 @@ def send_email(subject: str, body: str, to_email: str = None) -> bool:
     try:
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
-        server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+        server.login(SMTP_EMAIL, SMTP_PASSWORD)
         server.send_message(msg)
         server.quit()
         logger.info(f"Email sent: {subject}")
@@ -398,6 +398,44 @@ def escape_telegram_markdown(text: str) -> str:
     return text.replace("$", "\\$")
 
 
+def send_telegram_message_sync(text, chat_id=None):
+    """Send a message via Telegram bot (synchronous, for use in scheduled jobs).
+    Automatically splits long messages to respect Telegram's 4096 char limit."""
+    if not TELEGRAM_TOKEN or not (chat_id or TELEGRAM_CHAT_ID):
+        logger.warning("Telegram token or chat ID not set - skipping Telegram send")
+        return
+
+    target_chat = chat_id or TELEGRAM_CHAT_ID
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+
+    # Split into chunks under 4096 chars, breaking at newlines
+    MAX_LEN = 4000  # leave some margin
+    chunks = []
+    current = ""
+    for line in text.split("\\n"):
+        if len(current) + len(line) + 1 > MAX_LEN:
+            if current:
+                chunks.append(current)
+            current = line
+        else:
+            current = current + "\\n" + line if current else line
+    if current:
+        chunks.append(current)
+
+    for i, chunk in enumerate(chunks):
+        try:
+            resp = http_requests.post(url, json={
+                "chat_id": target_chat,
+                "text": chunk,
+            }, timeout=15)
+            if resp.status_code != 200:
+                logger.error(f"Telegram send failed (chunk {i+1}/{len(chunks)}): {resp.text}")
+            else:
+                logger.info(f"Telegram message sent (chunk {i+1}/{len(chunks)})")
+        except Exception as e:
+            logger.error(f"Error sending Telegram message: {e}")
+
+
 async def send_telegram_message(text: str, chat_id: str = None, escape_dollars: bool = True):
     """Send a message via Telegram bot."""
     if not TELEGRAM_TOKEN or not (chat_id or TELEGRAM_CHAT_ID):
@@ -410,14 +448,29 @@ async def send_telegram_message(text: str, chat_id: str = None, escape_dollars: 
         text = escape_telegram_markdown(text)
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    try:
-        http_requests.post(url, json={
-            "chat_id": target_chat,
-            "text": text,
-            "parse_mode": "Markdown",
-        }, timeout=15)
-    except Exception as e:
-        logger.error(f"Error sending Telegram message: {e}")
+
+    # Split into chunks under 4096 chars
+    MAX_LEN = 4000
+    chunks = []
+    current = ""
+    for line in text.split("\\n"):
+        if len(current) + len(line) + 1 > MAX_LEN:
+            if current:
+                chunks.append(current)
+            current = line
+        else:
+            current = current + "\\n" + line if current else line
+    if current:
+        chunks.append(current)
+
+    for chunk in chunks:
+        try:
+            http_requests.post(url, json={
+                "chat_id": target_chat,
+                "text": chunk,
+            }, timeout=15)
+        except Exception as e:
+            logger.error(f"Error sending Telegram message: {e}")
 
 
 def run_morning_briefing(tasks: list, new_business: list = None):
@@ -439,7 +492,15 @@ def run_morning_briefing(tasks: list, new_business: list = None):
         subject = f"[ALERT] {subject} | {len(renewals_data['submit_alerts'])} EXPOSED"
 
     success = send_email(subject, body)
-    logger.info(f"Morning briefing sent: {success}")
+    logger.info(f"Morning briefing email sent: {success}")
+
+    # Also send via Telegram
+    try:
+        send_telegram_message_sync(body)
+        logger.info("Morning briefing sent to Telegram")
+    except Exception as e:
+        logger.error(f"Morning briefing Telegram send error: {e}")
+
     return success, body
 
 
@@ -460,5 +521,13 @@ def run_afternoon_debrief(tasks: list, completed_today: list = None):
     subject = f"Daily Debrief - {today_str} | {completed_count} Completed | {len(tasks)} Remaining"
 
     success = send_email(subject, body)
-    logger.info(f"Afternoon debrief sent: {success}")
+    logger.info(f"Afternoon debrief email sent: {success}")
+
+    # Also send via Telegram
+    try:
+        send_telegram_message_sync(body)
+        logger.info("Afternoon debrief sent to Telegram")
+    except Exception as e:
+        logger.error(f"Afternoon debrief Telegram send error: {e}")
+
     return success, body
