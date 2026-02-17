@@ -505,3 +505,104 @@ async def apply_corrections(data: dict, corrections_text: str) -> dict:
     except Exception as e:
         logger.error(f"Failed to apply corrections: {e}")
         return data
+
+
+class ProposalExtractor:
+    """
+    Class wrapper around the extraction functions for use by proposal_handler.
+    Provides an OOP interface to the module-level extraction functions.
+    """
+
+    def extract_pdf_text(self, pdf_path: str) -> str:
+        """Extract text from a PDF file."""
+        return extract_text_from_pdf(pdf_path)
+
+    def extract_excel_data(self, excel_path: str) -> str:
+        """Extract text from an Excel file."""
+        return extract_text_from_excel(excel_path)
+
+    def structure_insurance_data(
+        self,
+        pdf_texts: list[dict],
+        excel_data: list[dict],
+        client_name: str,
+    ) -> dict:
+        """
+        Use GPT to structure extracted text into a standardized insurance data format.
+        
+        Args:
+            pdf_texts: List of dicts with 'filename' and 'text' keys
+            excel_data: List of dicts with 'filename' and 'data' keys
+            client_name: Name of the client/insured
+        """
+        # Combine all text sources
+        all_text_parts = []
+        for item in pdf_texts:
+            all_text_parts.append(
+                f"\n{'='*60}\nFILE: {item['filename']}\n{'='*60}\n{item['text']}"
+            )
+        for item in excel_data:
+            all_text_parts.append(
+                f"\n{'='*60}\nFILE (Excel): {item['filename']}\n{'='*60}\n{item['data']}"
+            )
+
+        if not all_text_parts:
+            return {"error": "No text extracted from any documents."}
+
+        combined_text = "\n".join(all_text_parts)
+
+        # Truncate if too long
+        max_chars = 120000
+        if len(combined_text) > max_chars:
+            logger.warning(
+                f"Document text truncated from {len(combined_text)} to {max_chars} chars"
+            )
+            combined_text = combined_text[:max_chars]
+
+        logger.info(f"Sending {len(combined_text)} chars to GPT for extraction")
+
+        try:
+            response = _get_openai_client().chat.completions.create(
+                model=GPT_MODEL,
+                messages=[
+                    {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": EXTRACTION_USER_PROMPT.format(
+                            document_text=combined_text
+                        ),
+                    },
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.1,
+                max_tokens=16000,
+            )
+
+            result_text = response.choices[0].message.content
+            data = json.loads(result_text)
+            data["client_name"] = client_name
+            logger.info(
+                f"GPT extraction successful. Coverages found: "
+                f"{list(data.get('coverages', {}).keys())}"
+            )
+            return data
+
+        except json.JSONDecodeError as e:
+            logger.error(f"GPT returned invalid JSON: {e}")
+            return {"error": f"Failed to parse extraction results: {e}"}
+        except Exception as e:
+            logger.error(f"GPT extraction failed: {e}")
+            return {"error": f"AI extraction failed: {e}"}
+
+    def apply_adjustments(self, data: dict, instructions: str) -> dict:
+        """
+        Apply user corrections/adjustments to the extracted data using GPT.
+        This is a synchronous wrapper; the caller should use asyncio.to_thread.
+        """
+        import asyncio
+
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(apply_corrections(data, instructions))
+        finally:
+            loop.close()
