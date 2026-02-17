@@ -69,7 +69,7 @@ except ImportError:
     HAS_MARKETING = False
 
 try:
-    from proposal_handler import get_proposal_conversation_handler
+    from proposal_handler import get_proposal_conversation_handler, extract_standalone, generate_standalone
     HAS_PROPOSAL = True
 except Exception as _proposal_err:
     HAS_PROPOSAL = False
@@ -2001,6 +2001,9 @@ def main():
     # Proposal generator (ConversationHandler - must be before generic MessageHandler)
     if HAS_PROPOSAL:
         app.add_handler(get_proposal_conversation_handler())
+        # Standalone fallback handlers for /extract and /generate (catch when ConversationHandler misses)
+        app.add_handler(CommandHandler("extract", extract_standalone))
+        app.add_handler(CommandHandler("generate", generate_standalone))
         logger.info("Proposal generator module loaded")
     else:
         logger.warning("Proposal generator module not available")

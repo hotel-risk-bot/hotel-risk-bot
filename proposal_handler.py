@@ -531,3 +531,35 @@ def get_proposal_conversation_handler() -> ConversationHandler:
         per_chat=True,
         per_user=True,
     )
+
+
+async def extract_standalone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Standalone /extract handler for when no conversation is active."""
+    chat_id = update.effective_chat.id
+    session = get_session(chat_id)
+    if session:
+        # There IS a session but the ConversationHandler didn't catch it
+        # This can happen after a redeployment. Try to process anyway.
+        logger.info(f"extract_standalone: found orphaned session for chat {chat_id}, processing")
+        await extract_data(update, context)
+    else:
+        await update.message.reply_text(
+            "No active proposal session.\n"
+            "Start one with: /proposal [Client Name]\n"
+            "Then upload your quote documents and send /extract."
+        )
+
+
+async def generate_standalone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Standalone /generate handler for when no conversation is active."""
+    chat_id = update.effective_chat.id
+    session = get_session(chat_id)
+    if session:
+        logger.info(f"generate_standalone: found orphaned session for chat {chat_id}, processing")
+        await generate_doc(update, context)
+    else:
+        await update.message.reply_text(
+            "No active proposal session.\n"
+            "Start one with: /proposal [Client Name]\n"
+            "Then upload documents, /extract, and /generate."
+        )
