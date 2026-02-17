@@ -138,6 +138,29 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def safe_reply(update, text, parse_mode=None):
+    """Send a reply, splitting into chunks if text exceeds Telegram's 4096 char limit."""
+    MAX_LEN = 4000
+    if len(text) <= MAX_LEN:
+        await update.message.reply_text(text, parse_mode=parse_mode)
+        return
+    # Split at newlines
+    chunks = []
+    current = ""
+    for line in text.split("\n"):
+        if len(current) + len(line) + 1 > MAX_LEN:
+            if current:
+                chunks.append(current)
+            current = line
+        else:
+            current = current + "\n" + line if current else line
+    if current:
+        chunks.append(current)
+    for chunk in chunks:
+        await update.message.reply_text(chunk, parse_mode=parse_mode)
+
+
+
 # Ã¢ÂÂÃ¢ÂÂ Telegram Helpers Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 def escape_telegram_dollars(text: str) -> str:
@@ -1780,7 +1803,8 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if success:
         await update.message.reply_text("Ã¢ÂÂ Morning briefing email sent!")
     else:
-        await update.message.reply_text("Ã¢ÂÂ Ã¯Â¸Â Email send failed. Here's the briefing:\n\n" + body[:3500])
+        await update.message.reply_text("Email send failed. Here's the briefing:")
+        await safe_reply(update, body)
 
 
 async def debrief_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1799,7 +1823,8 @@ async def debrief_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if success:
         await update.message.reply_text("Ã¢ÂÂ Afternoon debrief email sent!")
     else:
-        await update.message.reply_text("Ã¢ÂÂ Ã¯Â¸Â Email send failed. Here's the debrief:\n\n" + body[:3500])
+        await update.message.reply_text("Email send failed. Here's the debrief:")
+        await safe_reply(update, body)
 
 
 # Ã¢ÂÂÃ¢ÂÂ Scheduled Jobs Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
