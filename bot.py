@@ -20,7 +20,8 @@ import json
 import logging
 import re
 import tempfile
-from datetime import datetime
+import asyncio
+from datetime import datetime, date
 
 import requests as http_requests
 import unicodedata
@@ -33,6 +34,38 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+
+try:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.cron import CronTrigger
+    HAS_SCHEDULER = True
+except ImportError:
+    HAS_SCHEDULER = False
+
+try:
+    from sheets_manager import (
+        get_active_tasks, add_active_task, complete_task,
+        get_completed_tasks_today, add_new_business, get_new_business,
+        add_lead, get_leads, initialize_sheets,
+    )
+    HAS_SHEETS = True
+except ImportError:
+    HAS_SHEETS = False
+
+try:
+    from daily_briefing import (
+        run_morning_briefing, run_afternoon_debrief,
+        fetch_upcoming_renewals, classify_renewals,
+    )
+    HAS_BRIEFING = True
+except ImportError:
+    HAS_BRIEFING = False
+
+try:
+    from marketing_summary import get_marketing_summary
+    HAS_MARKETING = True
+except ImportError:
+    HAS_MARKETING = False
 
 # ── Configuration (from environment variables) ────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
@@ -101,6 +134,35 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+
+# ── Telegram Helpers ──────────────────────────────────────────────────────
+
+def escape_telegram_dollars(text: str) -> str:
+    """Escape dollar signs to prevent Telegram from rendering them as LaTeX.
+    Telegram treats $...$ as inline math. We escape $ to prevent this."""
+    if not text:
+        return text
+    # Replace $ with escaped version to prevent LaTeX rendering
+    return text.replace("$", "\\$")
+
+
+async def safe_reply_text(message, text: str, parse_mode: str = None, **kwargs):
+    """Send a reply with dollar signs escaped to prevent LaTeX rendering."""
+    if parse_mode and parse_mode.lower() == "markdown":
+        text = escape_telegram_dollars(text)
+    try:
+        await message.reply_text(text, parse_mode=parse_mode, **kwargs)
+    except Exception as e:
+        # If Markdown fails, try without parse_mode
+        logger.warning(f"Markdown send failed: {e}, retrying without parse_mode")
+        try:
+            # Remove markdown formatting and try plain text
+            plain = text.replace("*", "").replace("_", "").replace("`", "")
+            plain = plain.replace("\\$", "$")  # Restore escaped dollars for plain text
+            await message.reply_text(plain)
+        except Exception as e2:
+            logger.error(f"Plain text send also failed: {e2}")
 
 
 # ── Airtable REST API Functions ───────────────────────────────────────────
@@ -953,29 +1015,31 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🏨 *Hotel Risk Advisor Bot*\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "Welcome! I can help you query the HUB International hotel insurance databases.\n\n"
-        "*Available Commands:*\n"
+        "*Claims & Reports:*\n"
         "• /consulting `query` — Search Claims\n"
         "• /report `query` — Executive PDF Report\n"
         "• /sales `query` — Search Sales System\n"
-        "• /update — Get task list\n"
-        "• /status — View progress\n"
-        "• /add `Client | Task | Priority` — Add task\n"
+        "• /marketing `client` — Marketing Summary\n\n"
+        "*Task Management:*\n"
+        "• /task `Client | Task | Priority` — Add task\n"
+        "• /done `number` — Complete a task\n"
+        "• /mytasks — View active tasks\n"
+        "• /update — Get Airtable task list\n"
+        "• /status — View progress\n\n"
+        "*Business Development:*\n"
+        "• /newbiz `Client | Desc | Revenue` — Add opportunity\n"
+        "• /lead `Client | Contact | Source | Desc` — Add lead\n"
+        "• /renewals — Upcoming renewals (120 days)\n"
+        "• /pipeline — View new business pipeline\n\n"
         "• /help — Show this message\n\n"
-        "*Consulting Query Examples:*\n"
-        "• `/consulting Jasmin` — All claims\n"
-        "• `/consulting Jasmin open` — Open claims\n"
-        "• `/consulting Jasmin closed` — Closed claims\n"
-        "• `/consulting Jasmin all` — All open + closed\n"
-        "• `/consulting Jasmin liability` — Liability only\n"
-        "• `/consulting Jasmin property` — Property only\n"
-        "• `/consulting Jasmin open liability greater than 25000`\n"
-        "• `/consulting Jasmin last 5 years`\n"
-        "• `/consulting Jasmin closed property last 3 years`\n\n"
-        "*PDF Report:*\n"
-        "• `/report Ocean Partners` — Full PDF report\n"
-        "• `/report Jasmin open liability last 5 years`\n"
+        "*Query Examples:*\n"
+        "• `/consulting Jasmin open liability`\n"
+        "• `/report Ocean Partners last 5 years`\n"
+        "• `/marketing Triton Hospitality`\n"
+        "• `/task Premier | Send loss runs | Urgent`\n"
+        "• `/newbiz Hilton Garden | Property pkg | 15000`\n"
     )
-    await update.message.reply_text(welcome, parse_mode="Markdown")
+    await safe_reply_text(update.message, welcome, parse_mode="Markdown")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1018,7 +1082,7 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = "\n".join(lines)
     if len(msg) > 4000:
         msg = msg[:4000] + "\n\n_...truncated_"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await safe_reply_text(update.message, msg, parse_mode="Markdown")
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1046,7 +1110,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🟡 In Progress: {in_progress}\n"
         f"🔴 Todo: {todo}\n"
     )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await safe_reply_text(update.message, msg, parse_mode="Markdown")
 
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1063,10 +1127,10 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = [p.strip() for p in text.split("|")]
 
     if len(parts) < 2:
-        await update.message.reply_text(
+        await safe_reply_text(update.message,
             "Please use the format: `/add Client | Task | Priority`",
             parse_mode="Markdown",
-        )
+            )
         return
 
     company = parts[0]
@@ -1143,15 +1207,15 @@ async def consulting_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return
 
-    await update.message.reply_text("⏳ Searching Consulting System...", parse_mode="Markdown")
+    await safe_reply_text(update.message, "⏳ Searching Consulting System...", parse_mode="Markdown")
 
     results, params, query_desc = await run_consulting_query(context.args)
 
     if not results:
-        await update.message.reply_text(
+        await safe_reply_text(update.message,
             f"No claims found matching your criteria.\n{query_desc}",
             parse_mode="Markdown",
-        )
+            )
         return
 
     total_incurred = sum(r["incurred"] for r in results)
@@ -1162,7 +1226,7 @@ async def consulting_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"Total Incurred: *${total_incurred:,.0f}*\n"
         f"{query_desc}\n"
     )
-    await update.message.reply_text(header, parse_mode="Markdown")
+    await safe_reply_text(update.message, header, parse_mode="Markdown")
 
     for i, rec in enumerate(results[:20]):
         try:
@@ -1171,10 +1235,10 @@ async def consulting_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 mid = report.rfind("\n", 0, 4000)
                 if mid < 0:
                     mid = 4000
-                await update.message.reply_text(report[:mid], parse_mode="Markdown")
-                await update.message.reply_text(report[mid:], parse_mode="Markdown")
+                await safe_reply_text(update.message, report[:mid], parse_mode="Markdown")
+                await safe_reply_text(update.message, report[mid:], parse_mode="Markdown")
             else:
-                await update.message.reply_text(report, parse_mode="Markdown")
+                await safe_reply_text(update.message, report, parse_mode="Markdown")
         except Exception as e:
             logger.error(f"Error formatting claim: {e}")
             try:
@@ -1187,11 +1251,11 @@ async def consulting_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 )
 
     if len(results) > 20:
-        await update.message.reply_text(
+        await safe_reply_text(update.message,
             f"_Showing 20 of {len(results)} results. "
             f"Refine your search to see more specific results._",
             parse_mode="Markdown",
-        )
+            )
 
 
 # ── Report Command Handler ────────────────────────────────────────────────
@@ -1199,7 +1263,7 @@ async def consulting_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /report command — generate executive PDF report."""
     if not context.args:
-        await update.message.reply_text(
+        await safe_reply_text(update.message,
             "📄 *Executive PDF Report*\n\n"
             "Usage: `/report ClientName [filters]`\n\n"
             "Examples:\n"
@@ -1208,18 +1272,18 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• `/report Jasmin last 5 years`\n"
             "• `/report Jasmin closed greater than 25000`\n",
             parse_mode="Markdown",
-        )
+            )
         return
 
-    await update.message.reply_text("⏳ Generating executive PDF report...", parse_mode="Markdown")
+    await safe_reply_text(update.message, "⏳ Generating executive PDF report...", parse_mode="Markdown")
 
     results, params, query_desc = await run_consulting_query(context.args)
 
     if not results:
-        await update.message.reply_text(
+        await safe_reply_text(update.message,
             f"No claims found matching your criteria.\n{query_desc}",
             parse_mode="Markdown",
-        )
+            )
         return
 
     try:
@@ -1241,11 +1305,11 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"Error generating PDF: {e}")
-        await update.message.reply_text(
+        await safe_reply_text(update.message,
             f"⚠️ Error generating PDF report: {str(e)}\n\n"
             f"The query found *{len(results)}* claims. Try `/consulting` to view them in chat.",
             parse_mode="Markdown",
-        )
+            )
 
 
 # ── Sales Query Handler ───────────────────────────────────────────────────
@@ -1253,7 +1317,7 @@ async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def sales_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /sales command."""
     if not context.args:
-        await update.message.reply_text(
+        await safe_reply_text(update.message,
             "🔍 *Sales System Query*\n\n"
             "Usage: `/sales search term`\n\n"
             "Examples:\n"
@@ -1261,14 +1325,14 @@ async def sales_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• `/sales Best Western`\n"
             "• `/sales Premier Resorts`",
             parse_mode="Markdown",
-        )
+            )
         return
 
     query = " ".join(context.args)
-    await update.message.reply_text(
+    await safe_reply_text(update.message,
         f"⏳ Searching Sales System for: *{query}*...",
         parse_mode="Markdown",
-    )
+        )
 
     records = search_sales(query)
 
@@ -1281,12 +1345,12 @@ async def sales_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"Found *{len(records)}* result(s) for: *{query}*\n"
     )
-    await update.message.reply_text(header, parse_mode="Markdown")
+    await safe_reply_text(update.message, header, parse_mode="Markdown")
 
     for i, rec in enumerate(records[:10]):
         try:
             report = format_sales_record(rec)
-            await update.message.reply_text(report, parse_mode="Markdown")
+            await safe_reply_text(update.message, report, parse_mode="Markdown")
         except Exception as e:
             logger.error(f"Error formatting sales record: {e}")
             try:
@@ -1296,10 +1360,470 @@ async def sales_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"Error displaying result #{i+1}")
 
     if len(records) > 10:
-        await update.message.reply_text(
+        await safe_reply_text(update.message,
             f"_Showing 10 of {len(records)} results._",
             parse_mode="Markdown",
+            )
+
+
+# ── Google Sheets Task Management Commands ───────────────────────────────
+
+async def task_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /task - Add task to Google Sheets Active Tasks."""
+    if not HAS_SHEETS:
+        await update.message.reply_text("Google Sheets integration not available.")
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "📌 *Add Task*\n\n"
+            "Usage: `/task Client | Task Description | Priority`\n\n"
+            "Priority: Urgent, Today, This Week, Medium, Low\n\n"
+            "Examples:\n"
+            "• `/task Premier | Send loss runs to Zurich | Urgent`\n"
+            "• `/task Ocean Partners | Follow up on WC audit | This Week`\n"
+            "• `/task MGM | Review renewal proposal | Today`",
+            parse_mode="Markdown",
         )
+        return
+
+    text = " ".join(context.args)
+    parts = [p.strip() for p in text.split("|")]
+
+    if len(parts) < 2:
+        await safe_reply_text(update.message,
+            "Please use: `/task Client | Task | Priority`",
+            parse_mode="Markdown",
+            )
+        return
+
+    client = parts[0]
+    task_desc = parts[1]
+    priority = parts[2] if len(parts) > 2 else "This Week"
+
+    valid_priorities = {
+        "urgent": "Urgent", "today": "Today", "asap": "Urgent",
+        "this week": "This Week", "high": "This Week",
+        "medium": "Medium", "low": "Low",
+    }
+    priority = valid_priorities.get(priority.lower().strip(), priority.strip())
+
+    await update.message.reply_text(f"⏳ Adding task for {client}...")
+
+    success = add_active_task(client, task_desc, priority)
+
+    if success:
+        await safe_reply_text(update.message,
+            f"✅ Task added to Active Tasks!\n\n"
+            f"📌 *{task_desc}*\n"
+            f"Client: {client}\n"
+            f"Priority: {priority}",
+            parse_mode="Markdown",
+            )
+    else:
+        await update.message.reply_text("❌ Failed to add task. Check Google Sheets connection.")
+
+
+async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /done - Mark a task as complete."""
+    if not HAS_SHEETS:
+        await update.message.reply_text("Google Sheets integration not available.")
+        return
+
+    if not context.args:
+        # Show task list with numbers
+        tasks = get_active_tasks()
+        if not tasks:
+            await update.message.reply_text("No active tasks to complete!")
+            return
+
+        lines = ["📋 *Active Tasks — Select number to complete:*\n"]
+        for i, t in enumerate(tasks, 1):
+            lines.append(f"  {i}. [{t['client']}] {t['task']}")
+        lines.append("\nUsage: `/done 1` to complete task #1")
+        await safe_reply_text(update.message, "\n".join(lines), parse_mode="Markdown")
+        return
+
+    try:
+        task_num = int(context.args[0])
+    except ValueError:
+        await safe_reply_text(update.message, "Please provide a task number: `/done 1`", parse_mode="Markdown")
+        return
+
+    completed = complete_task(task_num)
+    if completed:
+        await safe_reply_text(update.message,
+            f"✅ Task completed!\n\n"
+            f"*{completed['task']}*\n"
+            f"Client: {completed['client']}\n"
+            f"Moved to Completed Tasks tab.",
+            parse_mode="Markdown",
+            )
+    else:
+        await safe_reply_text(update.message,
+            f"❌ Task #{task_num} not found. Use `/done` to see available tasks.",
+            parse_mode="Markdown",
+            )
+
+
+async def mytasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /mytasks - Show active tasks from Google Sheet."""
+    if not HAS_SHEETS:
+        await update.message.reply_text("Google Sheets integration not available.")
+        return
+
+    await update.message.reply_text("⏳ Fetching active tasks...")
+    tasks = get_active_tasks()
+
+    if not tasks:
+        await update.message.reply_text("📋 No active tasks. Inbox zero! 🎉")
+        return
+
+    # Group by priority
+    urgent = [t for t in tasks if t.get("priority", "").lower() in ["urgent", "today", "asap"]]
+    this_week = [t for t in tasks if t.get("priority", "").lower() in ["this week", "high"]]
+    other = [t for t in tasks if t not in urgent and t not in this_week]
+
+    lines = [f"📋 *Active Tasks ({len(tasks)} total)*\n"]
+    idx = 1
+
+    if urgent:
+        lines.append("🔥 *URGENT/TODAY:*")
+        for t in urgent:
+            due = f" (Due: {t['due_date']})" if t.get('due_date') else ""
+            lines.append(f"  {idx}. [{t['client']}] {t['task']}{due}")
+            idx += 1
+        lines.append("")
+
+    if this_week:
+        lines.append("⚡ *THIS WEEK:*")
+        for t in this_week:
+            due = f" (Due: {t['due_date']})" if t.get('due_date') else ""
+            lines.append(f"  {idx}. [{t['client']}] {t['task']}{due}")
+            idx += 1
+        lines.append("")
+
+    if other:
+        lines.append("📌 *OTHER:*")
+        for t in other:
+            due = f" (Due: {t['due_date']})" if t.get('due_date') else ""
+            lines.append(f"  {idx}. [{t['client']}] {t['task']}{due}")
+            idx += 1
+
+    lines.append("\n_Use `/done #` to complete a task_")
+
+    msg = "\n".join(lines)
+    if len(msg) > 4000:
+        msg = msg[:4000] + "\n\n_...truncated_"
+    await safe_reply_text(update.message, msg, parse_mode="Markdown")
+
+
+async def newbiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /newbiz - Add new business opportunity to Google Sheet."""
+    if not HAS_SHEETS:
+        await update.message.reply_text("Google Sheets integration not available.")
+        return
+
+    if not context.args:
+        await safe_reply_text(update.message,
+            "💼 *Add New Business Opportunity*\n\n"
+            "Usage: `/newbiz Client | Description | Est Revenue`\n\n"
+            "Examples:\n"
+            "• `/newbiz Hilton Garden Inn | Property & GL pkg | 15000`\n"
+            "• `/newbiz Best Western Plus | Full commercial pkg | 25000`",
+            parse_mode="Markdown",
+            )
+        return
+
+    text = " ".join(context.args)
+    parts = [p.strip() for p in text.split("|")]
+
+    if len(parts) < 2:
+        await safe_reply_text(update.message,
+            "Please use: `/newbiz Client | Description | Est Revenue`",
+            parse_mode="Markdown",
+            )
+        return
+
+    client = parts[0]
+    description = parts[1]
+    est_revenue = parts[2].strip() if len(parts) > 2 else ""
+
+    # Determine N/R based on context
+    nr = "N"  # Default to New
+
+    success = add_new_business(client, description, nr, est_revenue)
+
+    if success:
+        rev_display = f" | Est Revenue: ${est_revenue}" if est_revenue else ""
+        await safe_reply_text(update.message,
+            f"✅ New business opportunity added!\n\n"
+            f"💼 *{client}*\n"
+            f"{description}{rev_display}\n"
+            f"Type: New Business",
+            parse_mode="Markdown",
+            )
+    else:
+        await update.message.reply_text("❌ Failed to add opportunity. Check Google Sheets connection.")
+
+
+async def lead_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /lead - Add a new lead to Google Sheet Leads tab."""
+    if not HAS_SHEETS:
+        await update.message.reply_text("Google Sheets integration not available.")
+        return
+
+    if not context.args:
+        await safe_reply_text(update.message,
+            "🎯 *Add New Lead*\n\n"
+            "Usage: `/lead Client | Contact | Source | Description`\n\n"
+            "Examples:\n"
+            "• `/lead Marriott Courtyard | John Smith | Referral | 50 room property in Tampa`\n"
+            "• `/lead Holiday Inn Express | GM Jane | Cold Call | New build opening Q3`",
+            parse_mode="Markdown",
+            )
+        return
+
+    text = " ".join(context.args)
+    parts = [p.strip() for p in text.split("|")]
+
+    if len(parts) < 1:
+        await safe_reply_text(update.message,
+            "Please use: `/lead Client | Contact | Source | Description`",
+            parse_mode="Markdown",
+            )
+        return
+
+    client = parts[0]
+    contact = parts[1] if len(parts) > 1 else ""
+    source = parts[2] if len(parts) > 2 else ""
+    description = parts[3] if len(parts) > 3 else ""
+
+    success = add_lead(client, contact, source, description)
+
+    if success:
+        await safe_reply_text(update.message,
+            f"✅ Lead added!\n\n"
+            f"🎯 *{client}*\n"
+            f"Contact: {contact}\n"
+            f"Source: {source}\n"
+            f"{description}",
+            parse_mode="Markdown",
+            )
+    else:
+        await update.message.reply_text("❌ Failed to add lead. Check Google Sheets connection.")
+
+
+async def pipeline_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /pipeline - View new business pipeline."""
+    if not HAS_SHEETS:
+        await update.message.reply_text("Google Sheets integration not available.")
+        return
+
+    await update.message.reply_text("⏳ Fetching pipeline...")
+    items = get_new_business()
+
+    if not items:
+        await update.message.reply_text("💼 No new business opportunities in pipeline.")
+        return
+
+    lines = [f"💼 *New Business Pipeline ({len(items)} opportunities)*\n"]
+    total_revenue = 0
+    for nb in items:
+        rev = nb.get("est_revenue", "")
+        rev_display = ""
+        if rev:
+            try:
+                rev_val = float(str(rev).replace("$", "").replace(",", ""))
+                total_revenue += rev_val
+                rev_display = f" — ${rev_val:,.0f}"
+            except (ValueError, TypeError):
+                rev_display = f" — {rev}"
+
+        nr_flag = "🆕" if nb.get("nr") == "N" else "🔄"
+        lines.append(f"  {nr_flag} *{nb['client']}*{rev_display}")
+        if nb.get("description"):
+            lines.append(f"    {nb['description']}")
+        lines.append(f"    Status: {nb.get('status', 'N/A')} | Added: {nb.get('date_added', '')}")
+        lines.append("")
+
+    if total_revenue > 0:
+        lines.append(f"\n💰 *Total Pipeline: ${total_revenue:,.0f}*")
+
+    msg = "\n".join(lines)
+    if len(msg) > 4000:
+        msg = msg[:4000] + "\n\n_...truncated_"
+    await safe_reply_text(update.message, msg, parse_mode="Markdown")
+
+
+# ── Renewals Command ─────────────────────────────────────────────────────
+
+async def renewals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /renewals - Show upcoming renewals from Airtable."""
+    if not HAS_BRIEFING:
+        await update.message.reply_text("Briefing module not available.")
+        return
+
+    await update.message.reply_text("⏳ Fetching upcoming renewals from Sales System...")
+
+    records = fetch_upcoming_renewals(120)
+    if not records:
+        await update.message.reply_text("No upcoming renewals found in the next 120 days.")
+        return
+
+    renewals_data = classify_renewals(records)
+    all_renewals = renewals_data.get("all_renewals", [])
+    submit_alerts = renewals_data.get("submit_alerts", [])
+    high_revenue = renewals_data.get("high_revenue", [])
+
+    lines = [f"📅 *Upcoming Renewals — Next 120 Days ({len(all_renewals)} total)*\n"]
+
+    if submit_alerts:
+        lines.append(f"🔴 *EXPOSED — NEEDS SUBMISSION ({len(submit_alerts)}):*")
+        for r in submit_alerts:
+            days = f"{r['days_until']}d" if r.get('days_until') else "TBD"
+            rev = f" — ${r['revenue']:,.0f}" if r.get('revenue') else ""
+            lines.append(f"  ‼️ [{days}] {r['name']}{rev}")
+        lines.append("")
+
+    if high_revenue:
+        lines.append(f"💰 *HIGH REVENUE >$5K ({len(high_revenue)}):*")
+        for r in high_revenue[:10]:
+            days = f"{r['days_until']}d" if r.get('days_until') else "TBD"
+            lines.append(f"  $ [{days}] {r['name']} — ${r['revenue']:,.0f} ({r['status']})")
+        lines.append("")
+
+    lines.append("*All Renewals:*")
+    sorted_renewals = sorted(all_renewals, key=lambda x: x.get("days_until") or 999)
+    for r in sorted_renewals[:25]:
+        days = f"{r['days_until']}d" if r.get('days_until') else "TBD"
+        rev = f" — ${r['revenue']:,.0f}" if r.get('revenue') else ""
+        flag = " 🔴" if r.get('status', '').lower() in ['submit', 'submitted'] else ""
+        lines.append(f"  [{days}] {r['name']}{rev}{flag}")
+
+    if len(all_renewals) > 25:
+        lines.append(f"\n_...and {len(all_renewals) - 25} more_")
+
+    msg = "\n".join(lines)
+    if len(msg) > 4000:
+        msg = msg[:4000] + "\n\n_...truncated_"
+    await safe_reply_text(update.message, msg, parse_mode="Markdown")
+
+
+# ── Marketing Summary Command ────────────────────────────────────────────
+
+async def marketing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /marketing - Get marketing summary for a client/opportunity."""
+    if not HAS_MARKETING:
+        await update.message.reply_text("Marketing summary module not available.")
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "📊 *Marketing Summary*\n\n"
+            "Usage: `/marketing Client Name`\n\n"
+            "Shows carrier status for all policy types:\n"
+            "Incumbent, Market, Submit, Blocked, Declined, Quoted, Proposed, Bound\n\n"
+            "Examples:\n"
+            "• `/marketing Triton Hospitality`\n"
+            "• `/marketing Ocean Partners`\n"
+            "• `/marketing Premier Resorts`",
+            parse_mode="Markdown",
+        )
+        return
+
+    client_name = " ".join(context.args)
+    await safe_reply_text(update.message, f"⏳ Generating marketing summary for *{client_name}*...", parse_mode="Markdown")
+
+    try:
+        summary = await get_marketing_summary(client_name)
+        # Split long messages
+        if len(summary) > 4000:
+            parts = []
+            while summary:
+                if len(summary) <= 4000:
+                    parts.append(summary)
+                    break
+                split_at = summary.rfind("\n", 0, 4000)
+                if split_at < 0:
+                    split_at = 4000
+                parts.append(summary[:split_at])
+                summary = summary[split_at:]
+            for part in parts:
+                await safe_reply_text(update.message, part, parse_mode="Markdown")
+        else:
+            await safe_reply_text(update.message, summary, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Error generating marketing summary: {e}")
+        await update.message.reply_text(
+            f"⚠️ Error generating marketing summary: {str(e)}",
+        )
+
+
+# ── Daily Briefing Command (manual trigger) ──────────────────────────────
+
+async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /briefing - Manually trigger morning briefing."""
+    if not HAS_BRIEFING or not HAS_SHEETS:
+        await update.message.reply_text("Briefing modules not available.")
+        return
+
+    await update.message.reply_text("⏳ Generating briefing...")
+
+    tasks = get_active_tasks()
+    new_business = get_new_business() if HAS_SHEETS else []
+
+    success, body = run_morning_briefing(tasks, new_business)
+
+    if success:
+        await update.message.reply_text("✅ Morning briefing email sent!")
+    else:
+        await update.message.reply_text("⚠️ Email send failed. Here's the briefing:\n\n" + body[:3500])
+
+
+async def debrief_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /debrief - Manually trigger afternoon debrief."""
+    if not HAS_BRIEFING or not HAS_SHEETS:
+        await update.message.reply_text("Briefing modules not available.")
+        return
+
+    await update.message.reply_text("⏳ Generating debrief...")
+
+    tasks = get_active_tasks()
+    completed = get_completed_tasks_today()
+
+    success, body = run_afternoon_debrief(tasks, completed)
+
+    if success:
+        await update.message.reply_text("✅ Afternoon debrief email sent!")
+    else:
+        await update.message.reply_text("⚠️ Email send failed. Here's the debrief:\n\n" + body[:3500])
+
+
+# ── Scheduled Jobs ───────────────────────────────────────────────────────
+
+def scheduled_morning_briefing():
+    """Scheduled job: Run morning briefing at 7 AM EST."""
+    logger.info("Running scheduled morning briefing...")
+    try:
+        tasks = get_active_tasks() if HAS_SHEETS else []
+        new_business = get_new_business() if HAS_SHEETS else []
+        success, body = run_morning_briefing(tasks, new_business)
+        logger.info(f"Morning briefing result: {success}")
+    except Exception as e:
+        logger.error(f"Scheduled morning briefing error: {e}")
+
+
+def scheduled_afternoon_debrief():
+    """Scheduled job: Run afternoon debrief at 4 PM EST."""
+    logger.info("Running scheduled afternoon debrief...")
+    try:
+        tasks = get_active_tasks() if HAS_SHEETS else []
+        completed = get_completed_tasks_today() if HAS_SHEETS else []
+        success, body = run_afternoon_debrief(tasks, completed)
+        logger.info(f"Afternoon debrief result: {success}")
+    except Exception as e:
+        logger.error(f"Scheduled afternoon debrief error: {e}")
 
 
 # ── Fallback Message Handler ──────────────────────────────────────────────
@@ -1329,6 +1853,46 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     elif lower.startswith("@status"):
         await status_command(update, context)
+        return
+    elif lower.startswith("@marketing"):
+        remainder = text[len("@marketing"):].strip()
+        context.args = remainder.split() if remainder else []
+        await marketing_command(update, context)
+        return
+    elif lower.startswith("@task"):
+        remainder = text[len("@task"):].strip()
+        context.args = remainder.split() if remainder else []
+        await task_command(update, context)
+        return
+    elif lower.startswith("@done"):
+        remainder = text[len("@done"):].strip()
+        context.args = remainder.split() if remainder else []
+        await done_command(update, context)
+        return
+    elif lower.startswith("@mytasks"):
+        await mytasks_command(update, context)
+        return
+    elif lower.startswith("@newbiz"):
+        remainder = text[len("@newbiz"):].strip()
+        context.args = remainder.split() if remainder else []
+        await newbiz_command(update, context)
+        return
+    elif lower.startswith("@lead"):
+        remainder = text[len("@lead"):].strip()
+        context.args = remainder.split() if remainder else []
+        await lead_command(update, context)
+        return
+    elif lower.startswith("@renewals"):
+        await renewals_command(update, context)
+        return
+    elif lower.startswith("@pipeline"):
+        await pipeline_command(update, context)
+        return
+    elif lower.startswith("@briefing"):
+        await briefing_command(update, context)
+        return
+    elif lower.startswith("@debrief"):
+        await debrief_command(update, context)
         return
     elif lower.startswith("@help") or lower.startswith("@start"):
         await start_command(update, context)
@@ -1365,8 +1929,17 @@ def main():
 
     logger.info("Starting Hotel Risk Advisor Bot...")
 
+    # Initialize Google Sheets tabs
+    if HAS_SHEETS:
+        try:
+            initialize_sheets()
+            logger.info("Google Sheets initialized")
+        except Exception as e:
+            logger.warning(f"Google Sheets init failed (will retry on use): {e}")
+
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
+    # Original commands
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("update", update_command))
@@ -1376,9 +1949,60 @@ def main():
     app.add_handler(CommandHandler("report", report_command))
     app.add_handler(CommandHandler("sales", sales_command))
 
+    # New task management commands
+    app.add_handler(CommandHandler("task", task_command))
+    app.add_handler(CommandHandler("done", done_command))
+    app.add_handler(CommandHandler("mytasks", mytasks_command))
+
+    # New business development commands
+    app.add_handler(CommandHandler("newbiz", newbiz_command))
+    app.add_handler(CommandHandler("lead", lead_command))
+    app.add_handler(CommandHandler("pipeline", pipeline_command))
+    app.add_handler(CommandHandler("renewals", renewals_command))
+
+    # Marketing summary
+    app.add_handler(CommandHandler("marketing", marketing_command))
+
+    # Manual briefing/debrief triggers
+    app.add_handler(CommandHandler("briefing", briefing_command))
+    app.add_handler(CommandHandler("debrief", debrief_command))
+
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     app.add_error_handler(error_handler)
+
+    # Set up scheduled daily emails
+    if HAS_SCHEDULER and HAS_BRIEFING:
+        try:
+            scheduler = AsyncIOScheduler(timezone="US/Eastern")
+
+            # Morning briefing at 7:00 AM EST
+            scheduler.add_job(
+                scheduled_morning_briefing,
+                CronTrigger(hour=7, minute=0, timezone="US/Eastern"),
+                id="morning_briefing",
+                name="Morning Briefing",
+                replace_existing=True,
+            )
+
+            # Afternoon debrief at 4:00 PM EST
+            scheduler.add_job(
+                scheduled_afternoon_debrief,
+                CronTrigger(hour=16, minute=0, timezone="US/Eastern"),
+                id="afternoon_debrief",
+                name="Afternoon Debrief",
+                replace_existing=True,
+            )
+
+            scheduler.start()
+            logger.info("Scheduler started: Morning briefing at 7AM EST, Debrief at 4PM EST")
+        except Exception as e:
+            logger.error(f"Scheduler setup failed: {e}")
+    else:
+        if not HAS_SCHEDULER:
+            logger.warning("APScheduler not installed - daily emails disabled")
+        if not HAS_BRIEFING:
+            logger.warning("Briefing module not available - daily emails disabled")
 
     logger.info("Starting polling...")
     app.run_polling(drop_pending_updates=True)
