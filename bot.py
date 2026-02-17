@@ -1801,10 +1801,8 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     success, body = run_morning_briefing(tasks, new_business)
 
     if success:
-        await update.message.reply_text("Ã¢ÂÂ Morning briefing email sent!")
-    else:
-        await update.message.reply_text("Email send failed. Here's the briefing:")
-        await safe_reply(update, body)
+        await update.message.reply_text("Ã¢ÂÂ Morning briefing sent!")
+    await safe_reply(update, body)
 
 
 async def debrief_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1821,61 +1819,34 @@ async def debrief_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     success, body = run_afternoon_debrief(tasks, completed)
 
     if success:
-        await update.message.reply_text("Ã¢ÂÂ Afternoon debrief email sent!")
-    else:
-        await update.message.reply_text("Email send failed. Here's the debrief:")
-        await safe_reply(update, body)
+        await update.message.reply_text("Ã¢ÂÂ Afternoon debrief sent!")
+    await safe_reply(update, body)
 
 
 # Ã¢ÂÂÃ¢ÂÂ Scheduled Jobs Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 def scheduled_morning_briefing():
-    """Scheduled job: Run morning briefing at 7 AM EST. Sends email + Telegram."""
+    """Scheduled job: Run morning briefing at 7 AM EST via Telegram."""
     logger.info("Running scheduled morning briefing...")
     try:
         tasks = get_active_tasks() if HAS_SHEETS else []
         new_business = get_new_business() if HAS_SHEETS else []
         success, body = run_morning_briefing(tasks, new_business)
-        logger.info(f"Morning briefing email result: {success}")
-
-        # Also send via Telegram
-        if TELEGRAM_CHAT_ID and body:
-            try:
-                # Truncate if too long for Telegram (4096 char limit)
-                tg_body = body if len(body) <= 4000 else body[:3950] + "\n\n... [truncated - see email for full briefing]"
-                asyncio.get_event_loop().create_task(
-                    send_telegram_message(tg_body, chat_id=TELEGRAM_CHAT_ID)
-                )
-                logger.info("Morning briefing also sent via Telegram")
-            except Exception as te:
-                logger.error(f"Telegram morning briefing error: {te}")
+        logger.info(f"Morning briefing result: {success}")
     except Exception as e:
         logger.error(f"Scheduled morning briefing error: {e}")
 
 
 def scheduled_afternoon_debrief():
-    """Scheduled job: Run afternoon debrief at 4 PM EST. Sends email + Telegram."""
+    """Scheduled job: Run afternoon debrief at 4 PM EST via Telegram."""
     logger.info("Running scheduled afternoon debrief...")
     try:
         tasks = get_active_tasks() if HAS_SHEETS else []
         completed = get_completed_tasks_today() if HAS_SHEETS else []
         success, body = run_afternoon_debrief(tasks, completed)
-        logger.info(f"Afternoon debrief email result: {success}")
-
-        # Also send via Telegram
-        if TELEGRAM_CHAT_ID and body:
-            try:
-                tg_body = body if len(body) <= 4000 else body[:3950] + "\n\n... [truncated - see email for full debrief]"
-                asyncio.get_event_loop().create_task(
-                    send_telegram_message(tg_body, chat_id=TELEGRAM_CHAT_ID)
-                )
-                logger.info("Afternoon debrief also sent via Telegram")
-            except Exception as te:
-                logger.error(f"Telegram afternoon debrief error: {te}")
+        logger.info(f"Afternoon debrief result: {success}")
     except Exception as e:
         logger.error(f"Scheduled afternoon debrief error: {e}")
-
-
 # Ã¢ÂÂÃ¢ÂÂ Fallback Message Handler Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2021,7 +1992,7 @@ def main():
 
     app.add_error_handler(error_handler)
 
-    # Set up scheduled daily emails via post_init (runs inside the async event loop)
+    # Set up scheduled daily briefings via post_init (runs inside the async event loop)
     if HAS_SCHEDULER and HAS_BRIEFING:
         async def post_init(application):
             """Start the scheduler after the event loop is running."""
@@ -2054,9 +2025,9 @@ def main():
         app.post_init = post_init
     else:
         if not HAS_SCHEDULER:
-            logger.warning("APScheduler not installed - daily emails disabled")
+            logger.warning("APScheduler not installed - daily briefings disabled")
         if not HAS_BRIEFING:
-            logger.warning("Briefing module not available - daily emails disabled")
+            logger.warning("Briefing module not available - daily briefings disabled")
 
     logger.info("Starting polling...")
     app.run_polling(drop_pending_updates=True)
