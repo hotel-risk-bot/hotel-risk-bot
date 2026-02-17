@@ -8,9 +8,6 @@ to generate morning briefing and afternoon debrief emails.
 import os
 import json
 import logging
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from datetime import datetime, date, timedelta
 
 import requests as http_requests
@@ -23,10 +20,6 @@ SALES_BASE_ID = "appnFKEzmdLbR4CHY"
 OPPORTUNITIES_TABLE_ID = "tblMKuUsG1cosdQPN"
 POLICIES_TABLE_ID = "tbl8vZP2oHrinwVfd"
 
-# Email Configuration
-SMTP_EMAIL = os.environ.get("SMTP_EMAIL", "sburkey@riskportfolio.com")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
-RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "sburkey@riskportfolio.com")
 
 # Telegram Configuration (for sending alerts via bot too)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
@@ -361,32 +354,7 @@ def generate_afternoon_debrief(tasks: list, completed_today: list,
     return "\n".join(lines)
 
 
-def send_email(subject: str, body: str, to_email: str = None) -> bool:
-    """Send an email via Gmail SMTP."""
-    if not SMTP_PASSWORD:
-        logger.error("SMTP_PASSWORD not set - cannot send email")
-        return False
-
-    to_email = to_email or RECIPIENT_EMAIL
-
-    msg = MIMEMultipart()
-    msg["From"] = SMTP_EMAIL
-    msg["To"] = to_email
-    msg["Subject"] = subject
-
-    msg.attach(MIMEText(body, "plain"))
-
-    try:
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-        server.login(SMTP_EMAIL, SMTP_PASSWORD)
-        server.send_message(msg)
-        server.quit()
-        logger.info(f"Email sent: {subject}")
-        return True
-    except Exception as e:
-        logger.error(f"Error sending email: {e}")
-        return False
+# Email sending removed - using Telegram only
 
 
 def escape_telegram_markdown(text: str) -> str:
@@ -412,13 +380,13 @@ def send_telegram_message_sync(text, chat_id=None):
     MAX_LEN = 4000  # leave some margin
     chunks = []
     current = ""
-    for line in text.split("\\n"):
+    for line in text.split("\n"):
         if len(current) + len(line) + 1 > MAX_LEN:
             if current:
                 chunks.append(current)
             current = line
         else:
-            current = current + "\\n" + line if current else line
+            current = current + "\n" + line if current else line
     if current:
         chunks.append(current)
 
@@ -484,24 +452,14 @@ def run_morning_briefing(tasks: list, new_business: list = None):
     # Generate email
     body = generate_morning_briefing(tasks, renewals_data, new_business or [])
 
-    # Send email
-    today_str = date.today().strftime("%m/%d/%Y")
-    subject = f"Morning Briefing - {today_str} | {len(tasks)} Tasks | {len(renewals_data['all_renewals'])} Renewals"
-
-    if renewals_data["submit_alerts"]:
-        subject = f"[ALERT] {subject} | {len(renewals_data['submit_alerts'])} EXPOSED"
-
-    success = send_email(subject, body)
-    logger.info(f"Morning briefing email sent: {success}")
-
-    # Also send via Telegram
+    # Send via Telegram
     try:
         send_telegram_message_sync(body)
         logger.info("Morning briefing sent to Telegram")
+        return True, body
     except Exception as e:
         logger.error(f"Morning briefing Telegram send error: {e}")
-
-    return success, body
+        return False, body
 
 
 def run_afternoon_debrief(tasks: list, completed_today: list = None):
@@ -515,19 +473,11 @@ def run_afternoon_debrief(tasks: list, completed_today: list = None):
     # Generate email
     body = generate_afternoon_debrief(tasks, completed_today or [], renewals_data)
 
-    # Send email
-    today_str = date.today().strftime("%m/%d/%Y")
-    completed_count = len(completed_today) if completed_today else 0
-    subject = f"Daily Debrief - {today_str} | {completed_count} Completed | {len(tasks)} Remaining"
-
-    success = send_email(subject, body)
-    logger.info(f"Afternoon debrief email sent: {success}")
-
-    # Also send via Telegram
+    # Send via Telegram
     try:
         send_telegram_message_sync(body)
         logger.info("Afternoon debrief sent to Telegram")
+        return True, body
     except Exception as e:
         logger.error(f"Afternoon debrief Telegram send error: {e}")
-
-    return success, body
+        return False, body
