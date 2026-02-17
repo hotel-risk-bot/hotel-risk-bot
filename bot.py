@@ -68,7 +68,13 @@ try:
 except ImportError:
     HAS_MARKETING = False
 
-# Ã¢ÂÂÃ¢ÂÂ Configuration (from environment variables) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
+try:
+    from proposal_handler import get_proposal_conversation_handler
+    HAS_PROPOSAL = True
+except ImportError:
+    HAS_PROPOSAL = False
+
+# ── Configuration (from environment variables) ────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 AIRTABLE_PAT = os.environ.get("AIRTABLE_PAT", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -1052,11 +1058,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Ã¢ÂÂ¢ /update Ã¢ÂÂ Get Airtable task list\n"
         "Ã¢ÂÂ¢ /status Ã¢ÂÂ View progress\n\n"
         "*Business Development:*\n"
-        "Ã¢ÂÂ¢ /newbiz `Client | Desc | Revenue` Ã¢ÂÂ Add opportunity\n"
-        "Ã¢ÂÂ¢ /lead `Client | Contact | Source | Desc` Ã¢ÂÂ Add lead\n"
-        "Ã¢ÂÂ¢ /renewals Ã¢ÂÂ Upcoming renewals (120 days)\n"
-        "Ã¢ÂÂ¢ /pipeline Ã¢ÂÂ View new business pipeline\n\n"
-        "Ã¢ÂÂ¢ /help Ã¢ÂÂ Show this message\n\n"
+        "• /newbiz `Client | Desc | Revenue` — Add opportunity\n"
+        "• /lead `Client | Contact | Source | Desc` — Add lead\n"
+        "• /renewals — Upcoming renewals (120 days)\n"
+        "• /pipeline — View new business pipeline\n\n"
+        "*Proposal Generator:*\n"
+        "• /proposal `Client Name` — Generate insurance proposal\n"
+        "  Upload PDF quotes & Excel SOV, then /extract → /generate\n\n"
+        "• /help — Show this message\n\n"
         "*Query Examples:*\n"
         "Ã¢ÂÂ¢ `/consulting Jasmin open liability`\n"
         "Ã¢ÂÂ¢ `/report Ocean Partners last 5 years`\n"
@@ -1987,6 +1996,13 @@ def main():
     # Manual briefing/debrief triggers
     app.add_handler(CommandHandler("briefing", briefing_command))
     app.add_handler(CommandHandler("debrief", debrief_command))
+
+    # Proposal generator (ConversationHandler - must be before generic MessageHandler)
+    if HAS_PROPOSAL:
+        app.add_handler(get_proposal_conversation_handler())
+        logger.info("Proposal generator module loaded")
+    else:
+        logger.warning("Proposal generator module not available")
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
