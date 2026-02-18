@@ -39,3 +39,4 @@ Telegram bot for HUB International's Hotel Franchise Practice. Queries Airtable-
 2. Connect to Railway.app
 3. Set environment variables in Railway dashboard
 4. Railway auto-deploys from the Procfile
+<!-- deploy trigger -->
