@@ -479,7 +479,7 @@ def build_verification_summary(data: dict) -> str:
             
             lines.append(f"**{display}**")
             lines.append(f"  Carrier: {carrier} ({admitted})")
-            lines.append(f"  Premium: ${premium:,.0f}" if isinstance(premium, (int, float)) else f"  Premium: {premium}")
+            lines.append(f"  Premium: ${premium:,.2f}" if isinstance(premium, (int, float)) else f"  Premium: {premium}")
             
             # Key limits
             limits = cov.get("limits", [])
@@ -500,7 +500,7 @@ def build_verification_summary(data: dict) -> str:
             
             lines.append("")
     
-    lines.append(f"**TOTAL PROPOSED PREMIUM: ${total_premium:,.0f}**")
+    lines.append(f"**TOTAL PROPOSED PREMIUM: ${total_premium:,.2f}**")
     
     return "\n".join(lines)
 

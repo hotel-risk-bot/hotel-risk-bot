@@ -172,9 +172,9 @@ def add_formatted_paragraph(doc, text, size=11, color=CLASSIC_BLUE, bold=False,
 
 
 def add_section_header(doc, text):
-    """Add a 22pt Classic Blue bold section header."""
+    """Add a 22pt Classic Blue bold section header with enough space to clear page header."""
     return add_formatted_paragraph(doc, text, size=22, color=CLASSIC_BLUE, bold=True,
-                                   space_before=6, space_after=12)
+                                   space_before=0, space_after=12)
 
 
 def add_subsection_header(doc, text):
@@ -325,14 +325,19 @@ def add_page_break(doc):
 
 
 def fmt_currency(amount):
-    """Format a number as currency."""
+    """Format a number as currency, preserving cents if present."""
     if isinstance(amount, (int, float)):
-        return f"${amount:,.0f}"
+        if amount == int(amount):
+            return f"${int(amount):,}"
+        return f"${amount:,.2f}"
     if isinstance(amount, str):
         if amount.startswith("$"):
             return amount
         try:
-            return f"${float(amount.replace(',', '')):,.0f}"
+            val = float(amount.replace(',', ''))
+            if val == int(val):
+                return f"${int(val):,}"
+            return f"${val:,.2f}"
         except (ValueError, AttributeError):
             return amount
     return str(amount)
@@ -341,7 +346,7 @@ def fmt_currency(amount):
 # ─── Section Generators ───────────────────────────────────────
 
 def generate_cover_page(doc, data):
-    """Section 1: Cover Page - fits on a single page."""
+    """Section 1: Cover Page - fits on a single page, no page header."""
     ci = data.get("client_info", {})
     client_name = ci.get("named_insured", "Client Name")
     dba = ci.get("dba", "")
@@ -349,9 +354,18 @@ def generate_cover_page(doc, data):
     effective_date = ci.get("effective_date", "")
     proposal_date = datetime.date.today().strftime("%B %d, %Y")
     
+    # Ensure cover page section has NO header
+    cover_section = doc.sections[0]
+    cover_header = cover_section.header
+    cover_header.is_linked_to_previous = False
+    # Clear any existing header content
+    for p in cover_header.paragraphs:
+        p.clear()
+    
     # Logo centered
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_before = Pt(40)
     p.paragraph_format.space_after = Pt(6)
     if os.path.exists(LOGO_PATH):
         run = p.add_run()
@@ -364,17 +378,15 @@ def generate_cover_page(doc, data):
     p.paragraph_format.space_after = Pt(0)
     pPr = p._p.get_or_add_pPr()
     pBdr = parse_xml(
-        f'<w:pBdr {nsdecls("w")}>'
+        f'<w:pBdr {nsdecls("w")}>' 
         f'<w:bottom w:val="single" w:sz="36" w:space="1" w:color="{ELECTRIC_BLUE_HEX}"/>'
         f'</w:pBdr>'
     )
     pPr.append(pBdr)
     
-    # Title
-    add_formatted_paragraph(doc, "Commercial Insurance", size=36, color=CLASSIC_BLUE,
-                           bold=True, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_before=20, space_after=0)
-    add_formatted_paragraph(doc, "Proposal", size=36, color=CLASSIC_BLUE,
-                           bold=True, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_before=0, space_after=10)
+    # Title - single line
+    add_formatted_paragraph(doc, "Commercial Insurance Proposal", size=32, color=CLASSIC_BLUE,
+                           bold=True, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_before=16, space_after=10)
     
     # Prepared For box
     box_table = doc.add_table(rows=1, cols=1)
@@ -502,8 +514,13 @@ def generate_cover_page(doc, data):
 
 
 def generate_service_team(doc, data):
-    """Section 2: Service Team"""
-    add_page_break(doc)
+    """Section 2: Service Team - starts a new section with page header."""
+    # Add a new section (not just a page break) so the cover page stays header-free
+    new_section = doc.add_section()
+    new_section.top_margin = Inches(0.7)
+    new_section.bottom_margin = Inches(0.6)
+    new_section.left_margin = Inches(0.75)
+    new_section.right_margin = Inches(0.75)
     add_page_header(doc)
     add_section_header(doc, "Your Service Team")
     
@@ -533,13 +550,17 @@ def generate_premium_summary(doc, data):
     
     coverages = data.get("coverages", {})
     expiring = data.get("expiring_premiums", {})
+    expiring_details = data.get("expiring_details", {})
     
     coverage_names = {
         "property": "Property",
         "general_liability": "General Liability",
         "umbrella": "Umbrella",
         "workers_comp": "Workers Compensation",
-        "commercial_auto": "Commercial Auto"
+        "commercial_auto": "Commercial Auto",
+        "flood": "Flood",
+        "epli": "EPLI",
+        "cyber": "Cyber"
     }
     
     headers = ["Coverage", "Carrier", "Expiring", "Proposed", "$ Change", "% Change"]
@@ -547,40 +568,57 @@ def generate_premium_summary(doc, data):
     total_expiring = 0
     total_proposed = 0
     
-    for key, display_name in coverage_names.items():
+    # Collect all coverage keys that appear in either proposed or expiring
+    all_keys = list(coverage_names.keys())
+    
+    for key in all_keys:
+        display_name = coverage_names[key]
         cov = coverages.get(key)
-        if not cov:
-            continue
-        
-        carrier = cov.get("carrier", "")
-        # Shorten long carrier names for table display
-        carrier_short = carrier
-        if len(carrier) > 30:
-            # Remove common suffixes for brevity
-            carrier_short = carrier.replace("Insurance Company", "Ins Co").replace("Specialty ", "Spec ")
-        admitted = cov.get("carrier_admitted", True)
-        if not admitted:
-            carrier_short = f"{carrier_short} (Non-Adm)"
-        
-        proposed = cov.get("total_premium", 0)
         exp = expiring.get(key, 0)
         
-        dollar_change = proposed - exp if exp else "N/A"
-        if exp and exp > 0:
+        # Skip if neither proposed nor expiring
+        if not cov and not exp:
+            continue
+        
+        if cov:
+            carrier = cov.get("carrier", "")
+            carrier_short = carrier
+            if len(carrier) > 30:
+                carrier_short = carrier.replace("Insurance Company", "Ins Co").replace("Specialty ", "Spec ")
+            admitted = cov.get("carrier_admitted", True)
+            if not admitted:
+                carrier_short = f"{carrier_short} (Non-Adm)"
+            proposed = cov.get("total_premium", 0)
+        else:
+            # Expiring-only row: get carrier from expiring_details if available
+            exp_detail = expiring_details.get(key, {})
+            carrier_short = exp_detail.get("carrier", "—") if exp_detail else "—"
+            proposed = 0
+        
+        if exp and exp > 0 and proposed > 0:
+            dollar_change = proposed - exp
             pct_change = ((proposed - exp) / exp) * 100
             pct_str = f"{pct_change:+.1f}%"
-            dollar_str = f"{'+' if dollar_change >= 0 else ''}{fmt_currency(abs(dollar_change))}"
-            if dollar_change < 0:
+            if dollar_change >= 0:
+                dollar_str = f"+{fmt_currency(dollar_change)}"
+            else:
                 dollar_str = f"-{fmt_currency(abs(dollar_change))}"
-        else:
-            pct_str = "New"
+        elif exp and exp > 0 and proposed == 0:
+            # Expiring only, no proposed
+            dollar_str = "Not Quoted"
+            pct_str = "—"
+        elif proposed > 0 and (not exp or exp == 0):
             dollar_str = "New"
+            pct_str = "New"
+        else:
+            dollar_str = "N/A"
+            pct_str = "N/A"
         
         rows.append([
             display_name,
             carrier_short,
             fmt_currency(exp) if exp else "N/A",
-            fmt_currency(proposed),
+            fmt_currency(proposed) if proposed else "N/A",
             dollar_str,
             pct_str
         ])
@@ -604,7 +642,7 @@ def generate_premium_summary(doc, data):
         "TOTAL",
         "",
         fmt_currency(total_expiring) if total_expiring else "N/A",
-        fmt_currency(total_proposed),
+        fmt_currency(total_proposed) if total_proposed else "N/A",
         total_dollar_str,
         total_pct_str
     ])

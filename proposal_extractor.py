@@ -554,7 +554,8 @@ IMPORTANT:
 - Only include coverage sections that appear in the documents
 - Extract EVERY form number and endorsement exactly as written
 - Include form dates (e.g., "06/07" in "CP 00 10 06/07")
-- Calculate total_premium = premium + taxes_fees for each coverage
+- For total_premium: Use the "Total Cost of Policy" or "Total Policy Premium" figure if shown on the quote. This is the all-in number including base premium + broker fees + surplus lines tax + stamping fee + fire marshal tax + any other taxes/fees. If not shown, calculate total_premium = premium + taxes_fees
+- ALWAYS preserve cents in premium amounts (e.g., $60,513.35 not $60,513)
 - Mark excluded coverages explicitly
 - For Property: ALWAYS include Flood and Earthquake rows even if excluded
 
