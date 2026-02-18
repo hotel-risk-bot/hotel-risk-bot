@@ -118,13 +118,51 @@ def set_cell_border(cell, **kwargs):
     tcPr.append(tcBorders)
 
 
-def add_formatted_paragraph(doc, text, size=20, color=CLASSIC_BLUE, bold=False,
+def remove_cell_borders(cell):
+    """Remove all borders from a cell."""
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    tcBorders = parse_xml(
+        f'<w:tcBorders {nsdecls("w")}>'
+        f'<w:top w:val="none" w:sz="0" w:space="0"/>'
+        f'<w:left w:val="none" w:sz="0" w:space="0"/>'
+        f'<w:bottom w:val="none" w:sz="0" w:space="0"/>'
+        f'<w:right w:val="none" w:sz="0" w:space="0"/>'
+        f'</w:tcBorders>'
+    )
+    tcPr.append(tcBorders)
+
+
+def set_cell_width(cell, inches):
+    """Set cell width in inches using XML."""
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    tcW = parse_xml(f'<w:tcW {nsdecls("w")} w:w="{int(inches * 1440)}" w:type="dxa"/>')
+    existing = tcPr.find(qn('w:tcW'))
+    if existing is not None:
+        tcPr.remove(existing)
+    tcPr.append(tcW)
+
+
+def set_cell_vertical_alignment(cell, align="center"):
+    """Set vertical alignment of cell content."""
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    vAlign = parse_xml(f'<w:vAlign {nsdecls("w")} w:val="{align}"/>')
+    existing = tcPr.find(qn('w:vAlign'))
+    if existing is not None:
+        tcPr.remove(existing)
+    tcPr.append(vAlign)
+
+
+def add_formatted_paragraph(doc, text, size=11, color=CLASSIC_BLUE, bold=False,
                             alignment=WD_ALIGN_PARAGRAPH.LEFT, space_before=0, space_after=0):
     """Add a formatted paragraph to the document."""
     p = doc.add_paragraph()
     p.alignment = alignment
     p.paragraph_format.space_before = Pt(space_before)
     p.paragraph_format.space_after = Pt(space_after)
+    p.paragraph_format.line_spacing = Pt(14)
     run = p.add_run(text)
     run.font.size = Pt(size)
     run.font.color.rgb = color
@@ -134,21 +172,52 @@ def add_formatted_paragraph(doc, text, size=20, color=CLASSIC_BLUE, bold=False,
 
 
 def add_section_header(doc, text):
-    """Add a 32pt Classic Blue bold section header."""
-    return add_formatted_paragraph(doc, text, size=32, color=CLASSIC_BLUE, bold=True,
-                                   space_before=30, space_after=20)
+    """Add a 22pt Classic Blue bold section header."""
+    return add_formatted_paragraph(doc, text, size=22, color=CLASSIC_BLUE, bold=True,
+                                   space_before=6, space_after=12)
 
 
 def add_subsection_header(doc, text):
-    """Add a 24pt Electric Blue bold subsection header."""
-    return add_formatted_paragraph(doc, text, size=24, color=ELECTRIC_BLUE, bold=True,
-                                   space_before=20, space_after=15)
+    """Add a 14pt Electric Blue bold subsection header."""
+    return add_formatted_paragraph(doc, text, size=14, color=ELECTRIC_BLUE, bold=True,
+                                   space_before=12, space_after=8)
 
 
-def create_styled_table(doc, headers, rows, col_widths=None):
-    """Create a table with HUB styling: Electric Blue header, alternating rows."""
+def create_styled_table(doc, headers, rows, col_widths=None, header_size=10, body_size=10,
+                        total_width=7.5):
+    """Create a table with HUB styling: Electric Blue header, alternating rows.
+    
+    Args:
+        doc: Document object
+        headers: List of header strings
+        rows: List of row data lists
+        col_widths: List of column widths in inches. If None, auto-calculated.
+        header_size: Font size for header row (default 10pt)
+        body_size: Font size for body rows (default 10pt)
+        total_width: Total table width in inches (default 7.5)
+    """
     table = doc.add_table(rows=1 + len(rows), cols=len(headers))
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    
+    # Auto-layout off for fixed widths
+    tbl = table._tbl
+    tblPr = tbl.tblPr if tbl.tblPr is not None else parse_xml(f'<w:tblPr {nsdecls("w")}/>')
+    tblLayout = parse_xml(f'<w:tblLayout {nsdecls("w")} w:type="fixed"/>')
+    existing_layout = tblPr.find(qn('w:tblLayout'))
+    if existing_layout is not None:
+        tblPr.remove(existing_layout)
+    tblPr.append(tblLayout)
+    
+    # Set total table width
+    tblW = parse_xml(f'<w:tblW {nsdecls("w")} w:w="{int(total_width * 1440)}" w:type="dxa"/>')
+    existing_tblW = tblPr.find(qn('w:tblW'))
+    if existing_tblW is not None:
+        tblPr.remove(existing_tblW)
+    tblPr.append(tblW)
+    
+    # Calculate column widths if not provided
+    if not col_widths:
+        col_widths = [total_width / len(headers)] * len(headers)
     
     # Style header row
     for i, header in enumerate(headers):
@@ -156,12 +225,17 @@ def create_styled_table(doc, headers, rows, col_widths=None):
         cell.text = ""
         p = cell.paragraphs[0]
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.paragraph_format.space_before = Pt(4)
+        p.paragraph_format.space_after = Pt(4)
+        p.paragraph_format.line_spacing = Pt(header_size + 2)
         run = p.add_run(header)
-        run.font.size = Pt(20)
+        run.font.size = Pt(header_size)
         run.font.color.rgb = WHITE
         run.font.bold = True
         run.font.name = "Calibri"
         set_cell_shading(cell, ELECTRIC_BLUE_HEX)
+        set_cell_width(cell, col_widths[i] if i < len(col_widths) else 1.0)
+        set_cell_vertical_alignment(cell, "center")
     
     # Style data rows
     for row_idx, row_data in enumerate(rows):
@@ -169,20 +243,18 @@ def create_styled_table(doc, headers, rows, col_widths=None):
             cell = table.rows[row_idx + 1].cells[col_idx]
             cell.text = ""
             p = cell.paragraphs[0]
+            p.paragraph_format.space_before = Pt(3)
+            p.paragraph_format.space_after = Pt(3)
+            p.paragraph_format.line_spacing = Pt(body_size + 2)
             run = p.add_run(str(cell_text))
-            run.font.size = Pt(18)
+            run.font.size = Pt(body_size)
             run.font.color.rgb = CLASSIC_BLUE
             run.font.name = "Calibri"
+            set_cell_width(cell, col_widths[col_idx] if col_idx < len(col_widths) else 1.0)
+            set_cell_vertical_alignment(cell, "center")
             # Alternating row colors
             if row_idx % 2 == 1:
                 set_cell_shading(cell, EGGSHELL_HEX)
-    
-    # Set column widths if provided
-    if col_widths:
-        for row in table.rows:
-            for i, width in enumerate(col_widths):
-                if i < len(row.cells):
-                    row.cells[i].width = Inches(width)
     
     return table
 
@@ -203,22 +275,24 @@ def add_page_header(doc):
     if os.path.exists(LOGO_PATH):
         p = logo_cell.paragraphs[0]
         run = p.add_run()
-        run.add_picture(LOGO_PATH, width=Inches(2.2))
+        run.add_picture(LOGO_PATH, width=Inches(1.8))
     
     # Text cell (right)
     text_cell = htable.rows[0].cells[1]
     text_cell.width = Inches(4.5)
     p = text_cell.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p.paragraph_format.space_after = Pt(0)
     run = p.add_run("Franchise Division")
-    run.font.size = Pt(18)
+    run.font.size = Pt(12)
     run.font.color.rgb = ELECTRIC_BLUE
     run.font.bold = True
     run.font.name = "Calibri"
     p2 = text_cell.add_paragraph()
     p2.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p2.paragraph_format.space_before = Pt(0)
     run2 = p2.add_run("Hotel Insurance Programs")
-    run2.font.size = Pt(18)
+    run2.font.size = Pt(12)
     run2.font.color.rgb = ELECTRIC_BLUE
     run2.font.bold = True
     run2.font.name = "Calibri"
@@ -226,29 +300,22 @@ def add_page_header(doc):
     # Remove borders from header table
     for row in htable.rows:
         for cell in row.cells:
-            tc = cell._tc
-            tcPr = tc.get_or_add_tcPr()
-            tcBorders = parse_xml(
-                f'<w:tcBorders {nsdecls("w")}>'
-                f'<w:top w:val="none" w:sz="0" w:space="0"/>'
-                f'<w:left w:val="none" w:sz="0" w:space="0"/>'
-                f'<w:bottom w:val="none" w:sz="0" w:space="0"/>'
-                f'<w:right w:val="none" w:sz="0" w:space="0"/>'
-                f'</w:tcBorders>'
-            )
-            tcPr.append(tcBorders)
+            remove_cell_borders(cell)
 
 
-def add_callout_box(doc, text, size=18):
+def add_callout_box(doc, text, size=10):
     """Add an eggshell background callout/disclaimer box."""
     table = doc.add_table(rows=1, cols=1)
     cell = table.rows[0].cells[0]
     set_cell_shading(cell, EGGSHELL_HEX)
     p = cell.paragraphs[0]
+    p.paragraph_format.space_before = Pt(4)
+    p.paragraph_format.space_after = Pt(4)
     run = p.add_run(text)
     run.font.size = Pt(size)
     run.font.color.rgb = CLASSIC_BLUE
     run.font.name = "Calibri"
+    run.font.italic = True
     return table
 
 
@@ -274,51 +341,50 @@ def fmt_currency(amount):
 # ─── Section Generators ───────────────────────────────────────
 
 def generate_cover_page(doc, data):
-    """Section 1: Cover Page"""
+    """Section 1: Cover Page - fits on a single page."""
     ci = data.get("client_info", {})
     client_name = ci.get("named_insured", "Client Name")
     dba = ci.get("dba", "")
+    address = ci.get("address", "")
     effective_date = ci.get("effective_date", "")
     proposal_date = datetime.date.today().strftime("%B %d, %Y")
     
-    # Center everything
-    # Logo
+    # Logo centered
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_after = Pt(6)
     if os.path.exists(LOGO_PATH):
         run = p.add_run()
-        run.add_picture(LOGO_PATH, width=Inches(3))
+        run.add_picture(LOGO_PATH, width=Inches(2.5))
     
     # Electric Blue line
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.paragraph_format.space_before = Pt(20)
+    p.paragraph_format.space_before = Pt(10)
+    p.paragraph_format.space_after = Pt(0)
     pPr = p._p.get_or_add_pPr()
     pBdr = parse_xml(
         f'<w:pBdr {nsdecls("w")}>'
-        f'<w:bottom w:val="single" w:sz="48" w:space="1" w:color="{ELECTRIC_BLUE_HEX}"/>'
+        f'<w:bottom w:val="single" w:sz="36" w:space="1" w:color="{ELECTRIC_BLUE_HEX}"/>'
         f'</w:pBdr>'
     )
     pPr.append(pBdr)
     
     # Title
-    add_formatted_paragraph(doc, "Commercial Insurance", size=48, color=CLASSIC_BLUE,
-                           bold=True, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_before=30)
-    add_formatted_paragraph(doc, "Proposal", size=48, color=CLASSIC_BLUE,
-                           bold=True, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=30)
+    add_formatted_paragraph(doc, "Commercial Insurance", size=36, color=CLASSIC_BLUE,
+                           bold=True, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_before=20, space_after=0)
+    add_formatted_paragraph(doc, "Proposal", size=36, color=CLASSIC_BLUE,
+                           bold=True, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_before=0, space_after=10)
     
-    # Prepared For box (using a table with eggshell background)
+    # Prepared For box
     box_table = doc.add_table(rows=1, cols=1)
     box_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    # Set fixed width for centering
     for row in box_table.rows:
         for cell in row.cells:
             cell.width = Inches(5.5)
-    # Set table preferred width
     tbl = box_table._tbl
     tblPr = tbl.tblPr if tbl.tblPr is not None else parse_xml(f'<w:tblPr {nsdecls("w")}/>')
-    tblW = parse_xml(f'<w:tblW {nsdecls("w")} w:w="7920" w:type="dxa"/>')  # 5.5 inches = 7920 twips
-    # Remove existing tblW if any
+    tblW = parse_xml(f'<w:tblW {nsdecls("w")} w:w="7920" w:type="dxa"/>')
     existing_tblW = tblPr.find(qn('w:tblW'))
     if existing_tblW is not None:
         tblPr.remove(existing_tblW)
@@ -326,120 +392,113 @@ def generate_cover_page(doc, data):
     cell = box_table.rows[0].cells[0]
     set_cell_shading(cell, EGGSHELL_HEX)
     
-    # Top blue border
+    # Top and bottom blue borders
     tc = cell._tc
     tcPr = tc.get_or_add_tcPr()
     tcBorders = parse_xml(
         f'<w:tcBorders {nsdecls("w")}>'
-        f'<w:top w:val="single" w:sz="32" w:space="0" w:color="{ELECTRIC_BLUE_HEX}"/>'
-        f'<w:bottom w:val="single" w:sz="32" w:space="0" w:color="{ELECTRIC_BLUE_HEX}"/>'
+        f'<w:top w:val="single" w:sz="24" w:space="0" w:color="{ELECTRIC_BLUE_HEX}"/>'
+        f'<w:bottom w:val="single" w:sz="24" w:space="0" w:color="{ELECTRIC_BLUE_HEX}"/>'
         f'<w:left w:val="none" w:sz="0" w:space="0"/>'
         f'<w:right w:val="none" w:sz="0" w:space="0"/>'
         f'</w:tcBorders>'
     )
     tcPr.append(tcBorders)
     
-    # "Prepared For" text
+    # "Prepared For" label
     p = cell.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.paragraph_format.space_before = Pt(15)
+    p.paragraph_format.space_before = Pt(8)
+    p.paragraph_format.space_after = Pt(2)
     run = p.add_run("Prepared For")
-    run.font.size = Pt(20)
+    run.font.size = Pt(14)
     run.font.color.rgb = CHARCOAL
     run.font.name = "Calibri"
     
     # Client name
     p2 = cell.add_paragraph()
     p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p2.paragraph_format.space_before = Pt(10)
+    p2.paragraph_format.space_before = Pt(4)
+    p2.paragraph_format.space_after = Pt(2)
     run2 = p2.add_run(client_name)
-    run2.font.size = Pt(44)
+    run2.font.size = Pt(28)
     run2.font.color.rgb = ELECTRIC_BLUE
     run2.font.bold = True
     run2.font.name = "Calibri"
+    
+    # Address if present
+    if address:
+        p_addr = cell.add_paragraph()
+        p_addr.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p_addr.paragraph_format.space_before = Pt(2)
+        p_addr.paragraph_format.space_after = Pt(8)
+        run_addr = p_addr.add_run(address)
+        run_addr.font.size = Pt(11)
+        run_addr.font.color.rgb = CLASSIC_BLUE
+        run_addr.font.name = "Calibri"
     
     # DBA if present
     if dba:
         p3 = cell.add_paragraph()
         p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p3.paragraph_format.space_after = Pt(8)
         run3 = p3.add_run(f"DBA: {dba}")
-        run3.font.size = Pt(26)
+        run3.font.size = Pt(14)
         run3.font.color.rgb = CLASSIC_BLUE
         run3.font.name = "Calibri"
-        p3.paragraph_format.space_after = Pt(15)
-    else:
-        p2.paragraph_format.space_after = Pt(15)
     
     # Dates - two column table
-    date_table = doc.add_table(rows=1, cols=2)
+    date_table = doc.add_table(rows=2, cols=2)
     date_table.alignment = WD_TABLE_ALIGNMENT.CENTER
     
-    # Proposal Date
-    dc1 = date_table.rows[0].cells[0]
-    p = dc1.paragraphs[0]
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run("Proposal Date")
-    run.font.size = Pt(16)
-    run.font.color.rgb = CLASSIC_BLUE
-    run.font.bold = True
-    run.font.name = "Calibri"
-    p2 = dc1.add_paragraph()
-    p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run2 = p2.add_run(proposal_date)
-    run2.font.size = Pt(16)
-    run2.font.color.rgb = CLASSIC_BLUE
-    run2.font.name = "Calibri"
+    # Labels row
+    for i, label in enumerate(["Proposal Date", "Effective Date"]):
+        dc = date_table.rows[0].cells[i]
+        p = dc.paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.paragraph_format.space_before = Pt(6)
+        p.paragraph_format.space_after = Pt(0)
+        run = p.add_run(label)
+        run.font.size = Pt(10)
+        run.font.color.rgb = ARCTIC_GRAY
+        run.font.bold = True
+        run.font.name = "Calibri"
+        remove_cell_borders(dc)
     
-    # Effective Date
-    dc2 = date_table.rows[0].cells[1]
-    p = dc2.paragraphs[0]
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run("Effective Date")
-    run.font.size = Pt(16)
-    run.font.color.rgb = CLASSIC_BLUE
-    run.font.bold = True
-    run.font.name = "Calibri"
-    p2 = dc2.add_paragraph()
-    p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run2 = p2.add_run(effective_date)
-    run2.font.size = Pt(16)
-    run2.font.color.rgb = CLASSIC_BLUE
-    run2.font.name = "Calibri"
-    
-    # Remove borders from date table
-    for row in date_table.rows:
-        for cell in row.cells:
-            tc = cell._tc
-            tcPr = tc.get_or_add_tcPr()
-            tcBorders = parse_xml(
-                f'<w:tcBorders {nsdecls("w")}>'
-                f'<w:top w:val="none" w:sz="0" w:space="0"/>'
-                f'<w:left w:val="none" w:sz="0" w:space="0"/>'
-                f'<w:bottom w:val="none" w:sz="0" w:space="0"/>'
-                f'<w:right w:val="none" w:sz="0" w:space="0"/>'
-                f'</w:tcBorders>'
-            )
-            tcPr.append(tcBorders)
+    # Values row
+    for i, val in enumerate([proposal_date, effective_date]):
+        dc = date_table.rows[1].cells[i]
+        p = dc.paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(4)
+        run = p.add_run(val)
+        run.font.size = Pt(12)
+        run.font.color.rgb = CLASSIC_BLUE
+        run.font.bold = True
+        run.font.name = "Calibri"
+        remove_cell_borders(dc)
     
     # Gray line
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.paragraph_format.space_before = Pt(20)
+    p.paragraph_format.space_before = Pt(15)
+    p.paragraph_format.space_after = Pt(0)
     pPr = p._p.get_or_add_pPr()
     pBdr = parse_xml(
         f'<w:pBdr {nsdecls("w")}>'
-        f'<w:bottom w:val="single" w:sz="16" w:space="1" w:color="{ARCTIC_GRAY_HEX}"/>'
+        f'<w:bottom w:val="single" w:sz="12" w:space="1" w:color="{ARCTIC_GRAY_HEX}"/>'
         f'</w:pBdr>'
     )
     pPr.append(pBdr)
     
     # Presented By
-    add_formatted_paragraph(doc, "Presented By", size=18, color=CLASSIC_BLUE,
-                           alignment=WD_ALIGN_PARAGRAPH.CENTER, space_before=15)
-    add_formatted_paragraph(doc, "HUB International Midwest Limited", size=18, color=CLASSIC_BLUE,
-                           bold=True, alignment=WD_ALIGN_PARAGRAPH.CENTER)
-    add_formatted_paragraph(doc, "Franchise Division | Hotel Insurance Programs", size=16,
-                           color=ELECTRIC_BLUE, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=20)
+    add_formatted_paragraph(doc, "Presented By", size=12, color=CLASSIC_BLUE,
+                           alignment=WD_ALIGN_PARAGRAPH.CENTER, space_before=10, space_after=2)
+    add_formatted_paragraph(doc, "HUB International Midwest Limited", size=13, color=CLASSIC_BLUE,
+                           bold=True, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_before=0, space_after=2)
+    add_formatted_paragraph(doc, "Franchise Division | Hotel Insurance Programs", size=11,
+                           color=ELECTRIC_BLUE, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=10)
 
 
 def generate_service_team(doc, data):
@@ -453,18 +512,24 @@ def generate_service_team(doc, data):
     for member in SERVICE_TEAM:
         rows.append([member["role"], member["name"], member["phone"], member["email"]])
     
-    create_styled_table(doc, headers, rows, col_widths=[2.0, 2.0, 1.8, 2.7])
+    create_styled_table(doc, headers, rows, col_widths=[1.8, 1.6, 1.4, 2.7],
+                       header_size=11, body_size=10)
     
     # Office locations
-    add_formatted_paragraph(doc, "", space_before=15)
+    add_formatted_paragraph(doc, "", space_before=12)
     for loc in OFFICE_LOCATIONS:
-        add_formatted_paragraph(doc, loc, size=16, color=CLASSIC_BLUE)
+        add_formatted_paragraph(doc, loc, size=10, color=CLASSIC_BLUE, space_after=2)
 
 
 def generate_premium_summary(doc, data):
     """Section 3: Premium Summary - Expiring vs Proposed"""
     add_page_break(doc)
     add_section_header(doc, "Premium Summary")
+    
+    add_subsection_header(doc, "Coverage Premium Comparison")
+    add_formatted_paragraph(doc,
+        "Premiums shown include applicable taxes and fees. TRIA/Terrorism premiums are not included.",
+        size=9, color=CHARCOAL, space_after=6)
     
     coverages = data.get("coverages", {})
     expiring = data.get("expiring_premiums", {})
@@ -477,7 +542,7 @@ def generate_premium_summary(doc, data):
         "commercial_auto": "Commercial Auto"
     }
     
-    headers = ["Coverage", "Carrier", "Expiring Premium", "Proposed Premium", "$ Change", "% Change"]
+    headers = ["Coverage", "Carrier", "Expiring", "Proposed", "$ Change", "% Change"]
     rows = []
     total_expiring = 0
     total_proposed = 0
@@ -488,10 +553,14 @@ def generate_premium_summary(doc, data):
             continue
         
         carrier = cov.get("carrier", "")
+        # Shorten long carrier names for table display
+        carrier_short = carrier
+        if len(carrier) > 30:
+            # Remove common suffixes for brevity
+            carrier_short = carrier.replace("Insurance Company", "Ins Co").replace("Specialty ", "Spec ")
         admitted = cov.get("carrier_admitted", True)
-        carrier_display = carrier
         if not admitted:
-            carrier_display = f"{carrier}\n(Non-Admitted)"
+            carrier_short = f"{carrier_short} (Non-Adm)"
         
         proposed = cov.get("total_premium", 0)
         exp = expiring.get(key, 0)
@@ -509,7 +578,7 @@ def generate_premium_summary(doc, data):
         
         rows.append([
             display_name,
-            carrier_display,
+            carrier_short,
             fmt_currency(exp) if exp else "N/A",
             fmt_currency(proposed),
             dollar_str,
@@ -540,21 +609,30 @@ def generate_premium_summary(doc, data):
         total_pct_str
     ])
     
-    table = create_styled_table(doc, headers, rows, col_widths=[1.5, 1.5, 1.2, 1.2, 1.0, 0.8])
+    table = create_styled_table(doc, headers, rows,
+                               col_widths=[1.2, 2.0, 1.0, 1.0, 1.0, 0.8],
+                               header_size=10, body_size=10)
     
-    # Bold the total row
+    # Bold and shade the total row
     last_row = table.rows[-1]
     for cell in last_row.cells:
+        set_cell_shading(cell, ELECTRIC_BLUE_HEX)
         for p in cell.paragraphs:
             for run in p.runs:
                 run.font.bold = True
+                run.font.color.rgb = WHITE
     
     # Savings/increase callout
     if total_expiring > 0 and total_dollar != 0:
         direction = "savings" if total_dollar < 0 else "increase"
-        add_formatted_paragraph(doc, "", space_before=10)
+        add_formatted_paragraph(doc, "", space_before=8)
         callout_text = f"Total premium {direction}: {fmt_currency(abs(total_dollar))} ({abs(total_pct):.1f}%)"
         add_callout_box(doc, callout_text)
+    
+    add_formatted_paragraph(doc, "", space_before=6)
+    add_callout_box(doc,
+        "This comparison is for reference only. Actual coverage terms, conditions, and exclusions "
+        "are governed by the policies as issued. Please review all policies carefully upon receipt.")
 
 
 def generate_payment_options(doc, data):
@@ -566,17 +644,19 @@ def generate_payment_options(doc, data):
     if payment_opts:
         headers = ["Carrier", "Payment Terms", "Minimum Earned Premium"]
         rows = [[po.get("carrier", ""), po.get("terms", ""), po.get("mep", "")] for po in payment_opts]
-        create_styled_table(doc, headers, rows)
+        create_styled_table(doc, headers, rows, col_widths=[2.2, 3.3, 2.0],
+                           header_size=10, body_size=10)
     else:
-        add_formatted_paragraph(doc, "Payment terms to be confirmed upon binding.")
+        add_formatted_paragraph(doc, "Payment terms to be confirmed upon binding.", size=11)
 
 
 def generate_subjectivities(doc, data):
-    """Section 5: Subjectivities"""
+    """Section 5: Binding Subjectivities"""
     add_page_break(doc)
-    add_section_header(doc, "Subjectivities")
+    add_section_header(doc, "Binding Subjectivities")
     
-    add_formatted_paragraph(doc, "The following items are required prior to or as a condition of binding:", size=20)
+    add_formatted_paragraph(doc, "The following items are required prior to or as a condition of binding:",
+                           size=11, space_after=8)
     
     coverages = data.get("coverages", {})
     coverage_names = {
@@ -592,12 +672,15 @@ def generate_subjectivities(doc, data):
         cov = coverages.get(key)
         if cov and cov.get("subjectivities"):
             has_subjectivities = True
-            add_subsection_header(doc, display_name)
+            # Add carrier info with the coverage name
+            carrier = cov.get("carrier", "")
+            header_text = f"{display_name} — {carrier}" if carrier else display_name
+            add_subsection_header(doc, header_text)
             for subj in cov["subjectivities"]:
-                add_formatted_paragraph(doc, f"☐  {subj}", size=18)
+                add_formatted_paragraph(doc, f"☐  {subj}", size=10, space_after=3)
     
     if not has_subjectivities:
-        add_formatted_paragraph(doc, "No subjectivities noted. Please confirm with carrier.", size=18)
+        add_formatted_paragraph(doc, "No subjectivities noted. Please confirm with carrier.", size=11)
 
 
 def generate_named_insureds(doc, data):
@@ -607,13 +690,18 @@ def generate_named_insureds(doc, data):
     
     named = data.get("named_insureds", [])
     if named:
-        for i, ni in enumerate(named, 1):
-            add_formatted_paragraph(doc, f"{i}. {ni}", size=18)
+        headers = ["#", "Named Insured"]
+        rows = [[str(i), ni] for i, ni in enumerate(named, 1)]
+        create_styled_table(doc, headers, rows, col_widths=[0.5, 7.0],
+                           header_size=10, body_size=10)
     else:
-        add_formatted_paragraph(doc, "1. " + data.get("client_info", {}).get("named_insured", "TBD"), size=18)
+        headers = ["#", "Named Insured"]
+        rows = [["1", data.get("client_info", {}).get("named_insured", "TBD")]]
+        create_styled_table(doc, headers, rows, col_widths=[0.5, 7.0],
+                           header_size=10, body_size=10)
     
     # Note box
-    add_formatted_paragraph(doc, "", space_before=10)
+    add_formatted_paragraph(doc, "", space_before=8)
     add_callout_box(doc, "Note: Additional named insureds may be added as required by franchise agreements or management contracts.")
     
     # Additional Interests
@@ -622,7 +710,7 @@ def generate_named_insureds(doc, data):
         add_subsection_header(doc, "Additional Interests")
         headers = ["Type", "Name & Address", "Description"]
         rows = [[ai.get("type", ""), ai.get("name_address", ""), ai.get("description", "")] for ai in interests]
-        create_styled_table(doc, headers, rows)
+        create_styled_table(doc, headers, rows, col_widths=[1.5, 3.5, 2.5])
 
 
 def generate_information_summary(doc, data):
@@ -645,9 +733,10 @@ def generate_information_summary(doc, data):
     if ci.get("dba"):
         rows.insert(1, ["DBA", ci["dba"]])
     
-    create_styled_table(doc, headers, rows, col_widths=[2.5, 5.0])
+    create_styled_table(doc, headers, rows, col_widths=[2.5, 5.0],
+                       header_size=10, body_size=10)
     
-    add_formatted_paragraph(doc, "", space_before=10)
+    add_formatted_paragraph(doc, "", space_before=8)
     add_callout_box(doc, "The information contained in this proposal is based on data provided by the insured and/or their representatives. HUB International makes no warranty as to the accuracy of this information.")
 
 
@@ -660,7 +749,7 @@ def generate_locations(doc, data):
     if locations:
         has_entity = any(loc.get("corporate_entity") for loc in locations)
         if has_entity:
-            headers = ["#", "Corporate Entity", "Address", "City", "State", "ZIP", "Description"]
+            headers = ["#", "Corporate Entity", "Address", "City", "ST", "ZIP", "Description"]
             rows = [[
                 loc.get("number", ""),
                 loc.get("corporate_entity", ""),
@@ -670,8 +759,11 @@ def generate_locations(doc, data):
                 loc.get("zip", ""),
                 loc.get("description", "")
             ] for loc in locations]
+            create_styled_table(doc, headers, rows,
+                              col_widths=[0.3, 1.5, 1.8, 1.0, 0.4, 0.6, 1.4],
+                              header_size=9, body_size=9)
         else:
-            headers = ["#", "Address", "City", "State", "ZIP", "Description"]
+            headers = ["#", "Address", "City", "ST", "ZIP", "Description"]
             rows = [[
                 loc.get("number", ""),
                 loc.get("address", ""),
@@ -680,9 +772,11 @@ def generate_locations(doc, data):
                 loc.get("zip", ""),
                 loc.get("description", "")
             ] for loc in locations]
-        create_styled_table(doc, headers, rows)
+            create_styled_table(doc, headers, rows,
+                              col_widths=[0.3, 2.5, 1.2, 0.5, 0.7, 2.3],
+                              header_size=9, body_size=9)
     else:
-        add_formatted_paragraph(doc, "Location schedule to be confirmed.", size=18)
+        add_formatted_paragraph(doc, "Location schedule to be confirmed.", size=11)
 
 
 def generate_coverage_section(doc, data, coverage_key, display_name):
@@ -695,21 +789,49 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     add_page_break(doc)
     add_section_header(doc, display_name)
     
-    # Carrier Information
+    # Coverage Summary table
     carrier = cov.get("carrier", "N/A")
     admitted = "Admitted" if cov.get("carrier_admitted", True) else "Non-Admitted"
     am_best = cov.get("am_best_rating", "N/A")
+    
+    add_subsection_header(doc, "Coverage Summary")
     
     carrier_rows = [
         ["Carrier", carrier],
         ["Admitted Status", admitted],
         ["AM Best Rating", am_best],
     ]
-    # Add premium for non-property coverages
-    if coverage_key != "property":
-        carrier_rows.append(["Total Premium", fmt_currency(cov.get("total_premium", 0))])
     
-    create_styled_table(doc, ["Item", "Details"], carrier_rows, col_widths=[2.5, 5.0])
+    # Add wholesaler if present
+    if cov.get("wholesaler"):
+        carrier_rows.append(["Wholesaler", cov["wholesaler"]])
+    
+    # Add policy form if present
+    if cov.get("policy_form"):
+        carrier_rows.append(["Policy Form", cov["policy_form"]])
+    
+    # Add policy period if present
+    if cov.get("policy_period"):
+        carrier_rows.append(["Policy Period", cov["policy_period"]])
+    
+    create_styled_table(doc, ["Item", "Details"], carrier_rows, col_widths=[2.5, 5.0],
+                       header_size=10, body_size=10)
+    
+    # Schedule of Values (Property)
+    sov = cov.get("schedule_of_values", [])
+    if sov:
+        add_subsection_header(doc, "Schedule of Values")
+        headers = ["Location", "Building", "Contents", "BI/Rents", "TIV"]
+        rows = [[
+            s.get("location", ""),
+            fmt_currency(s.get("building", 0)),
+            fmt_currency(s.get("contents", 0)),
+            fmt_currency(s.get("business_income", 0)),
+            fmt_currency(s.get("tiv", 0))
+        ] for s in sov]
+        create_styled_table(doc, headers, rows,
+                          col_widths=[2.0, 1.4, 1.2, 1.2, 1.2],
+                          header_size=9, body_size=9)
     
     # Limits
     limits = cov.get("limits", [])
@@ -717,15 +839,17 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         add_subsection_header(doc, "Coverage Limits")
         headers = ["Description", "Limit"]
         rows = [[lim.get("description", ""), lim.get("limit", "")] for lim in limits]
-        create_styled_table(doc, headers, rows, col_widths=[4.0, 3.5])
+        create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
+                           header_size=10, body_size=10)
     
     # Deductibles (Property)
     deductibles = cov.get("deductibles", [])
     if deductibles:
         add_subsection_header(doc, "Deductibles")
-        headers = ["Description", "Amount"]
+        headers = ["Peril", "Deductible"]
         rows = [[ded.get("description", ""), ded.get("amount", "")] for ded in deductibles]
-        create_styled_table(doc, headers, rows, col_widths=[4.0, 3.5])
+        create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
+                           header_size=10, body_size=10)
     
     # Schedule of Hazards (GL)
     hazards = cov.get("schedule_of_hazards", [])
@@ -739,7 +863,9 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
             h.get("basis", ""),
             h.get("exposure", "")
         ] for h in hazards]
-        create_styled_table(doc, headers, rows)
+        create_styled_table(doc, headers, rows,
+                          col_widths=[1.5, 2.5, 0.8, 1.0, 1.2],
+                          header_size=9, body_size=9)
     
     # Rating Basis (WC)
     rating = cov.get("rating_basis", [])
@@ -754,7 +880,9 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
             r.get("payroll", ""),
             r.get("rate", "")
         ] for r in rating]
-        create_styled_table(doc, headers, rows)
+        create_styled_table(doc, headers, rows,
+                          col_widths=[0.6, 1.5, 0.8, 2.0, 1.2, 0.9],
+                          header_size=9, body_size=9)
     
     # Vehicle Schedule (Auto)
     vehicles = cov.get("vehicle_schedule", [])
@@ -763,7 +891,9 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         headers = ["Year", "Make", "Model", "VIN", "Garage Location"]
         rows = [[v.get("year", ""), v.get("make", ""), v.get("model", ""),
                  v.get("vin", ""), v.get("garage_location", "")] for v in vehicles]
-        create_styled_table(doc, headers, rows)
+        create_styled_table(doc, headers, rows,
+                          col_widths=[0.6, 1.2, 1.2, 2.5, 2.0],
+                          header_size=9, body_size=9)
     
     # Additional Coverages
     addl = cov.get("additional_coverages", [])
@@ -773,10 +903,11 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         if has_ded:
             headers = ["Description", "Limit", "Deductible"]
             rows = [[ac.get("description", ""), ac.get("limit", ""), ac.get("deductible", "")] for ac in addl]
+            create_styled_table(doc, headers, rows, col_widths=[3.5, 2.0, 2.0])
         else:
             headers = ["Description", "Limit"]
             rows = [[ac.get("description", ""), ac.get("limit", "")] for ac in addl]
-        create_styled_table(doc, headers, rows)
+            create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0])
     
     # Underlying Insurance (Umbrella)
     underlying = cov.get("underlying_insurance", [])
@@ -784,13 +915,13 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         add_subsection_header(doc, "Underlying Insurance")
         headers = ["Carrier", "Coverage", "Limits"]
         rows = [[u.get("carrier", ""), u.get("coverage", ""), u.get("limits", "")] for u in underlying]
-        create_styled_table(doc, headers, rows)
+        create_styled_table(doc, headers, rows, col_widths=[2.5, 2.5, 2.5])
     
     # Tower Structure (Umbrella)
     tower = cov.get("tower_structure", [])
     if tower:
         add_subsection_header(doc, "Umbrella Tower Structure")
-        headers = ["Layer", "Carrier", "Limits", "Premium", "Total Cost (incl. taxes/fees)"]
+        headers = ["Layer", "Carrier", "Limits", "Premium", "Total (incl. taxes/fees)"]
         rows = [[
             t.get("layer", ""),
             t.get("carrier", ""),
@@ -798,7 +929,9 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
             fmt_currency(t.get("premium", 0)),
             fmt_currency(t.get("total_cost", 0))
         ] for t in tower]
-        create_styled_table(doc, headers, rows)
+        create_styled_table(doc, headers, rows,
+                          col_widths=[0.8, 2.0, 1.5, 1.2, 1.5],
+                          header_size=9, body_size=9)
     
     # Forms & Endorsements
     forms = cov.get("forms_endorsements", [])
@@ -806,7 +939,8 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         add_subsection_header(doc, "Forms & Endorsements")
         headers = ["Form Number", "Description"]
         rows = [[f.get("form_number", ""), f.get("description", "")] for f in forms]
-        create_styled_table(doc, headers, rows, col_widths=[2.5, 5.0])
+        create_styled_table(doc, headers, rows, col_widths=[2.0, 5.5],
+                           header_size=9, body_size=9)
 
 
 def generate_confirmation_to_bind(doc, data):
@@ -818,7 +952,7 @@ def generate_confirmation_to_bind(doc, data):
         "By signing below, the undersigned authorized representative of the Applicant confirms "
         "the following statements and authorizes HUB International to bind the coverages as outlined "
         "in this proposal, subject to the terms and conditions of the respective policies.",
-        size=18, space_after=15)
+        size=11, space_after=10)
     
     # Application Statements
     add_subsection_header(doc, "Application Statements")
@@ -835,10 +969,10 @@ def generate_confirmation_to_bind(doc, data):
     ]
     
     for i, stmt in enumerate(statements, 1):
-        add_formatted_paragraph(doc, f"{i}. {stmt}", size=18, space_after=8)
+        add_formatted_paragraph(doc, f"{i}. {stmt}", size=10, space_after=4)
     
     # Signature block
-    add_formatted_paragraph(doc, "", space_before=30)
+    add_formatted_paragraph(doc, "", space_before=20)
     sig_table = doc.add_table(rows=5, cols=2)
     sig_table.alignment = WD_TABLE_ALIGNMENT.LEFT
     
@@ -852,16 +986,21 @@ def generate_confirmation_to_bind(doc, data):
     
     for i, (label, val) in enumerate(sig_fields):
         cell_label = sig_table.rows[i].cells[0]
+        cell_label.width = Inches(2.0)
         p = cell_label.paragraphs[0]
+        p.paragraph_format.space_before = Pt(8)
+        p.paragraph_format.space_after = Pt(8)
         run = p.add_run(label)
-        run.font.size = Pt(18)
+        run.font.size = Pt(11)
         run.font.color.rgb = CLASSIC_BLUE
         run.font.bold = True
         run.font.name = "Calibri"
         
         cell_val = sig_table.rows[i].cells[1]
+        cell_val.width = Inches(5.0)
         p = cell_val.paragraphs[0]
-        # Add underline for signature line
+        p.paragraph_format.space_before = Pt(8)
+        p.paragraph_format.space_after = Pt(8)
         pPr = p._p.get_or_add_pPr()
         pBdr = parse_xml(
             f'<w:pBdr {nsdecls("w")}>'
@@ -881,27 +1020,33 @@ def generate_electronic_consent(doc):
         "certificates of insurance, notices of cancellation, renewal notices, and other "
         "insurance-related documents electronically from HUB International and/or the "
         "insurance carriers providing coverage.",
-        size=18, space_after=15)
+        size=11, space_after=10)
     
     add_formatted_paragraph(doc,
         "I understand that I may withdraw this consent at any time by providing written "
         "notice to my HUB International representative, and that I may request paper "
         "copies of any documents at no additional charge.",
-        size=18, space_after=20)
+        size=11, space_after=15)
     
     # Signature line
     sig_table = doc.add_table(rows=3, cols=2)
     for i, label in enumerate(["Authorized Signature:", "Printed Name:", "Date:"]):
         cell = sig_table.rows[i].cells[0]
+        cell.width = Inches(2.0)
         p = cell.paragraphs[0]
+        p.paragraph_format.space_before = Pt(8)
+        p.paragraph_format.space_after = Pt(8)
         run = p.add_run(label)
-        run.font.size = Pt(18)
+        run.font.size = Pt(11)
         run.font.color.rgb = CLASSIC_BLUE
         run.font.bold = True
         run.font.name = "Calibri"
         
         cell_val = sig_table.rows[i].cells[1]
+        cell_val.width = Inches(5.0)
         p = cell_val.paragraphs[0]
+        p.paragraph_format.space_before = Pt(8)
+        p.paragraph_format.space_after = Pt(8)
         pPr = p._p.get_or_add_pPr()
         pBdr = parse_xml(
             f'<w:pBdr {nsdecls("w")}>'
@@ -914,13 +1059,13 @@ def generate_electronic_consent(doc):
 def generate_carrier_rating(doc, data):
     """Section 16: Carrier Rating"""
     add_page_break(doc)
-    add_section_header(doc, "Carrier Rating")
+    add_section_header(doc, "Carrier Ratings Summary")
     
     add_formatted_paragraph(doc,
         "AM Best is a full-service credit rating organization dedicated to serving the insurance "
         "industry. AM Best ratings provide an independent third-party evaluation of an insurer's "
         "financial strength and ability to meet its ongoing insurance policy and contract obligations.",
-        size=18, space_after=15)
+        size=11, space_after=10)
     
     # Build carrier rating table from all coverages
     coverages = data.get("coverages", {})
@@ -951,7 +1096,9 @@ def generate_carrier_rating(doc, data):
         rows = []
         for carrier, info in carriers_seen.items():
             rows.append([carrier, info["rating"], info["admitted"], ", ".join(info["coverages"])])
-        create_styled_table(doc, headers, rows)
+        create_styled_table(doc, headers, rows,
+                          col_widths=[2.5, 1.2, 1.3, 2.5],
+                          header_size=10, body_size=10)
 
 
 def generate_general_statement(doc):
@@ -969,7 +1116,7 @@ def generate_general_statement(doc):
     
     for title, text in sections:
         add_subsection_header(doc, title)
-        add_formatted_paragraph(doc, text, size=18, space_after=10)
+        add_formatted_paragraph(doc, text, size=10, space_after=6)
 
 
 def generate_property_definitions(doc):
@@ -989,25 +1136,23 @@ def generate_property_definitions(doc):
         ("Flood", "Coverage for direct physical loss or damage caused by flood, as defined in the policy. Flood coverage may be subject to separate limits, deductibles, and waiting periods."),
         ("Earthquake", "Coverage for direct physical loss or damage caused by earthquake or earth movement. Subject to separate limits and deductibles."),
         ("Named Storm", "A storm system that has been designated a tropical storm or hurricane by the National Weather Service. Named storm deductibles typically apply as a percentage of insured values."),
-        ("Dampness or dryness of the atmosphere and changes in the temperature", "These perils are typically excluded under standard property policies unless specifically endorsed."),
-        ("Artificially generated electrical currents", "Damage caused by artificially generated electrical current, including power surges, is typically excluded unless caused by lightning."),
-        ("Explosion of steam boilers", "Damage from steam boiler explosions is typically covered under equipment breakdown coverage rather than standard property coverage."),
         ("Mold", "Mold damage is typically excluded or subject to limited coverage under standard property policies."),
         ("Terrorism", "Coverage for acts of terrorism as defined by the Terrorism Risk Insurance Act (TRIA). See TRIA Disclosure section for details."),
     ]
     
     for term, definition in definitions:
         p = doc.add_paragraph()
+        p.paragraph_format.space_after = Pt(4)
+        p.paragraph_format.line_spacing = Pt(13)
         run_term = p.add_run(f"{term}: ")
-        run_term.font.size = Pt(18)
+        run_term.font.size = Pt(10)
         run_term.font.color.rgb = ELECTRIC_BLUE
         run_term.font.bold = True
         run_term.font.name = "Calibri"
         run_def = p.add_run(definition)
-        run_def.font.size = Pt(18)
+        run_def.font.size = Pt(10)
         run_def.font.color.rgb = CLASSIC_BLUE
         run_def.font.name = "Calibri"
-        p.paragraph_format.space_after = Pt(8)
 
 
 def generate_how_we_get_paid(doc):
@@ -1021,7 +1166,7 @@ def generate_how_we_get_paid(doc):
         "of ways, primarily in the form of commissions and contingency amounts paid by insurance "
         "companies and, in some cases, fees paid by clients or third parties. The means by which we "
         "are compensated are described below.",
-        size=18, space_after=15)
+        size=10, space_after=10)
     
     add_subsection_header(doc, "Commission income")
     add_formatted_paragraph(doc,
@@ -1030,7 +1175,7 @@ def generate_how_we_get_paid(doc):
         "Our commission is included in the premium paid by you. The individuals at HUB International "
         "who place and service your insurance may be paid compensation that varies directly with the "
         "commissions we receive.",
-        size=18, space_after=10)
+        size=10, space_after=6)
     
     add_subsection_header(doc, "Contingency income")
     add_formatted_paragraph(doc,
@@ -1046,18 +1191,18 @@ def generate_how_we_get_paid(doc):
         "profitability of all of a group of accounts, as opposed to the placement or profitability of any "
         "particular insurance policy. For this reason, the individuals involved in placing or servicing "
         "insurance are rarely, if ever, compensated directly for the contingent income that we receive.",
-        size=18, space_after=10)
+        size=10, space_after=6)
     
     add_formatted_paragraph(doc,
         "Please also feel free to ask any questions about our compensation generally, or as to your "
         "specific insurance proposal or placement, by contacting your HUB broker or customer service "
         "representative directly, or by calling our client hotline at 1-866-857-4073.",
-        size=18, space_after=15)
+        size=10, space_after=10)
     
     add_subsection_header(doc, "Privacy Policy")
     add_formatted_paragraph(doc,
         "To view our privacy policy, please visit: www.hubinternational.com/about-us/privacy-policy/",
-        size=18)
+        size=10)
 
 
 def generate_hub_advantage(doc):
@@ -1070,33 +1215,33 @@ def generate_hub_advantage(doc):
         "conduct and integrity in all of our dealings with you, our client. We want to be your trusted "
         "risk advisor, and as such, we need to earn your confidence. So we are making a promise. We call "
         "it The HUB Advantage. Our mission is to make the advantage yours — and this is our commitment.",
-        size=18, space_after=15)
+        size=10, space_after=10)
     
     commitments = [
         "We strive to secure the most favorable terms from insurers, taking into account all of the circumstances — the risk you need to insure, the cost of insurance, the financial condition of the insurer, the insurer's reputation for service, and any other factors that are specific to your situation.",
         "We are open and honest as to how we are paid for placing your insurance. Our answers to your questions will be forthright and understandable. When we intend to seek a fixed fee for our efforts, we will disclose it to you in writing and obtain your approval prior to coverage being bound.",
-        "You make the ultimate decision as to both the terms of insurance and the company providing your coverage. Our objective is to provide you with choices that meet your insurance needs, and to educate you so your decision is fully informed and best suited to your circumstances.",
         "We comply with the laws of every jurisdiction in which we operate, including those that apply to how insurance brokerages and agencies are paid. If the laws change, we will respond in a timely and appropriate manner.",
     ]
     
     for commitment in commitments:
         p = doc.add_paragraph()
+        p.paragraph_format.space_after = Pt(6)
+        p.paragraph_format.line_spacing = Pt(13)
         run = p.add_run(f"• {commitment}")
-        run.font.size = Pt(18)
+        run.font.size = Pt(10)
         run.font.color.rgb = CLASSIC_BLUE
         run.font.name = "Calibri"
-        p.paragraph_format.space_after = Pt(10)
     
     add_formatted_paragraph(doc,
         "We take our responsibility to our customers very seriously. If at any time you feel that we are "
         "not fulfilling your expectations — that we are not meeting our Client Commitment — please contact "
         "your account executive or call our toll free client hotline at 1-866-857-4073, and your concerns "
         "will be addressed as soon as possible.",
-        size=18, space_before=15, space_after=15)
+        size=10, space_before=10, space_after=10)
     
-    add_formatted_paragraph(doc, "The HUB Advantage", size=20, color=ELECTRIC_BLUE, bold=True,
+    add_formatted_paragraph(doc, "The HUB Advantage", size=14, color=ELECTRIC_BLUE, bold=True,
                            alignment=WD_ALIGN_PARAGRAPH.CENTER)
-    add_formatted_paragraph(doc, "The privilege is ours, but the advantage is yours.", size=20,
+    add_formatted_paragraph(doc, "The privilege is ours, but the advantage is yours.", size=12,
                            color=CLASSIC_BLUE, bold=True, alignment=WD_ALIGN_PARAGRAPH.CENTER)
 
 
@@ -1116,20 +1261,20 @@ def generate_tria_disclosure(doc):
         'the premises of a United States mission; and to have been committed by an individual or '
         'individuals as a part of an effort to coerce the civilian population of the United States or '
         'to influence the policy or affect the conduct of the United States Government by coercion.',
-        size=18, space_after=15)
+        size=10, space_after=10)
     
     add_formatted_paragraph(doc,
         'Under the coverage, any losses resulting from certified acts of terrorism may be partially '
         'reimbursed by the United States Government under a formula established by the Terrorism Risk '
         'Insurance Act, as amended. However, your policy may contain other exclusions which might affect '
-        'the coverage, such as an exclusion for nuclear events. Under the formal, the United States '
+        'the coverage, such as an exclusion for nuclear events. Under the formula, the United States '
         'Government generally reimburses 80% beginning on January 1, 2020 of covered terrorism losses '
         'exceeding the statutorily established deductible paid by the insurance company providing the '
         'coverage. The Terrorism Risk Insurance Act, as amended, contains a $100 billion cap that limits '
         'United States government reimbursement as well as insurers\' liability for losses resulting from '
         'certified acts of terrorism when the amount of such losses exceed $100 billion in any one calendar '
         'year. If the aggregate insured losses for all insured exceed $100 billion, your coverage may be reduced.',
-        size=18)
+        size=10)
 
 
 def generate_california_licenses(doc):
@@ -1139,11 +1284,12 @@ def generate_california_licenses(doc):
     
     add_formatted_paragraph(doc,
         "The following HUB International entities are licensed in the State of California:",
-        size=18, space_after=10)
+        size=11, space_after=8)
     
     headers = ["Entity Name", "License Number"]
     rows = [[name, lic] for name, lic in CA_LICENSES]
-    create_styled_table(doc, headers, rows, col_widths=[5.5, 2.0])
+    create_styled_table(doc, headers, rows, col_widths=[5.5, 2.0],
+                       header_size=9, body_size=8)
 
 
 def generate_coverage_recommendations(doc):
@@ -1155,39 +1301,36 @@ def generate_coverage_recommendations(doc):
         "HUB International recommends that you consider the following coverages and risk management "
         "strategies to protect your hospitality business. These recommendations are based on our "
         "extensive experience in the hotel and hospitality insurance industry.",
-        size=18, space_after=15)
+        size=11, space_after=10)
     
     recommendations = [
-        ("Umbrella/Excess Liability", "We recommend maintaining umbrella or excess liability coverage with limits adequate to protect your assets. Hotels face unique liability exposures including guest injuries, swimming pool incidents, and food service operations. Higher limits provide additional protection above your primary liability policies."),
-        ("Cyber Liability", "Hotels collect and store sensitive guest information including credit card numbers, personal identification, and travel details. Cyber liability coverage protects against data breaches, ransomware attacks, and regulatory fines. We strongly recommend this coverage for all hospitality operations."),
-        ("Employment Practices Liability (EPLI)", "Hotels employ large numbers of workers in various roles, creating exposure to employment-related claims including wrongful termination, discrimination, harassment, and wage disputes. EPLI coverage is essential for protecting your business against these claims."),
+        ("Umbrella/Excess Liability", "We recommend maintaining umbrella or excess liability coverage with limits adequate to protect your assets. Hotels face unique liability exposures including guest injuries, swimming pool incidents, and food service operations."),
+        ("Cyber Liability", "Hotels collect and store sensitive guest information including credit card numbers, personal identification, and travel details. Cyber liability coverage protects against data breaches, ransomware attacks, and regulatory fines."),
+        ("Employment Practices Liability (EPLI)", "Hotels employ large numbers of workers in various roles, creating exposure to employment-related claims including wrongful termination, discrimination, harassment, and wage disputes."),
         ("Crime/Employee Dishonesty", "Hotels handle significant amounts of cash and guest valuables. Crime coverage protects against employee theft, forgery, computer fraud, and funds transfer fraud."),
-        ("Flood Insurance", "Standard property policies exclude flood damage. If your properties are located in flood-prone areas, we strongly recommend purchasing separate flood coverage through the National Flood Insurance Program (NFIP) or private flood markets."),
-        ("Earthquake Coverage", "Standard property policies exclude earthquake damage. If your properties are located in seismically active areas, we recommend purchasing earthquake coverage with appropriate limits and deductibles."),
-        ("Business Income/Extra Expense", "Adequate business income coverage is critical for hotels. A covered loss that forces temporary closure can result in significant lost revenue. We recommend Actual Loss Sustained (ALS) coverage with an extended period of indemnity of at least 12 months."),
-        ("Equipment Breakdown", "Hotels rely heavily on mechanical and electrical equipment including HVAC systems, elevators, kitchen equipment, and laundry facilities. Equipment breakdown coverage protects against losses from mechanical failure, electrical arcing, and other equipment-related incidents."),
+        ("Flood Insurance", "Standard property policies exclude flood damage. If your properties are located in flood-prone areas, we strongly recommend purchasing separate flood coverage."),
+        ("Equipment Breakdown", "Hotels rely heavily on mechanical and electrical equipment including HVAC systems, elevators, kitchen equipment, and laundry facilities."),
         ("Liquor Liability", "If your hotel serves alcohol, liquor liability coverage is essential. This coverage protects against claims arising from the sale, service, or furnishing of alcoholic beverages."),
-        ("Pollution Liability", "Hotels may face pollution exposures from swimming pool chemicals, cleaning supplies, underground storage tanks, and mold. Pollution liability coverage provides protection against these environmental risks."),
     ]
     
     for title, text in recommendations:
         p = doc.add_paragraph()
+        p.paragraph_format.space_after = Pt(6)
+        p.paragraph_format.line_spacing = Pt(13)
         run_title = p.add_run(f"{title}: ")
-        run_title.font.size = Pt(18)
+        run_title.font.size = Pt(10)
         run_title.font.color.rgb = ELECTRIC_BLUE
         run_title.font.bold = True
         run_title.font.name = "Calibri"
         run_text = p.add_run(text)
-        run_text.font.size = Pt(18)
+        run_text.font.size = Pt(10)
         run_text.font.color.rgb = CLASSIC_BLUE
         run_text.font.name = "Calibri"
-        p.paragraph_format.space_after = Pt(12)
     
-    add_formatted_paragraph(doc, "", space_before=15)
+    add_formatted_paragraph(doc, "", space_before=10)
     add_callout_box(doc,
         "Please discuss these recommendations with your HUB International representative to determine "
-        "which coverages are appropriate for your specific operations and risk profile. Coverage availability "
-        "and pricing may vary based on your individual circumstances.")
+        "which coverages are appropriate for your specific operations and risk profile.")
 
 
 # ─── Main Generator ───────────────────────────────────────────
@@ -1211,13 +1354,13 @@ def generate_proposal(data: dict, output_path: str) -> str:
     style = doc.styles['Normal']
     font = style.font
     font.name = 'Calibri'
-    font.size = Pt(18)
+    font.size = Pt(11)
     font.color.rgb = CLASSIC_BLUE
     
     # Set margins
     for section in doc.sections:
-        section.top_margin = Inches(0.8)
-        section.bottom_margin = Inches(0.8)
+        section.top_margin = Inches(0.7)
+        section.bottom_margin = Inches(0.6)
         section.left_margin = Inches(0.75)
         section.right_margin = Inches(0.75)
     
