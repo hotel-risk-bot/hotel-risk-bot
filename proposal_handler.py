@@ -810,7 +810,7 @@ async def set_expiring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             "`    Premium: $61,487`\n"
             "`    TIV: $15,042,080`\n"
             "`    AOP Deductible: $5,000`\n"
-            "`    \ud83d\udcac AA including TRIA`\n\n"
+            "`    💬 AA including TRIA`\n\n"
             "`GL \u2014 Southlake Specialty`\n"
             "`    Premium: $49,483`\n"
             "`    Total Sales: $4,000,000`\n\n"
@@ -901,7 +901,7 @@ async def set_expiring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
                     "umbrella": "Umbrella", "workers_comp": "WC",
                     "commercial_auto": "Auto", "flood": "Flood",
                 }.get(cov_key, cov_key)
-                response += f"  \ud83d\udcac {display}: {entry['notes']}\n"
+                response += f"  💬 {display}: {entry['notes']}\n"
     
     total_exp = sum(v for v in expiring_premiums.values() if isinstance(v, (int, float)))
     response += f"\n**Total Expiring: ${total_exp:,.0f}**\n\n"
