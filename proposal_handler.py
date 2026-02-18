@@ -187,6 +187,10 @@ async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         local_path = os.path.join(session.work_dir, filename)
         await file.download_to_drive(local_path)
         
+        # Log file size for debugging
+        actual_size = os.path.getsize(local_path)
+        logger.info(f"Downloaded file '{filename}' to '{local_path}', size: {actual_size} bytes")
+        
         session.add_file(filename, local_path, file_type)
         
         file_count = len(session.uploaded_files)

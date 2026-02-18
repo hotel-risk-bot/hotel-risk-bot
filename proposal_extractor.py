@@ -20,6 +20,12 @@ from typing import Optional
 import openpyxl
 from openai import OpenAI
 
+try:
+    import pdfplumber
+    HAS_PDFPLUMBER = True
+except ImportError:
+    HAS_PDFPLUMBER = False
+
 logger = logging.getLogger(__name__)
 
 # OpenAI client (lazy initialization)
@@ -156,8 +162,12 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 80000) -> str:
         total_pages = int(pages_match.group(1)) if pages_match else 0
 
         if total_pages == 0:
-            # Fallback to full extraction
-            return extract_text_from_pdf(pdf_path)
+            logger.warning(f"pdfinfo returned 0 pages, falling back to pdfplumber")
+            return _extract_with_pdfplumber(pdf_path, max_chars)
+        
+        # Log file size for debugging
+        file_size = os.path.getsize(pdf_path)
+        logger.info(f"PDF file size: {file_size} bytes")
 
         logger.info(f"PDF has {total_pages} pages, extracting page-by-page for scoring")
 
@@ -180,8 +190,8 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 80000) -> str:
                     })
 
         if not page_texts:
-            logger.warning("No text extracted from any pages")
-            return ""
+            logger.warning("No text extracted from any pages via pdftotext, trying pdfplumber fallback")
+            return _extract_with_pdfplumber(pdf_path, max_chars)
 
         # Sort by score (highest first), then by page number for ties
         page_texts.sort(key=lambda x: (-x["score"], x["page"]))
@@ -223,7 +233,79 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 80000) -> str:
         return "\n".join(parts)
 
     except Exception as e:
-        logger.error(f"Smart PDF extraction failed, falling back to basic: {e}")
+        logger.error(f"Smart PDF extraction failed, falling back to pdfplumber: {e}")
+        return _extract_with_pdfplumber(pdf_path, max_chars)
+
+
+def _extract_with_pdfplumber(pdf_path: str, max_chars: int = 80000) -> str:
+    """Fallback PDF extraction using pdfplumber (pure Python, no system deps)."""
+    if not HAS_PDFPLUMBER:
+        logger.warning("pdfplumber not available, falling back to basic pdftotext")
+        return extract_text_from_pdf(pdf_path)
+    
+    try:
+        logger.info(f"Using pdfplumber for extraction: {pdf_path}")
+        file_size = os.path.getsize(pdf_path)
+        logger.info(f"PDF file size: {file_size} bytes")
+        
+        with pdfplumber.open(pdf_path) as pdf:
+            total_pages = len(pdf.pages)
+            logger.info(f"pdfplumber: PDF has {total_pages} pages")
+            
+            # Extract and score pages
+            page_texts = []
+            for i, page in enumerate(pdf.pages):
+                try:
+                    text = page.extract_text() or ""
+                    if text.strip():
+                        score = _score_page(text)
+                        page_texts.append({
+                            "page": i + 1,
+                            "text": text,
+                            "score": score,
+                            "chars": len(text)
+                        })
+                except Exception as e:
+                    logger.warning(f"pdfplumber: error on page {i+1}: {e}")
+                    continue
+            
+            if not page_texts:
+                logger.warning("pdfplumber: No text extracted from any pages")
+                return ""
+            
+            logger.info(f"pdfplumber: extracted text from {len(page_texts)} of {total_pages} pages")
+            
+            # Sort by score (highest first)
+            page_texts.sort(key=lambda x: (-x["score"], x["page"]))
+            
+            # Log top scored pages
+            for p in page_texts[:10]:
+                logger.info(f"  Page {p['page']}: score={p['score']:.1f}, chars={p['chars']}")
+            
+            # Select pages up to max_chars
+            selected_pages = []
+            total_chars = 0
+            for p in page_texts:
+                if total_chars + p["chars"] > max_chars:
+                    if not selected_pages:
+                        selected_pages.append(p)
+                    break
+                selected_pages.append(p)
+                total_chars += p["chars"]
+            
+            # Re-sort by page number
+            selected_pages.sort(key=lambda x: x["page"])
+            
+            logger.info(f"pdfplumber: selected {len(selected_pages)} pages ({total_chars} chars)")
+            
+            parts = []
+            for p in selected_pages:
+                parts.append(f"\n--- Page {p['page']} ---\n{p['text']}")
+            
+            return "\n".join(parts)
+    
+    except Exception as e:
+        logger.error(f"pdfplumber extraction failed: {e}")
         return extract_text_from_pdf(pdf_path)
 
 
