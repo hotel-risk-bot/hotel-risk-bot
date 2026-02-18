@@ -611,16 +611,19 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         )
         
         # Send the file
+        # Escape underscores in dynamic strings for Telegram Markdown
+        safe_filename = docx_filename.replace("_", "\\_")
+        safe_client = session.client_name.replace("_", "\\_")
         with open(docx_path, "rb") as f:
             await update.message.reply_document(
                 document=f,
                 filename=docx_filename,
                 caption=(
-                    f"✅ **Proposal Generated**\n\n"
-                    f"**Client:** {session.client_name}\n"
-                    f"**File:** {docx_filename}\n\n"
+                    f"\u2705 **Proposal Generated**\n\n"
+                    f"**Client:** {safe_client}\n"
+                    f"**File:** {safe_filename}\n\n"
                     f"Review the document and make any final edits as needed.\n"
-                    f"Send /proposal [Client Name] to start a new proposal."
+                    f"Send /proposal to start a new proposal."
                 ),
                 parse_mode="Markdown"
             )
@@ -632,9 +635,10 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         
     except Exception as e:
         logger.error(f"Error generating proposal: {e}", exc_info=True)
+        safe_err = str(e).replace("_", " ")
         await update.message.reply_text(
-            f"❌ Error generating proposal: {str(e)}\n\n"
-            f"Try /generate again or /proposal\\_cancel to start over."
+            f"\u274c Error generating proposal: {safe_err}\n\n"
+            f"Try /generate again or /proposal\_cancel to start over."
         )
         return REVIEWING_EXTRACTION
 
