@@ -142,6 +142,7 @@ async def proposal_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"• Commercial Auto quote (PDF)\n"
         f"• Schedule of Values / SOV (Excel)\n\n"
         f"Upload files one at a time. When done, send /extract to process.\n"
+        f"Use /expiring to set expiring premiums for comparison.\n"
         f"Send /proposal\\_cancel to cancel.",
         parse_mode="Markdown"
     )
@@ -413,6 +414,7 @@ async def extract_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             f"📊 **Extraction Complete — Verification Checkpoint**\n\n"
             f"{summary}\n\n"
             f"**Commands:**\n"
+            f"• /expiring — Set expiring premiums for comparison\n"
             f"• /generate — Accept and generate proposal\n"
             f"• /adjust [instructions] — Request changes\n"
             f"• /proposal\\_cancel — Cancel session",
@@ -636,6 +638,142 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return REVIEWING_EXTRACTION
 
 
+async def set_expiring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Set expiring premiums for the proposal.
+    
+    Usage:
+        /expiring property 60000 gl 50000 umbrella 5000 wc 30000 auto 8000
+        /expiring property 60,000 gl 50,000
+    
+    Coverage keys: property, gl, umbrella, wc, auto
+    """
+    chat_id = update.effective_chat.id
+    session = get_session(chat_id)
+    
+    if not session:
+        await update.message.reply_text("No active proposal session. Start one with /proposal [Client Name]")
+        return ConversationHandler.END
+    
+    raw_text = update.message.text.replace("/expiring", "").strip()
+    
+    if not raw_text:
+        await update.message.reply_text(
+            "\u2139\ufe0f **Set Expiring Premiums**\n\n"
+            "Usage: `/expiring property 60000 gl 50000`\n\n"
+            "**Coverage keys:**\n"
+            "\u2022 `property` \u2014 Property\n"
+            "\u2022 `gl` \u2014 General Liability\n"
+            "\u2022 `umbrella` \u2014 Umbrella/Excess\n"
+            "\u2022 `wc` \u2014 Workers Compensation\n"
+            "\u2022 `auto` \u2014 Commercial Auto\n\n"
+            "**Example:**\n"
+            "`/expiring property 64,000 gl 55,000 umbrella 5,000`",
+            parse_mode="Markdown"
+        )
+        # Return to whichever state we're in
+        if session.extracted_data:
+            return REVIEWING_EXTRACTION
+        return WAITING_FOR_FILES
+    
+    # Parse the input: alternating key/value pairs
+    coverage_map = {
+        "property": "property",
+        "prop": "property",
+        "gl": "general_liability",
+        "general_liability": "general_liability",
+        "liability": "general_liability",
+        "umbrella": "umbrella",
+        "excess": "umbrella",
+        "umb": "umbrella",
+        "wc": "workers_comp",
+        "workers_comp": "workers_comp",
+        "workers": "workers_comp",
+        "comp": "workers_comp",
+        "auto": "commercial_auto",
+        "commercial_auto": "commercial_auto",
+    }
+    
+    # Tokenize
+    tokens = raw_text.replace(",", "").replace("$", "").split()
+    
+    expiring = session.extracted_data.get("expiring_premiums", {}) if session.extracted_data else {}
+    parsed = []
+    errors = []
+    
+    i = 0
+    while i < len(tokens):
+        token_lower = tokens[i].lower()
+        if token_lower in coverage_map:
+            cov_key = coverage_map[token_lower]
+            if i + 1 < len(tokens):
+                try:
+                    amount = float(tokens[i + 1])
+                    expiring[cov_key] = amount
+                    # Map back to display name
+                    display_names = {
+                        "property": "Property",
+                        "general_liability": "General Liability",
+                        "umbrella": "Umbrella",
+                        "workers_comp": "Workers Comp",
+                        "commercial_auto": "Commercial Auto"
+                    }
+                    parsed.append(f"\u2022 {display_names.get(cov_key, cov_key)}: ${amount:,.0f}")
+                    i += 2
+                    continue
+                except ValueError:
+                    errors.append(f"Invalid amount for {token_lower}: {tokens[i + 1]}")
+                    i += 2
+                    continue
+            else:
+                errors.append(f"Missing amount for {token_lower}")
+                i += 1
+                continue
+        else:
+            errors.append(f"Unknown coverage: {tokens[i]}")
+            i += 1
+    
+    if not parsed and not errors:
+        await update.message.reply_text(
+            "Could not parse expiring premiums. Use format:\n"
+            "`/expiring property 60000 gl 50000`",
+            parse_mode="Markdown"
+        )
+        if session.extracted_data:
+            return REVIEWING_EXTRACTION
+        return WAITING_FOR_FILES
+    
+    # Store in session data
+    if not session.extracted_data:
+        session.extracted_data = {"expiring_premiums": expiring}
+    else:
+        session.extracted_data["expiring_premiums"] = expiring
+    
+    # Build response
+    response = "\u2705 **Expiring Premiums Set**\n\n"
+    if parsed:
+        response += "\n".join(parsed) + "\n"
+    if errors:
+        response += "\n\u26a0\ufe0f Warnings:\n" + "\n".join(errors) + "\n"
+    
+    # Show total
+    total_exp = sum(v for v in expiring.values() if isinstance(v, (int, float)))
+    response += f"\n**Total Expiring: ${total_exp:,.0f}**\n\n"
+    
+    if session.extracted_data and session.extracted_data.get("coverages"):
+        response += (
+            "Send /generate to create the proposal, "
+            "or /extract to re-extract data."
+        )
+    else:
+        response += "Upload quote documents and send /extract to continue."
+    
+    await update.message.reply_text(response, parse_mode="Markdown")
+    
+    if session.extracted_data and session.extracted_data.get("coverages"):
+        return REVIEWING_EXTRACTION
+    return WAITING_FOR_FILES
+
+
 async def proposal_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancel the current proposal session."""
     chat_id = update.effective_chat.id
@@ -676,6 +814,7 @@ def get_proposal_conversation_handler() -> ConversationHandler:
             WAITING_FOR_FILES: [
                 MessageHandler(filters.Document.ALL, receive_file),
                 CommandHandler("extract", extract_data),
+                CommandHandler("expiring", set_expiring),
                 CommandHandler("generate", generate_doc),  # Auto-extract if needed
                 CommandHandler("proposal_cancel", proposal_cancel),
             ],
@@ -683,12 +822,14 @@ def get_proposal_conversation_handler() -> ConversationHandler:
                 MessageHandler(filters.Document.ALL, receive_file),  # Accept more files after extraction
                 CommandHandler("generate", generate_doc),
                 CommandHandler("adjust", adjust_data),
+                CommandHandler("expiring", set_expiring),
                 CommandHandler("extract", extract_data),  # Re-extract
                 CommandHandler("proposal_cancel", proposal_cancel),
             ],
         },
         fallbacks=[
             CommandHandler("extract", extract_data),
+            CommandHandler("expiring", set_expiring),
             CommandHandler("generate", generate_doc),
             CommandHandler("proposal_cancel", proposal_cancel),
             CommandHandler("proposal", proposal_start),  # Restart
