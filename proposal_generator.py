@@ -35,6 +35,86 @@ EGGSHELL_HEX = "F3F5F1"
 # Logo path
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "templates", "hub_logo_horizontal.png")
 
+# AM Best Rating Lookup Table - common hospitality insurance carriers
+# Updated periodically; used as fallback when quote doesn't include rating
+AM_BEST_RATINGS = {
+    # Property carriers
+    "vantage risk": "A- (VII)",
+    "vantage risk specialty insurance": "A- (VII)",
+    "tower hill insurance": "A- (VII)",
+    "tower hill prime insurance": "A- (VII)",
+    "tower hill preferred insurance": "A- (VII)",
+    "starr surplus lines": "A (XV)",
+    "starr indemnity": "A (XV)",
+    "lexington insurance": "A+ (XV)",
+    "scottsdale insurance": "A+ (XV)",
+    "zurich": "A+ (XV)",
+    "zurich american insurance": "A+ (XV)",
+    "great lakes insurance": "A+ (XV)",
+    "lloyd's of london": "A (XV)",
+    "lloyds": "A (XV)",
+    "nautilus insurance": "A+ (XV)",
+    "empire indemnity": "A (VIII)",
+    "colony insurance": "A (VIII)",
+    "james river insurance": "A- (VIII)",
+    "canopius": "A- (VII)",
+    # GL carriers
+    "southlake specialty insurance": "A- (VIII)",
+    "southlake specialty": "A- (VIII)",
+    "futuristic underwriters": "A- (VIII)",
+    "kinsale insurance": "A (VIII)",
+    "markel insurance": "A (XV)",
+    "evanston insurance": "A+ (XV)",
+    "general star indemnity": "A++ (XV)",
+    "essentia insurance": "A- (VII)",
+    "mount vernon fire insurance": "A++ (XV)",
+    # Umbrella/Excess carriers
+    "starstone": "A- (VII)",
+    "starstone national insurance": "A- (VII)",
+    "ironshore specialty insurance": "A (XV)",
+    "westchester surplus lines": "A+ (XV)",
+    "great american insurance": "A+ (XV)",
+    "argo group": "A- (VIII)",
+    "hudson insurance": "A+ (XV)",
+    # WC carriers
+    "employers insurance": "A (VIII)",
+    "employers compensation insurance": "A (VIII)",
+    "zenith insurance": "A (VII)",
+    "pinnacol assurance": "A (VII)",
+    "texas mutual insurance": "A (VIII)",
+    "state compensation insurance fund": "A (VIII)",
+    # Auto carriers
+    "national interstate insurance": "A (VIII)",
+    # Flood carriers
+    "selective insurance": "A+ (VIII)",
+    "selective": "A+ (VIII)",
+    "wright flood": "N/A (NFIP)",
+    # Multi-line carriers
+    "travelers": "A++ (XV)",
+    "hartford": "A+ (XV)",
+    "cna": "A (XV)",
+    "liberty mutual": "A (XV)",
+    "nationwide": "A+ (XV)",
+    "berkshire hathaway": "A++ (XV)",
+    "aig": "A (XV)",
+    "chubb": "A++ (XV)",
+}
+
+
+def lookup_am_best(carrier_name):
+    """Look up AM Best rating for a carrier. Returns rating or None."""
+    if not carrier_name:
+        return None
+    name_lower = carrier_name.lower().strip()
+    # Direct match
+    if name_lower in AM_BEST_RATINGS:
+        return AM_BEST_RATINGS[name_lower]
+    # Partial match - check if any key is contained in the carrier name
+    for key, rating in AM_BEST_RATINGS.items():
+        if key in name_lower or name_lower in key:
+            return rating
+    return None
+
 # Default Service Team
 SERVICE_TEAM = [
     {
@@ -174,7 +254,7 @@ def add_formatted_paragraph(doc, text, size=11, color=CLASSIC_BLUE, bold=False,
 def add_section_header(doc, text):
     """Add a 22pt Classic Blue bold section header with enough space to clear page header."""
     return add_formatted_paragraph(doc, text, size=22, color=CLASSIC_BLUE, bold=True,
-                                   space_before=0, space_after=12)
+                                   space_before=36, space_after=12)
 
 
 def add_subsection_header(doc, text):
@@ -386,7 +466,7 @@ def generate_cover_page(doc, data):
     
     # Title - single line
     add_formatted_paragraph(doc, "Commercial Insurance Proposal", size=32, color=CLASSIC_BLUE,
-                           bold=True, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_before=16, space_after=10)
+                           bold=True, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_before=16, space_after=36)
     
     # Prepared For box
     box_table = doc.add_table(rows=1, cols=1)
@@ -600,9 +680,9 @@ def generate_premium_summary(doc, data):
             pct_change = ((proposed - exp) / exp) * 100
             pct_str = f"{pct_change:+.1f}%"
             if dollar_change >= 0:
-                dollar_str = f"+{fmt_currency(dollar_change)}"
+                dollar_str = f"+${dollar_change:,.2f}"
             else:
-                dollar_str = f"-{fmt_currency(abs(dollar_change))}"
+                dollar_str = f"-${abs(dollar_change):,.2f}"
         elif exp and exp > 0 and proposed == 0:
             # Expiring only, no proposed
             dollar_str = "Not Quoted"
@@ -617,8 +697,8 @@ def generate_premium_summary(doc, data):
         rows.append([
             display_name,
             carrier_short,
-            fmt_currency(exp) if exp else "N/A",
-            fmt_currency(proposed) if proposed else "N/A",
+            f"${exp:,.2f}" if exp else "N/A",
+            f"${proposed:,.2f}" if proposed else "N/A",
             dollar_str,
             pct_str
         ])
@@ -631,9 +711,10 @@ def generate_premium_summary(doc, data):
     if total_expiring > 0:
         total_pct = ((total_proposed - total_expiring) / total_expiring) * 100
         total_pct_str = f"{total_pct:+.1f}%"
-        total_dollar_str = f"{'+' if total_dollar >= 0 else ''}{fmt_currency(abs(total_dollar))}"
-        if total_dollar < 0:
-            total_dollar_str = f"-{fmt_currency(abs(total_dollar))}"
+        if total_dollar >= 0:
+            total_dollar_str = f"+${total_dollar:,.2f}"
+        else:
+            total_dollar_str = f"-${abs(total_dollar):,.2f}"
     else:
         total_pct_str = "N/A"
         total_dollar_str = "N/A"
@@ -641,8 +722,8 @@ def generate_premium_summary(doc, data):
     rows.append([
         "TOTAL",
         "",
-        fmt_currency(total_expiring) if total_expiring else "N/A",
-        fmt_currency(total_proposed) if total_proposed else "N/A",
+        f"${total_expiring:,.2f}" if total_expiring else "N/A",
+        f"${total_proposed:,.2f}" if total_proposed else "N/A",
         total_dollar_str,
         total_pct_str
     ])
@@ -664,7 +745,7 @@ def generate_premium_summary(doc, data):
     if total_expiring > 0 and total_dollar != 0:
         direction = "savings" if total_dollar < 0 else "increase"
         add_formatted_paragraph(doc, "", space_before=8)
-        callout_text = f"Total premium {direction}: {fmt_currency(abs(total_dollar))} ({abs(total_pct):.1f}%)"
+        callout_text = f"Total premium {direction}: ${abs(total_dollar):,.2f} ({abs(total_pct):.1f}%)"
         add_callout_box(doc, callout_text)
     
     add_formatted_paragraph(doc, "", space_before=6)
@@ -726,7 +807,15 @@ def generate_named_insureds(doc, data):
     add_page_break(doc)
     add_section_header(doc, "Named Insureds")
     
-    named = data.get("named_insureds", [])
+    # Deduplicate named insureds case-insensitively
+    raw_named = data.get("named_insureds", [])
+    seen = set()
+    named = []
+    for ni in raw_named:
+        key = ni.strip().upper()
+        if key not in seen:
+            seen.add(key)
+            named.append(ni)
     if named:
         headers = ["#", "Named Insured"]
         rows = [[str(i), ni] for i, ni in enumerate(named, 1)]
@@ -783,7 +872,17 @@ def generate_locations(doc, data):
     add_page_break(doc)
     add_section_header(doc, "Schedule of Locations")
     
-    locations = data.get("locations", [])
+    raw_locations = data.get("locations", [])
+    # Deduplicate locations by address (case-insensitive)
+    seen_addrs = set()
+    locations = []
+    for loc in raw_locations:
+        addr_key = (loc.get("address", "").strip().upper() + "|" + 
+                    loc.get("city", "").strip().upper() + "|" +
+                    loc.get("state", "").strip().upper())
+        if addr_key not in seen_addrs:
+            seen_addrs.add(addr_key)
+            locations.append(loc)
     if locations:
         has_entity = any(loc.get("corporate_entity") for loc in locations)
         if has_entity:
@@ -831,6 +930,11 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     carrier = cov.get("carrier", "N/A")
     admitted = "Admitted" if cov.get("carrier_admitted", True) else "Non-Admitted"
     am_best = cov.get("am_best_rating", "N/A")
+    # Fallback to lookup table if not provided in quote
+    if not am_best or am_best == "N/A":
+        looked_up = lookup_am_best(carrier)
+        if looked_up:
+            am_best = looked_up
     
     add_subsection_header(doc, "Coverage Summary")
     
@@ -1121,8 +1225,13 @@ def generate_carrier_rating(doc, data):
         if cov:
             carrier = cov.get("carrier", "")
             if carrier and carrier not in carriers_seen:
+                rating = cov.get("am_best_rating", "N/A")
+                if not rating or rating == "N/A":
+                    looked_up = lookup_am_best(carrier)
+                    if looked_up:
+                        rating = looked_up
                 carriers_seen[carrier] = {
-                    "rating": cov.get("am_best_rating", "N/A"),
+                    "rating": rating,
                     "admitted": "Admitted" if cov.get("carrier_admitted", True) else "Non-Admitted",
                     "coverages": [display_name]
                 }
