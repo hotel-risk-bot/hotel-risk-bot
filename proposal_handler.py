@@ -195,9 +195,12 @@ async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         session.add_file(filename, local_path, file_type)
         
         file_count = len(session.uploaded_files)
+        unprocessed = len([f for f in session.uploaded_files if f['filename'] not in session.processed_files])
+        extract_hint = f"\n\n📌 **{unprocessed} new file(s)** ready for extraction. Send /extract to process." if unprocessed > 0 and session.extracted_data else ""
         await update.message.reply_text(
             f"✅ Received: **{filename}** ({file_type.upper()})\n\n"
-            f"**Files uploaded ({file_count}):**\n{session.get_file_summary()}\n\n"
+            f"**Files uploaded ({file_count}):**\n{session.get_file_summary()}"
+            f"{extract_hint}\n\n"
             f"Upload more files or send /extract when ready.",
             parse_mode="Markdown"
         )
@@ -677,6 +680,7 @@ def get_proposal_conversation_handler() -> ConversationHandler:
                 CommandHandler("proposal_cancel", proposal_cancel),
             ],
             REVIEWING_EXTRACTION: [
+                MessageHandler(filters.Document.ALL, receive_file),  # Accept more files after extraction
                 CommandHandler("generate", generate_doc),
                 CommandHandler("adjust", adjust_data),
                 CommandHandler("extract", extract_data),  # Re-extract
