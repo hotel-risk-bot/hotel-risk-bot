@@ -30,7 +30,8 @@ logger = logging.getLogger(__name__)
     WAITING_FOR_MORE_FILES,
     REVIEWING_EXTRACTION,
     CONFIRMING_GENERATION,
-) = range(4)
+    WAITING_FOR_EXPIRING,
+) = range(5)
 
 # Session storage (in-memory, per chat)
 proposal_sessions = {}
@@ -687,6 +688,9 @@ def _parse_expiring_block(raw_text: str) -> tuple:
     expiring_details = {}   # key -> {carrier, premium, details: {}, notes}
     parsed_summary = []
     
+    # Strip Telegram's escaped dollar signs: \$ -> $
+    raw_text = raw_text.replace("\\$", "$")
+    
     lines = raw_text.strip().split("\n")
     current_key = None
     current_entry = None
@@ -800,27 +804,27 @@ async def set_expiring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return ConversationHandler.END
     
     raw_text = update.message.text.replace("/expiring", "").strip()
+    # Strip Telegram's escaped dollar signs: \$ -> $
+    raw_text = raw_text.replace("\\$", "$")
     
     if not raw_text:
         await update.message.reply_text(
             "\u2139\ufe0f **Set Expiring Premiums**\n\n"
-            "Paste your expiring program details in this format:\n\n"
-            "`/expiring`\n"
+            "Paste your expiring program details below.\n"
+            "I'm waiting for your next message.\n\n"
+            "Example format:\n"
             "`PROP \u2014 Tower Hill Insurance`\n"
             "`    Premium: $61,487`\n"
             "`    TIV: $15,042,080`\n"
-            "`    AOP Deductible: $5,000`\n"
-            "`    💬 AA including TRIA`\n\n"
+            "`    AOP Deductible: $5,000`\n\n"
             "`GL \u2014 Southlake Specialty`\n"
             "`    Premium: $49,483`\n"
             "`    Total Sales: $4,000,000`\n\n"
             "**Coverage abbreviations:** PROP, GL, UMB, WC, AUTO, FLOOD, EPLI, CYBER\n\n"
-            "Or use simple format: `/expiring property 60000 gl 50000`",
+            "Or use simple format: `property 60000 gl 50000`",
             parse_mode="Markdown"
         )
-        if session.extracted_data:
-            return REVIEWING_EXTRACTION
-        return WAITING_FOR_FILES
+        return WAITING_FOR_EXPIRING
     
     # Detect format: multi-line (has \u2014 or - with carrier) vs simple (key value pairs)
     import re
@@ -921,6 +925,120 @@ async def set_expiring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return WAITING_FOR_FILES
 
 
+async def receive_expiring_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive pasted expiring program text after /expiring was called with no args."""
+    chat_id = update.effective_chat.id
+    session = get_session(chat_id)
+    
+    if not session:
+        await update.message.reply_text("No active proposal session. Start one with /proposal [Client Name]")
+        return ConversationHandler.END
+    
+    raw_text = update.message.text.strip()
+    
+    if not raw_text:
+        await update.message.reply_text("Please paste your expiring program details, or send /proposal_cancel to cancel.")
+        return WAITING_FOR_EXPIRING
+    
+    # Strip Telegram's escaped dollar signs: \$ -> $
+    raw_text = raw_text.replace("\\$", "$")
+    
+    # Reuse the same parsing logic from set_expiring
+    import re
+    has_header = bool(re.search(r'[A-Za-z_]+\s*[\u2014\-\u2013]+\s*.+', raw_text))
+    
+    if has_header:
+        expiring_premiums, expiring_details, parsed_summary = _parse_expiring_block(raw_text)
+    else:
+        # Simple inline format: property 60000 gl 50000
+        simple_map = {
+            "property": "property", "prop": "property",
+            "gl": "general_liability", "liability": "general_liability",
+            "umbrella": "umbrella", "umb": "umbrella", "excess": "umbrella",
+            "wc": "workers_comp", "workers": "workers_comp", "comp": "workers_comp",
+            "auto": "commercial_auto",
+            "flood": "flood", "epli": "epli", "cyber": "cyber",
+        }
+        simple_display = {
+            "property": "Property", "general_liability": "General Liability",
+            "umbrella": "Umbrella", "workers_comp": "Workers Comp",
+            "commercial_auto": "Commercial Auto", "flood": "Flood",
+            "epli": "EPLI", "cyber": "Cyber",
+        }
+        tokens = raw_text.replace(",", "").replace("$", "").split()
+        expiring_premiums = {}
+        expiring_details = {}
+        parsed_summary = []
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i].lower()
+            if tok in simple_map:
+                cov_key = simple_map[tok]
+                if i + 1 < len(tokens):
+                    try:
+                        amount = float(tokens[i + 1])
+                        expiring_premiums[cov_key] = amount
+                        parsed_summary.append(
+                            f"\u2022 **{simple_display.get(cov_key, cov_key)}**: ${amount:,.0f}"
+                        )
+                        i += 2
+                        continue
+                    except ValueError:
+                        pass
+            i += 1
+    
+    if not expiring_premiums:
+        await update.message.reply_text(
+            "\u26a0\ufe0f Could not parse any expiring premiums.\n\n"
+            "Make sure each coverage section has a `Premium: $XX,XXX` line.\n"
+            "Or use simple format: `property 60000 gl 50000`\n\n"
+            "Try pasting again, or send /proposal_cancel to cancel.",
+            parse_mode="Markdown"
+        )
+        return WAITING_FOR_EXPIRING
+    
+    # Store in session data
+    if not session.extracted_data:
+        session.extracted_data = {
+            "expiring_premiums": expiring_premiums,
+            "expiring_details": expiring_details
+        }
+    else:
+        session.extracted_data["expiring_premiums"] = expiring_premiums
+        session.extracted_data["expiring_details"] = expiring_details
+    
+    # Build response
+    response = "\u2705 **Expiring Program Set**\n\n"
+    response += "\n".join(parsed_summary) + "\n"
+    
+    if expiring_details:
+        for cov_key, entry in expiring_details.items():
+            if entry.get("notes"):
+                display = {
+                    "property": "Property", "general_liability": "GL",
+                    "umbrella": "Umbrella", "workers_comp": "WC",
+                    "commercial_auto": "Auto", "flood": "Flood",
+                }.get(cov_key, cov_key)
+                response += f"  Notes {display}: {entry['notes']}\n"
+    
+    total_exp = sum(v for v in expiring_premiums.values() if isinstance(v, (int, float)))
+    response += f"\n**Total Expiring: ${total_exp:,.0f}**\n\n"
+    
+    if session.extracted_data and session.extracted_data.get("coverages"):
+        response += (
+            "Send /generate to create the proposal, "
+            "or /extract to re-extract data."
+        )
+    else:
+        response += "Upload quote documents and send /extract to continue."
+    
+    await update.message.reply_text(response, parse_mode="Markdown")
+    
+    if session.extracted_data and session.extracted_data.get("coverages"):
+        return REVIEWING_EXTRACTION
+    return WAITING_FOR_FILES
+
+
 async def proposal_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancel the current proposal session."""
     chat_id = update.effective_chat.id
@@ -971,6 +1089,14 @@ def get_proposal_conversation_handler() -> ConversationHandler:
                 CommandHandler("adjust", adjust_data),
                 CommandHandler("expiring", set_expiring),
                 CommandHandler("extract", extract_data),  # Re-extract
+                CommandHandler("proposal_cancel", proposal_cancel),
+            ],
+            WAITING_FOR_EXPIRING: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_expiring_text),
+                MessageHandler(filters.Document.ALL, receive_file),
+                CommandHandler("expiring", set_expiring),
+                CommandHandler("extract", extract_data),
+                CommandHandler("generate", generate_doc),
                 CommandHandler("proposal_cancel", proposal_cancel),
             ],
         },
