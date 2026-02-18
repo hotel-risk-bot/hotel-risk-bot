@@ -638,14 +638,159 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return REVIEWING_EXTRACTION
 
 
+def _parse_dollar(s: str) -> float:
+    """Parse a dollar string like '$61,487' or '61487' into a float."""
+    return float(s.replace("$", "").replace(",", "").replace("\\", "").strip())
+
+
+def _parse_expiring_block(raw_text: str) -> tuple:
+    """Parse multi-line expiring coverage block.
+    
+    Accepts format like:
+        PROP — Tower Hill Insurance
+            Premium: $61,487
+            TIV: $15,042,080
+            ...
+            💬 AA including TRIA
+        
+        GL — Southlake Specialty Insurance Company
+            Premium: $49,483
+            ...
+    
+    Returns (expiring_premiums dict, expiring_details dict, parsed_summary list)
+    """
+    import re
+    
+    # Coverage abbreviation mapping
+    coverage_map = {
+        "prop": "property", "property": "property",
+        "gl": "general_liability", "liability": "general_liability",
+        "general_liability": "general_liability",
+        "umb": "umbrella", "umbrella": "umbrella", "excess": "umbrella",
+        "wc": "workers_comp", "workers": "workers_comp",
+        "workers_comp": "workers_comp", "comp": "workers_comp",
+        "auto": "commercial_auto", "commercial_auto": "commercial_auto",
+        "flood": "flood", "epli": "epli", "cyber": "cyber",
+        "crime": "crime", "inland_marine": "inland_marine",
+        "im": "inland_marine", "bop": "bop",
+    }
+    
+    display_names = {
+        "property": "Property", "general_liability": "General Liability",
+        "umbrella": "Umbrella", "workers_comp": "Workers Comp",
+        "commercial_auto": "Commercial Auto", "flood": "Flood",
+        "epli": "EPLI", "cyber": "Cyber", "crime": "Crime",
+        "inland_marine": "Inland Marine", "bop": "BOP",
+    }
+    
+    expiring_premiums = {}  # key -> premium amount
+    expiring_details = {}   # key -> {carrier, premium, details: {}, notes}
+    parsed_summary = []
+    
+    lines = raw_text.strip().split("\n")
+    current_key = None
+    current_entry = None
+    
+    # Pattern for coverage header: "PROP — Carrier Name" or "GL - Carrier Name"
+    header_pattern = re.compile(
+        r'^\s*([A-Za-z_]+)\s*[\u2014\-\u2013]+\s*(.+)$'
+    )
+    # Pattern for detail line: "  Key: Value"
+    detail_pattern = re.compile(r'^\s+([^:]+):\s*(.+)$')
+    # Pattern for note line: "  💬 some note"
+    note_pattern = re.compile(r'^\s*💬\s*(.+)$')
+    
+    for line in lines:
+        line_stripped = line.strip()
+        if not line_stripped:
+            continue
+        
+        # Check for coverage header
+        header_match = header_pattern.match(line)
+        if header_match:
+            # Save previous entry
+            if current_key and current_entry:
+                cov_key = coverage_map.get(current_key.lower())
+                if cov_key:
+                    expiring_details[cov_key] = current_entry
+                    if current_entry.get("premium"):
+                        expiring_premiums[cov_key] = current_entry["premium"]
+                        parsed_summary.append(
+                            f"\u2022 **{display_names.get(cov_key, cov_key)}** — "
+                            f"{current_entry.get('carrier', 'N/A')}: "
+                            f"${current_entry['premium']:,.0f}"
+                        )
+            
+            abbrev = header_match.group(1).strip()
+            carrier = header_match.group(2).strip()
+            current_key = abbrev.lower()
+            current_entry = {
+                "carrier": carrier,
+                "premium": 0,
+                "details": {},
+                "notes": ""
+            }
+            continue
+        
+        # Check for note line
+        note_match = note_pattern.match(line)
+        if note_match and current_entry:
+            current_entry["notes"] = note_match.group(1).strip()
+            continue
+        
+        # Check for detail line
+        detail_match = detail_pattern.match(line)
+        if detail_match and current_entry:
+            field_name = detail_match.group(1).strip()
+            field_value = detail_match.group(2).strip()
+            
+            # Store the raw detail
+            current_entry["details"][field_name] = field_value
+            
+            # If this is the Premium field, extract the number
+            if field_name.lower() == "premium":
+                try:
+                    current_entry["premium"] = _parse_dollar(field_value)
+                except (ValueError, TypeError):
+                    pass
+            continue
+    
+    # Save the last entry
+    if current_key and current_entry:
+        cov_key = coverage_map.get(current_key.lower())
+        if cov_key:
+            expiring_details[cov_key] = current_entry
+            if current_entry.get("premium"):
+                expiring_premiums[cov_key] = current_entry["premium"]
+                parsed_summary.append(
+                    f"\u2022 **{display_names.get(cov_key, cov_key)}** — "
+                    f"{current_entry.get('carrier', 'N/A')}: "
+                    f"${current_entry['premium']:,.0f}"
+                )
+    
+    return expiring_premiums, expiring_details, parsed_summary
+
+
 async def set_expiring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Set expiring premiums for the proposal.
+    """Set expiring premiums and details for the proposal.
     
-    Usage:
-        /expiring property 60000 gl 50000 umbrella 5000 wc 30000 auto 8000
-        /expiring property 60,000 gl 50,000
+    Accepts two formats:
     
-    Coverage keys: property, gl, umbrella, wc, auto
+    1. Simple inline:
+        /expiring property 60000 gl 50000 umbrella 5000
+    
+    2. Rich multi-line:
+        /expiring
+        PROP — Tower Hill Insurance
+            Premium: $61,487
+            TIV: $15,042,080
+            AOP Deductible: $5,000
+            💬 AA including TRIA
+        
+        GL — Southlake Specialty
+            Premium: $49,483
+            Total Sales: $4,000,000
+            💬 inc $1M EPLI
     """
     chat_id = update.effective_chat.id
     session = get_session(chat_id)
@@ -659,83 +804,74 @@ async def set_expiring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if not raw_text:
         await update.message.reply_text(
             "\u2139\ufe0f **Set Expiring Premiums**\n\n"
-            "Usage: `/expiring property 60000 gl 50000`\n\n"
-            "**Coverage keys:**\n"
-            "\u2022 `property` \u2014 Property\n"
-            "\u2022 `gl` \u2014 General Liability\n"
-            "\u2022 `umbrella` \u2014 Umbrella/Excess\n"
-            "\u2022 `wc` \u2014 Workers Compensation\n"
-            "\u2022 `auto` \u2014 Commercial Auto\n\n"
-            "**Example:**\n"
-            "`/expiring property 64,000 gl 55,000 umbrella 5,000`",
+            "Paste your expiring program details in this format:\n\n"
+            "`/expiring`\n"
+            "`PROP \u2014 Tower Hill Insurance`\n"
+            "`    Premium: $61,487`\n"
+            "`    TIV: $15,042,080`\n"
+            "`    AOP Deductible: $5,000`\n"
+            "`    \ud83d\udcac AA including TRIA`\n\n"
+            "`GL \u2014 Southlake Specialty`\n"
+            "`    Premium: $49,483`\n"
+            "`    Total Sales: $4,000,000`\n\n"
+            "**Coverage abbreviations:** PROP, GL, UMB, WC, AUTO, FLOOD, EPLI, CYBER\n\n"
+            "Or use simple format: `/expiring property 60000 gl 50000`",
             parse_mode="Markdown"
         )
-        # Return to whichever state we're in
         if session.extracted_data:
             return REVIEWING_EXTRACTION
         return WAITING_FOR_FILES
     
-    # Parse the input: alternating key/value pairs
-    coverage_map = {
-        "property": "property",
-        "prop": "property",
-        "gl": "general_liability",
-        "general_liability": "general_liability",
-        "liability": "general_liability",
-        "umbrella": "umbrella",
-        "excess": "umbrella",
-        "umb": "umbrella",
-        "wc": "workers_comp",
-        "workers_comp": "workers_comp",
-        "workers": "workers_comp",
-        "comp": "workers_comp",
-        "auto": "commercial_auto",
-        "commercial_auto": "commercial_auto",
-    }
+    # Detect format: multi-line (has \u2014 or - with carrier) vs simple (key value pairs)
+    import re
+    has_header = bool(re.search(r'[A-Za-z_]+\s*[\u2014\-\u2013]+\s*.+', raw_text))
     
-    # Tokenize
-    tokens = raw_text.replace(",", "").replace("$", "").split()
-    
-    expiring = session.extracted_data.get("expiring_premiums", {}) if session.extracted_data else {}
-    parsed = []
-    errors = []
-    
-    i = 0
-    while i < len(tokens):
-        token_lower = tokens[i].lower()
-        if token_lower in coverage_map:
-            cov_key = coverage_map[token_lower]
-            if i + 1 < len(tokens):
-                try:
-                    amount = float(tokens[i + 1])
-                    expiring[cov_key] = amount
-                    # Map back to display name
-                    display_names = {
-                        "property": "Property",
-                        "general_liability": "General Liability",
-                        "umbrella": "Umbrella",
-                        "workers_comp": "Workers Comp",
-                        "commercial_auto": "Commercial Auto"
-                    }
-                    parsed.append(f"\u2022 {display_names.get(cov_key, cov_key)}: ${amount:,.0f}")
-                    i += 2
-                    continue
-                except ValueError:
-                    errors.append(f"Invalid amount for {token_lower}: {tokens[i + 1]}")
-                    i += 2
-                    continue
-            else:
-                errors.append(f"Missing amount for {token_lower}")
-                i += 1
-                continue
-        else:
-            errors.append(f"Unknown coverage: {tokens[i]}")
+    if has_header:
+        # Rich multi-line format
+        expiring_premiums, expiring_details, parsed_summary = _parse_expiring_block(raw_text)
+    else:
+        # Simple inline format: property 60000 gl 50000
+        simple_map = {
+            "property": "property", "prop": "property",
+            "gl": "general_liability", "liability": "general_liability",
+            "umbrella": "umbrella", "umb": "umbrella", "excess": "umbrella",
+            "wc": "workers_comp", "workers": "workers_comp", "comp": "workers_comp",
+            "auto": "commercial_auto",
+            "flood": "flood", "epli": "epli", "cyber": "cyber",
+        }
+        simple_display = {
+            "property": "Property", "general_liability": "General Liability",
+            "umbrella": "Umbrella", "workers_comp": "Workers Comp",
+            "commercial_auto": "Commercial Auto", "flood": "Flood",
+            "epli": "EPLI", "cyber": "Cyber",
+        }
+        tokens = raw_text.replace(",", "").replace("$", "").split()
+        expiring_premiums = {}
+        expiring_details = {}
+        parsed_summary = []
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i].lower()
+            if tok in simple_map:
+                cov_key = simple_map[tok]
+                if i + 1 < len(tokens):
+                    try:
+                        amount = float(tokens[i + 1])
+                        expiring_premiums[cov_key] = amount
+                        parsed_summary.append(
+                            f"\u2022 **{simple_display.get(cov_key, cov_key)}**: ${amount:,.0f}"
+                        )
+                        i += 2
+                        continue
+                    except ValueError:
+                        pass
             i += 1
     
-    if not parsed and not errors:
+    if not expiring_premiums:
         await update.message.reply_text(
-            "Could not parse expiring premiums. Use format:\n"
-            "`/expiring property 60000 gl 50000`",
+            "\u26a0\ufe0f Could not parse any expiring premiums.\n\n"
+            "Make sure each coverage section has a `Premium: $XX,XXX` line.\n"
+            "Or use simple format: `/expiring property 60000 gl 50000`",
             parse_mode="Markdown"
         )
         if session.extracted_data:
@@ -744,19 +880,30 @@ async def set_expiring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     
     # Store in session data
     if not session.extracted_data:
-        session.extracted_data = {"expiring_premiums": expiring}
+        session.extracted_data = {
+            "expiring_premiums": expiring_premiums,
+            "expiring_details": expiring_details
+        }
     else:
-        session.extracted_data["expiring_premiums"] = expiring
+        session.extracted_data["expiring_premiums"] = expiring_premiums
+        session.extracted_data["expiring_details"] = expiring_details
     
     # Build response
-    response = "\u2705 **Expiring Premiums Set**\n\n"
-    if parsed:
-        response += "\n".join(parsed) + "\n"
-    if errors:
-        response += "\n\u26a0\ufe0f Warnings:\n" + "\n".join(errors) + "\n"
+    response = "\u2705 **Expiring Program Set**\n\n"
+    response += "\n".join(parsed_summary) + "\n"
     
-    # Show total
-    total_exp = sum(v for v in expiring.values() if isinstance(v, (int, float)))
+    # Show details for rich format
+    if expiring_details:
+        for cov_key, entry in expiring_details.items():
+            if entry.get("notes"):
+                display = {
+                    "property": "Property", "general_liability": "GL",
+                    "umbrella": "Umbrella", "workers_comp": "WC",
+                    "commercial_auto": "Auto", "flood": "Flood",
+                }.get(cov_key, cov_key)
+                response += f"  \ud83d\udcac {display}: {entry['notes']}\n"
+    
+    total_exp = sum(v for v in expiring_premiums.values() if isinstance(v, (int, float)))
     response += f"\n**Total Expiring: ${total_exp:,.0f}**\n\n"
     
     if session.extracted_data and session.extracted_data.get("coverages"):
