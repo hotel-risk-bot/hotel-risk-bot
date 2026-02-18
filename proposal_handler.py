@@ -44,6 +44,7 @@ class ProposalSession:
         self.chat_id = chat_id
         self.uploaded_files = []  # List of (filename, local_path, file_type)
         self.extracted_data = None
+        self.processed_files = set()  # Track which files have been extracted
         self.created_at = datetime.now()
         self.work_dir = tempfile.mkdtemp(prefix="proposal_")
     
@@ -208,8 +209,88 @@ async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return WAITING_FOR_FILES
 
 
+def _merge_extraction_results(existing: dict, new_data: dict) -> dict:
+    """Merge extraction results from multiple PDFs into a single data structure.
+    
+    Each PDF is extracted individually. This function merges the coverages,
+    locations, named insureds, etc. from each extraction into one unified result.
+    New coverages are added; existing coverages are NOT overwritten.
+    Client info is merged (fill in blanks from new data).
+    """
+    if not existing:
+        return new_data
+    if not new_data or "error" in new_data:
+        return existing
+    
+    merged = json.loads(json.dumps(existing))  # Deep copy
+    
+    # Merge client_info - fill in blanks
+    existing_ci = merged.get("client_info", {})
+    new_ci = new_data.get("client_info", {})
+    for key, val in new_ci.items():
+        if val and val != "N/A" and (not existing_ci.get(key) or existing_ci.get(key) == "N/A"):
+            existing_ci[key] = val
+    merged["client_info"] = existing_ci
+    
+    # Merge coverages - add new coverage types, don't overwrite existing
+    existing_covs = merged.get("coverages", {})
+    new_covs = new_data.get("coverages", {})
+    for cov_key, cov_data in new_covs.items():
+        if cov_key not in existing_covs:
+            existing_covs[cov_key] = cov_data
+            logger.info(f"Merged new coverage: {cov_key} from {cov_data.get('carrier', 'unknown')}")
+        else:
+            logger.info(f"Coverage {cov_key} already exists, keeping existing")
+    merged["coverages"] = existing_covs
+    
+    # Merge locations - add new ones (avoid duplicates by address)
+    existing_locs = merged.get("locations", [])
+    existing_addrs = {loc.get("address", "").upper() for loc in existing_locs}
+    for loc in new_data.get("locations", []):
+        addr = loc.get("address", "").upper()
+        if addr and addr not in existing_addrs:
+            existing_locs.append(loc)
+            existing_addrs.add(addr)
+    merged["locations"] = existing_locs
+    
+    # Merge named insureds - add unique ones
+    existing_named = set(merged.get("named_insureds", []))
+    for ni in new_data.get("named_insureds", []):
+        existing_named.add(ni)
+    merged["named_insureds"] = list(existing_named)
+    
+    # Merge additional interests
+    existing_ai = merged.get("additional_interests", [])
+    existing_ai_names = {ai.get("name_address", "") for ai in existing_ai}
+    for ai in new_data.get("additional_interests", []):
+        if ai.get("name_address", "") not in existing_ai_names:
+            existing_ai.append(ai)
+    merged["additional_interests"] = existing_ai
+    
+    # Merge expiring premiums - fill in zeros
+    existing_exp = merged.get("expiring_premiums", {})
+    new_exp = new_data.get("expiring_premiums", {})
+    for key, val in new_exp.items():
+        if val and val != 0 and (not existing_exp.get(key) or existing_exp.get(key) == 0):
+            existing_exp[key] = val
+    merged["expiring_premiums"] = existing_exp
+    
+    # Merge payment options
+    existing_pay = merged.get("payment_options", [])
+    for po in new_data.get("payment_options", []):
+        existing_pay.append(po)
+    merged["payment_options"] = existing_pay
+    
+    return merged
+
+
 async def extract_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Process uploaded files and extract insurance data."""
+    """Process uploaded files and extract insurance data.
+    
+    Each PDF is processed individually with its own GPT call, then results
+    are merged. This prevents large PDFs from overwhelming smaller ones.
+    Only processes files that haven't been extracted yet.
+    """
     logger.info(f"extract_data called by user {update.effective_user.id}")
     chat_id = update.effective_chat.id
     session = get_session(chat_id)
@@ -222,62 +303,108 @@ async def extract_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         await update.message.reply_text("No files uploaded yet. Please upload at least one quote document.")
         return WAITING_FOR_FILES
     
+    # Find files that haven't been processed yet
+    new_files = [f for f in session.uploaded_files if f["filename"] not in session.processed_files]
+    
+    if not new_files and session.extracted_data:
+        await update.message.reply_text(
+            "All files have already been extracted.\n"
+            "Upload more files or send /generate to create the proposal."
+        )
+        return REVIEWING_EXTRACTION
+    
+    # If no new files but also no extracted data, process all files
+    if not new_files:
+        new_files = session.uploaded_files
+    
     await update.message.reply_text(
-        f"⏳ **Processing {len(session.uploaded_files)} file(s)...**\n\n"
-        f"Extracting text, analyzing coverages, and structuring data.\n"
-        f"This may take 1-2 minutes.",
+        f"⏳ **Processing {len(new_files)} file(s) individually...**\n\n"
+        f"Each document is extracted separately for accuracy.\n"
+        f"This may take 1-2 minutes per file.",
         parse_mode="Markdown"
     )
     
     try:
         extractor = ProposalExtractor()
         
-        # Extract text from all files
-        all_texts = []
-        excel_data = []
-        
-        for file_info in session.uploaded_files:
+        for file_info in new_files:
+            filename = file_info["filename"]
+            logger.info(f"Processing file individually: {filename}")
+            
             if file_info["file_type"] == "pdf":
                 text = extractor.extract_pdf_text(file_info["local_path"])
-                logger.info(f"PDF '{file_info['filename']}': extracted {len(text)} chars")
+                logger.info(f"PDF '{filename}': extracted {len(text)} chars")
+                
                 if not text:
-                    logger.warning(f"No text extracted from PDF: {file_info['filename']}")
-                all_texts.append({
-                    "filename": file_info["filename"],
-                    "text": text
-                })
+                    logger.warning(f"No text extracted from PDF: {filename}")
+                    await update.message.reply_text(f"⚠️ Could not extract text from: {filename}")
+                    session.processed_files.add(filename)
+                    continue
+                
+                # Extract this single PDF with GPT
+                pdf_texts = [{"filename": filename, "text": text}]
+                file_data = await asyncio.to_thread(
+                    extractor.structure_insurance_data,
+                    pdf_texts,
+                    [],
+                    session.client_name
+                )
+                
+                if "error" in file_data:
+                    logger.error(f"Extraction error for {filename}: {file_data['error']}")
+                    await update.message.reply_text(f"⚠️ Error extracting {filename}: {file_data['error']}")
+                else:
+                    # Log what was found in this file
+                    covs_found = list(file_data.get('coverages', {}).keys())
+                    logger.info(f"File '{filename}' coverages: {covs_found}")
+                    for key in covs_found:
+                        cov = file_data['coverages'][key]
+                        logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, "
+                                   f"total_premium={cov.get('total_premium', 0)}")
+                    
+                    # Merge with existing data
+                    session.extracted_data = _merge_extraction_results(
+                        session.extracted_data, file_data
+                    )
+                    
+                    await update.message.reply_text(
+                        f"✅ **{filename}** — found: {', '.join(covs_found) if covs_found else 'no coverages'}"
+                    )
+                
             elif file_info["file_type"] in ["excel", "csv"]:
                 data = extractor.extract_excel_data(file_info["local_path"])
-                excel_data.append({
-                    "filename": file_info["filename"],
-                    "data": data
-                })
+                excel_data = [{"filename": filename, "data": data}]
+                file_data = await asyncio.to_thread(
+                    extractor.structure_insurance_data,
+                    [],
+                    excel_data,
+                    session.client_name
+                )
+                if "error" not in file_data:
+                    session.extracted_data = _merge_extraction_results(
+                        session.extracted_data, file_data
+                    )
+            
+            session.processed_files.add(filename)
         
-        # Use GPT to structure the data
-        structured_data = await asyncio.to_thread(
-            extractor.structure_insurance_data,
-            all_texts,
-            excel_data,
-            session.client_name
-        )
+        # Final check
+        if not session.extracted_data:
+            await update.message.reply_text(
+                "❌ Could not extract data from any files.\n"
+                "Please check your documents and try again."
+            )
+            return WAITING_FOR_FILES
         
-        session.extracted_data = structured_data
-        
-        # Log extraction results
-        if "error" in structured_data:
-            logger.error(f"Extraction returned error: {structured_data['error']}")
-        else:
-            coverages_found = list(structured_data.get('coverages', {}).keys())
-            logger.info(f"Extraction successful. Coverages found: {coverages_found}")
-            for key in coverages_found:
-                cov = structured_data['coverages'][key]
-                logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, "
-                           f"premium={cov.get('premium', 0)}, "
-                           f"total_premium={cov.get('total_premium', 0)}, "
-                           f"limits={len(cov.get('limits', []))} items")
+        # Log final merged results
+        coverages_found = list(session.extracted_data.get('coverages', {}).keys())
+        logger.info(f"Final merged extraction. Coverages: {coverages_found}")
+        for key in coverages_found:
+            cov = session.extracted_data['coverages'][key]
+            logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, "
+                       f"total_premium={cov.get('total_premium', 0)}")
         
         # Build verification summary
-        summary = build_verification_summary(structured_data)
+        summary = build_verification_summary(session.extracted_data)
         
         await safe_reply(update,
             f"📊 **Extraction Complete — Verification Checkpoint**\n\n"
