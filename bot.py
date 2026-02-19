@@ -1797,8 +1797,8 @@ async def marketing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Ã¢ÂÂÃ¢ÂÂ Daily Briefing Command (manual trigger) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
-async def marketing_wtx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /marketing_wtx - Get marketing summary with taxes & fees (Premium Tx)."""
+async def marketingtx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /marketingtx - Get marketing summary with taxes & fees (Premium Tx)."""
     if not HAS_MARKETING:
         await update.message.reply_text("Marketing summary module not available.")
         return
@@ -1806,13 +1806,13 @@ async def marketing_wtx_command(update: Update, context: ContextTypes.DEFAULT_TY
     if not context.args:
         await update.message.reply_text(
             "📊 *Marketing Summary (w/ Taxes & Fees)*\n\n"
-            "Usage: `/marketing_wtx Client Name`\n\n"
+            "Usage: `/marketingtx Client Name`\n\n"
             "Same as /marketing but shows *Premium Tx* (total premium\n"
             "including taxes, fees & surcharges) instead of Base Premium.\n\n"
             "Examples:\n"
-            "• `/marketing_wtx Triton Hospitality`\n"
-            "• `/marketing_wtx Ocean Partners`\n"
-            "• `/marketing_wtx Premier Resorts`",
+            "• `/marketingtx Triton Hospitality`\n"
+            "• `/marketingtx Ocean Partners`\n"
+            "• `/marketingtx Premier Resorts`",
             parse_mode="Markdown",
         )
         return
@@ -2041,7 +2041,7 @@ def main():
 
     # Marketing summary
     app.add_handler(CommandHandler("marketing", marketing_command))
-    app.add_handler(CommandHandler("marketing_wtx", marketing_wtx_command))
+    app.add_handler(CommandHandler("marketingtx", marketingtx_command))
 
     # Manual briefing/debrief triggers
     app.add_handler(CommandHandler("briefing", briefing_command))
