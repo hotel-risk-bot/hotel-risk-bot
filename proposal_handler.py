@@ -96,10 +96,24 @@ def clear_session(chat_id: int):
 
 
 async def safe_reply(update: Update, text: str, **kwargs):
-    """Send a message, splitting if too long for Telegram's 4096 char limit."""
+    """Send a message, splitting if too long for Telegram's 4096 char limit.
+    Falls back to plain text if Markdown parsing fails."""
     MAX_LEN = 4000
+
+    async def _send_chunk(chunk_text, **kw):
+        try:
+            await update.message.reply_text(chunk_text, **kw)
+        except Exception as e:
+            if "parse entities" in str(e).lower() or "can't parse" in str(e).lower():
+                logger.warning(f"Markdown send failed in safe_reply: {e}, retrying plain")
+                plain_kw = {k: v for k, v in kw.items() if k != 'parse_mode'}
+                plain = chunk_text.replace('*', '').replace('_', '').replace('`', '')
+                await update.message.reply_text(plain, **plain_kw)
+            else:
+                raise
+
     if len(text) <= MAX_LEN:
-        await update.message.reply_text(text, **kwargs)
+        await _send_chunk(text, **kwargs)
         return
     
     # Split at line breaks
@@ -108,12 +122,12 @@ async def safe_reply(update: Update, text: str, **kwargs):
     for line in lines:
         if len(chunk) + len(line) + 1 > MAX_LEN:
             if chunk:
-                await update.message.reply_text(chunk, **kwargs)
+                await _send_chunk(chunk, **kwargs)
             chunk = line
         else:
             chunk = chunk + "\n" + line if chunk else line
     if chunk:
-        await update.message.reply_text(chunk, **kwargs)
+        await _send_chunk(chunk, **kwargs)
 
 
 # ─── Command Handlers ─────────────────────────────────────────
@@ -124,7 +138,7 @@ async def proposal_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     logger.info(f"Raw message text: {update.message.text}")
     args = context.args
     if not args:
-        await update.message.reply_text(
+        await safe_reply(update,
             "Please provide a client name.\n\n"
             "Usage: `/proposal Client Name`\n"
             "Example: `/proposal RAR Elite Management Inc`",
@@ -142,9 +156,9 @@ async def proposal_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     session = ProposalSession(client_name, chat_id)
     proposal_sessions[chat_id] = session
     
-    await update.message.reply_text(
+    await safe_reply(update,
         f"📋 **New Proposal Session Started**\n\n"
-        f"**Client:** {client_name}\n\n"
+        f"**Client:** {_escape_md(client_name)}\n\n"
         f"Please upload your insurance quote documents:\n"
         f"• Property quote (PDF)\n"
         f"• General Liability quote (PDF)\n"
@@ -210,7 +224,7 @@ async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         unprocessed = len([f for f in session.uploaded_files if f['filename'] not in session.processed_files])
         extract_hint = f"\n\n\U0001f4cc **{unprocessed} new file(s)** ready for extraction. Send /extract to process." if unprocessed > 0 and session.extracted_data else ""
         safe_fn = _escape_md(filename)
-        await update.message.reply_text(
+        await safe_reply(update,
             f"\u2705 Received: **{safe_fn}** ({file_type.upper()})\n\n"
             f"**Files uploaded ({file_count}):**\n{session.get_file_summary(escape_md=True)}"
             f"{extract_hint}\n\n"
@@ -333,7 +347,7 @@ async def extract_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if not new_files:
         new_files = session.uploaded_files
     
-    await update.message.reply_text(
+    await safe_reply(update,
         f"⏳ **Processing {len(new_files)} file(s) individually...**\n\n"
         f"Each document is extracted separately for accuracy.\n"
         f"This may take 1-2 minutes per file.",
@@ -383,8 +397,9 @@ async def extract_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
                         session.extracted_data, file_data
                     )
                     
-                    await update.message.reply_text(
-                        f"\u2705 **{_escape_md(filename)}** \u2014 found: {', '.join(covs_found) if covs_found else 'no coverages'}",
+                    covs_display = [c.replace('_', ' ') for c in covs_found]
+                    await safe_reply(update,
+                        f"\u2705 **{_escape_md(filename)}** \u2014 found: {', '.join(covs_display) if covs_display else 'no coverages'}",
                         parse_mode="Markdown"
                     )
                 
@@ -658,7 +673,7 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     logger.info(f"Full extracted_data top-level keys: {list(session.extracted_data.keys())}")
     logger.info(f"Full extracted_data: {session.extracted_data}"[:2000])
     
-    await update.message.reply_text(
+    await safe_reply(update,
         "📝 **Generating proposal document...**\n\n"
         "Creating branded DOCX with all coverage sections, compliance pages, and signature blocks.\n"
         "This may take a moment.",
@@ -945,7 +960,7 @@ async def set_expiring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             i += 1
     
     if not expiring_premiums:
-        await update.message.reply_text(
+        await safe_reply(update,
             "\u26a0\ufe0f Could not parse any expiring premiums.\n\n"
             "Make sure each coverage section has a `Premium: $XX,XXX` line.\n"
             "Or use simple format: `/expiring property 60000 gl 50000`",
@@ -991,7 +1006,7 @@ async def set_expiring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     else:
         response += "Upload quote documents and send /extract to continue."
     
-    await update.message.reply_text(response, parse_mode="Markdown")
+    await safe_reply(update, response, parse_mode="Markdown")
     
     if session.extracted_data and session.extracted_data.get("coverages"):
         return REVIEWING_EXTRACTION
@@ -1061,7 +1076,7 @@ async def receive_expiring_text(update: Update, context: ContextTypes.DEFAULT_TY
             i += 1
     
     if not expiring_premiums:
-        await update.message.reply_text(
+        await safe_reply(update,
             "\u26a0\ufe0f Could not parse any expiring premiums.\n\n"
             "Make sure each coverage section has a `Premium: $XX,XXX` line.\n"
             "Or use simple format: `property 60000 gl 50000`\n\n"
@@ -1105,7 +1120,7 @@ async def receive_expiring_text(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         response += "Upload quote documents and send /extract to continue."
     
-    await update.message.reply_text(response, parse_mode="Markdown")
+    await safe_reply(update, response, parse_mode="Markdown")
     
     if session.extracted_data and session.extracted_data.get("coverages"):
         return REVIEWING_EXTRACTION
@@ -1141,7 +1156,7 @@ async def proposal_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"**Data extracted:** {'Yes' if session.extracted_data else 'No'}",
     ]
     
-    await update.message.reply_text("\n".join(status_lines), parse_mode="Markdown")
+    await safe_reply(update, "\n".join(status_lines), parse_mode="Markdown")
 
 
 def get_proposal_conversation_handler() -> ConversationHandler:
