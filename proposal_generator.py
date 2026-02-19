@@ -264,7 +264,7 @@ def add_subsection_header(doc, text):
 
 
 def create_styled_table(doc, headers, rows, col_widths=None, header_size=10, body_size=10,
-                        total_width=7.5):
+                        total_width=7.5, col_alignments=None):
     """Create a table with HUB styling: Electric Blue header, alternating rows.
     
     Args:
@@ -275,6 +275,7 @@ def create_styled_table(doc, headers, rows, col_widths=None, header_size=10, bod
         header_size: Font size for header row (default 10pt)
         body_size: Font size for body rows (default 10pt)
         total_width: Total table width in inches (default 7.5)
+        col_alignments: List of WD_ALIGN_PARAGRAPH values per column. If None, all left-aligned.
     """
     table = doc.add_table(rows=1 + len(rows), cols=len(headers))
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -332,6 +333,9 @@ def create_styled_table(doc, headers, rows, col_widths=None, header_size=10, bod
             run.font.name = "Calibri"
             set_cell_width(cell, col_widths[col_idx] if col_idx < len(col_widths) else 1.0)
             set_cell_vertical_alignment(cell, "center")
+            # Apply column alignment if specified
+            if col_alignments and col_idx < len(col_alignments) and col_alignments[col_idx]:
+                p.alignment = col_alignments[col_idx]
             # Alternating row colors
             if row_idx % 2 == 1:
                 set_cell_shading(cell, EGGSHELL_HEX)
@@ -407,7 +411,7 @@ def add_page_break(doc):
     # Add invisible spacer paragraph - Word won't suppress this
     spacer = doc.add_paragraph()
     spacer.paragraph_format.space_before = Pt(0)
-    spacer.paragraph_format.space_after = Pt(24)
+    spacer.paragraph_format.space_after = Pt(12)
     spacer.paragraph_format.line_spacing = Pt(2)
     run = spacer.add_run()
     run.font.size = Pt(2)
@@ -744,13 +748,19 @@ def generate_premium_summary(doc, data):
     
     table = create_styled_table(doc, headers, rows,
                                col_widths=[1.2, 2.0, 1.0, 1.0, 1.0, 0.8],
-                               header_size=10, body_size=10)
+                               header_size=10, body_size=10,
+                               col_alignments=[None, None, WD_ALIGN_PARAGRAPH.RIGHT,
+                                               WD_ALIGN_PARAGRAPH.RIGHT, WD_ALIGN_PARAGRAPH.RIGHT,
+                                               WD_ALIGN_PARAGRAPH.RIGHT])
     
     # Bold and shade the total row
     last_row = table.rows[-1]
-    for cell in last_row.cells:
+    for col_idx, cell in enumerate(last_row.cells):
         set_cell_shading(cell, ELECTRIC_BLUE_HEX)
         for p in cell.paragraphs:
+            # Right-align numeric columns (indices 2-5)
+            if col_idx >= 2:
+                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
             for run in p.runs:
                 run.font.bold = True
                 run.font.color.rgb = WHITE
