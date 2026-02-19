@@ -665,7 +665,10 @@ def generate_premium_summary(doc, data):
         "commercial_auto": "Commercial Auto",
         "flood": "Flood",
         "epli": "EPLI",
-        "cyber": "Cyber"
+        "cyber": "Cyber",
+        "terrorism": "Terrorism / TRIA",
+        "crime": "Crime",
+        "inland_marine": "Inland Marine"
     }
     
     headers = ["Coverage", "Carrier", "Expiring", "Proposed", "$ Change", "% Change"]
@@ -945,10 +948,21 @@ def generate_locations(doc, data):
         sov_locs = sov_data["locations"]
         headers = ["#", "Property Name", "Address", "City", "ST", "Rooms", "Yr Built", "Construction", "TIV"]
         rows = []
-        for i, loc in enumerate(sov_locs, 1):
+        loc_num = 0
+        
+        # Build set of SOV addresses for dedup
+        sov_addresses = set()
+        for loc in sov_locs:
+            addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
+                       _normalize_addr(loc.get("city", "")) + "|" +
+                       loc.get("state", "").strip().upper())
+            sov_addresses.add(addr_key)
+        
+        for loc in sov_locs:
+            loc_num += 1
             name = loc.get("dba") or loc.get("hotel_flag") or loc.get("corporate_name", "")
             rows.append([
-                str(i),
+                str(loc_num),
                 name,
                 loc.get("address", ""),
                 loc.get("city", ""),
@@ -958,6 +972,26 @@ def generate_locations(doc, data):
                 loc.get("construction_type", ""),
                 fmt_currency(loc.get("tiv", 0)) if loc.get("tiv") else ""
             ])
+        
+        # Merge non-SOV locations from extracted data (e.g., vacant land, liability-only locations)
+        for loc in locations:
+            addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
+                       _normalize_addr(loc.get("city", "")) + "|" +
+                       loc.get("state", "").strip().upper())
+            if addr_key not in sov_addresses and loc.get("address"):
+                loc_num += 1
+                desc = loc.get("description", "")
+                rows.append([
+                    str(loc_num),
+                    desc or loc.get("corporate_entity", ""),
+                    loc.get("address", ""),
+                    loc.get("city", ""),
+                    loc.get("state", ""),
+                    "",  # no rooms for non-hotel locations
+                    "",  # no year built
+                    "",  # no construction type
+                    ""   # no TIV
+                ])
         
         # Add totals row
         totals = sov_data.get("totals", {})
@@ -1086,8 +1120,8 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         create_styled_table(doc, headers, rows,
                           col_widths=[0.3, 2.2, 1.2, 1.0, 1.0, 1.3],
                           header_size=9, body_size=8,
-                          col_alignments={2: WD_ALIGN_PARAGRAPH.RIGHT, 3: WD_ALIGN_PARAGRAPH.RIGHT,
-                                         4: WD_ALIGN_PARAGRAPH.RIGHT, 5: WD_ALIGN_PARAGRAPH.RIGHT})
+                          col_alignments={2: WD_ALIGN_PARAGRAPH.CENTER, 3: WD_ALIGN_PARAGRAPH.CENTER,
+                                         4: WD_ALIGN_PARAGRAPH.CENTER, 5: WD_ALIGN_PARAGRAPH.CENTER})
     elif sov_from_quote:
         add_subsection_header(doc, "Schedule of Values")
         headers = ["Location", "Building", "Contents", "BI/Rents", "TIV"]
@@ -1660,6 +1694,18 @@ def generate_proposal(data: dict, output_path: str) -> str:
         generate_coverage_section(doc, data, "commercial_auto", "Commercial Auto Coverage")
     if "umbrella" in coverages:
         generate_coverage_section(doc, data, "umbrella", "Umbrella / Excess Liability Coverage")
+    if "cyber" in coverages:
+        generate_coverage_section(doc, data, "cyber", "Cyber Liability Coverage")
+    if "epli" in coverages:
+        generate_coverage_section(doc, data, "epli", "Employment Practices Liability (EPLI) Coverage")
+    if "flood" in coverages:
+        generate_coverage_section(doc, data, "flood", "Flood Coverage")
+    if "terrorism" in coverages:
+        generate_coverage_section(doc, data, "terrorism", "Terrorism / TRIA Coverage")
+    if "crime" in coverages:
+        generate_coverage_section(doc, data, "crime", "Crime Coverage")
+    if "inland_marine" in coverages:
+        generate_coverage_section(doc, data, "inland_marine", "Inland Marine Coverage")
     
     # Part 3: Signature Pages
     generate_confirmation_to_bind(doc, data)

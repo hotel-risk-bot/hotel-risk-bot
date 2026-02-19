@@ -675,7 +675,13 @@ def format_verification_message(data: dict) -> str:
             "general_liability": "General Liability",
             "umbrella": "Umbrella",
             "workers_comp": "Workers Comp",
-            "commercial_auto": "Commercial Auto"
+            "commercial_auto": "Commercial Auto",
+            "cyber": "Cyber",
+            "epli": "EPLI",
+            "flood": "Flood",
+            "terrorism": "Terrorism / TRIA",
+            "crime": "Crime",
+            "inland_marine": "Inland Marine"
         }
 
         for key, display_name in coverage_names.items():
@@ -700,7 +706,10 @@ def format_verification_message(data: dict) -> str:
     # Coverage Details
     for key, display_name in [("property", "PROPERTY"), ("general_liability", "GENERAL LIABILITY"),
                                ("umbrella", "UMBRELLA"), ("workers_comp", "WORKERS COMP"),
-                               ("commercial_auto", "COMMERCIAL AUTO")]:
+                               ("commercial_auto", "COMMERCIAL AUTO"), ("cyber", "CYBER"),
+                               ("epli", "EPLI"), ("flood", "FLOOD"),
+                               ("terrorism", "TERRORISM / TRIA"), ("crime", "CRIME"),
+                               ("inland_marine", "INLAND MARINE")]:
         cov = coverages.get(key)
         if not cov:
             continue
