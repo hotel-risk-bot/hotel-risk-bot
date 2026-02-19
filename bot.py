@@ -171,12 +171,9 @@ async def safe_reply(update, text, parse_mode=None):
 # Ã¢ÂÂÃ¢ÂÂ Telegram Helpers Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 def escape_telegram_dollars(text: str) -> str:
-    """Escape dollar signs to prevent Telegram from rendering them as LaTeX.
-    Telegram treats $...$ as inline math. We escape $ to prevent this."""
-    if not text:
-        return text
-    # Replace $ with escaped version to prevent LaTeX rendering
-    return text.replace("$", "\\$")
+    """No-op: Telegram Markdown v1 does not support LaTeX.
+    Dollar signs display correctly without escaping."""
+    return text or ""
 
 
 async def safe_reply_text(message, text: str, parse_mode: str = None, **kwargs):
@@ -191,7 +188,7 @@ async def safe_reply_text(message, text: str, parse_mode: str = None, **kwargs):
         try:
             # Remove markdown formatting and try plain text
             plain = text.replace("*", "").replace("_", "").replace("`", "")
-            plain = plain.replace("\\$", "$")  # Restore escaped dollars for plain text
+            # plain text fallback - no dollar escaping needed
             await message.reply_text(plain)
         except Exception as e2:
             logger.error(f"Plain text send also failed: {e2}")

@@ -336,8 +336,13 @@ def create_styled_table(doc, headers, rows, col_widths=None, header_size=10, bod
             set_cell_width(cell, col_widths[col_idx] if col_idx < len(col_widths) else 1.0)
             set_cell_vertical_alignment(cell, "center")
             # Apply column alignment if specified
-            if col_alignments and col_idx < len(col_alignments) and col_alignments[col_idx]:
-                p.alignment = col_alignments[col_idx]
+            if col_alignments:
+                if isinstance(col_alignments, dict):
+                    if col_idx in col_alignments and col_alignments[col_idx]:
+                        p.alignment = col_alignments[col_idx]
+                elif isinstance(col_alignments, (list, tuple)):
+                    if col_idx < len(col_alignments) and col_alignments[col_idx]:
+                        p.alignment = col_alignments[col_idx]
             # Alternating row colors
             if row_idx % 2 == 1:
                 set_cell_shading(cell, EGGSHELL_HEX)
