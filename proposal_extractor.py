@@ -458,6 +458,9 @@ The JSON structure should be:
         {{"description": "Medical Payments", "limit": "$X"}}
       ],
       "aggregate_applies": "Per Location or Per Policy",
+      "schedule_of_classes": [
+        {{"location": "Loc 1 - Address or Name", "classification": "Hotels/Motels", "class_code": "XXXXX", "exposure_basis": "Sales/Revenue/Area/Units", "exposure": "$X or number", "premium": "$X"}}
+      ],
       "additional_coverages": [
         {{"description": "Coverage name", "limit": "$X", "deductible": "$X"}}
       ],
@@ -554,7 +557,8 @@ IMPORTANT:
 - Only include coverage sections that appear in the documents
 - Extract EVERY form number and endorsement exactly as written
 - Include form dates (e.g., "06/07" in "CP 00 10 06/07")
-- For total_premium: Use the "Total Cost of Policy" or "Total Policy Premium" figure if shown on the quote. This is the all-in number including base premium + broker fees + surplus lines tax + stamping fee + fire marshal tax + any other taxes/fees. If not shown, calculate total_premium = premium + taxes_fees
+- For total_premium: This MUST be the all-in out-the-door number. Look for "Total Cost of Policy", "Total Policy Premium", "Total Due", "Grand Total", or any final total line. It includes base premium + broker fees + surplus lines tax + stamping fee + fire marshal tax + inspection fees + FSLSO fees + EMPA surcharge + any other taxes/fees/surcharges. If no single total line exists, calculate total_premium = premium + taxes_fees. CRITICAL: total_premium must ALWAYS be >= premium. If the quote shows separate line items for taxes and fees, ADD them to the base premium to get total_premium
+- For GL schedule_of_classes: Extract the location-by-location exposure schedule showing each location's classification, exposure basis (sales/revenue/area/units/acres), and exposure amount. Include vacant land and all non-hotel locations
 - ALWAYS preserve cents in premium amounts (e.g., $60,513.35 not $60,513)
 - Mark excluded coverages explicitly
 - For Property: ALWAYS include Flood and Earthquake rows even if excluded
@@ -618,9 +622,37 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
         data = json.loads(result_text)
         logger.info(f"GPT extraction successful. Coverages found: {list(data.get('coverages', {}).keys())}")
 
-        # Log coverage details
+        # Validate and fix total_premium for each coverage
         for key, cov in data.get("coverages", {}).items():
-            logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, premium={cov.get('premium', 0)}, total={cov.get('total_premium', 0)}")
+            premium = cov.get("premium", 0) or 0
+            taxes_fees = cov.get("taxes_fees", 0) or 0
+            total_premium = cov.get("total_premium", 0) or 0
+            
+            # Ensure numeric types
+            if isinstance(premium, str):
+                try: premium = float(str(premium).replace(",", "").replace("$", ""))
+                except: premium = 0
+            if isinstance(taxes_fees, str):
+                try: taxes_fees = float(str(taxes_fees).replace(",", "").replace("$", ""))
+                except: taxes_fees = 0
+            if isinstance(total_premium, str):
+                try: total_premium = float(str(total_premium).replace(",", "").replace("$", ""))
+                except: total_premium = 0
+            
+            # Fallback: if total_premium is less than premium, recalculate
+            if total_premium < premium and taxes_fees > 0:
+                corrected = premium + taxes_fees
+                logger.warning(f"  {key}: total_premium ({total_premium}) < premium ({premium}). "
+                             f"Correcting to premium + taxes_fees = {corrected}")
+                cov["total_premium"] = corrected
+                total_premium = corrected
+            elif total_premium == 0 and premium > 0:
+                cov["total_premium"] = premium + taxes_fees
+                total_premium = cov["total_premium"]
+                logger.info(f"  {key}: total_premium was 0, set to premium + taxes_fees = {total_premium}")
+            
+            logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, premium={premium}, "
+                       f"taxes_fees={taxes_fees}, total_premium={total_premium}")
 
         return data
 

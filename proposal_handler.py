@@ -492,6 +492,7 @@ async def extract_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             f"{summary}\n\n"
             f"**Commands:**\n"
             f"• /expiring — Set expiring premiums for comparison\n"
+            f"• /override — Manually override a premium (e.g. /override UMB 15000)\n"
             f"• /generate — Accept and generate proposal\n"
             f"• /adjust [instructions] — Request changes\n"
             f"• /proposal\\_cancel — Cancel session",
@@ -541,7 +542,13 @@ def build_verification_summary(data: dict) -> str:
         "general_liability": "GENERAL LIABILITY",
         "umbrella": "UMBRELLA/EXCESS",
         "workers_comp": "WORKERS COMPENSATION",
-        "commercial_auto": "COMMERCIAL AUTO"
+        "commercial_auto": "COMMERCIAL AUTO",
+        "cyber": "CYBER",
+        "epli": "EPLI",
+        "flood": "FLOOD",
+        "terrorism": "TERRORISM / TRIA",
+        "crime": "CRIME",
+        "inland_marine": "INLAND MARINE"
     }
     
     total_premium = 0
@@ -1159,6 +1166,123 @@ async def proposal_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safe_reply(update, "\n".join(status_lines), parse_mode="Markdown")
 
 
+async def override_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Manually override the total premium for a coverage.
+    
+    Usage:
+        /override GL 44650.25
+        /override UMB 15000
+        /override CYBER 5000
+    
+    This sets the total_premium in the extracted data for the specified coverage.
+    Useful when agency commissions, fees, or taxes need to be manually added.
+    """
+    chat_id = update.effective_chat.id
+    session = get_session(chat_id)
+    
+    if not session:
+        await update.message.reply_text("No active proposal session. Start one with /proposal [Client Name]")
+        return ConversationHandler.END
+    
+    if not session.extracted_data or not session.extracted_data.get("coverages"):
+        await update.message.reply_text("No extracted data yet. Upload files and run /extract first.")
+        return REVIEWING_EXTRACTION
+    
+    raw_text = update.message.text.replace("/override", "").strip()
+    raw_text = raw_text.replace("\\$", "$")  # Strip Telegram escaped dollars
+    
+    if not raw_text:
+        # Show current premiums and usage
+        coverages = session.extracted_data.get("coverages", {})
+        lines = ["\u2139\ufe0f **Manual Premium Override**\n"]
+        lines.append("Current premiums (total w/ taxes & fees):")
+        for key, cov in coverages.items():
+            display = key.replace('_', ' ').title()
+            tp = cov.get('total_premium', 0)
+            lines.append(f"  {display}: ${tp:,.2f}" if isinstance(tp, (int, float)) else f"  {display}: {tp}")
+        lines.append("")
+        lines.append("**Usage:** `/override COVERAGE AMOUNT`")
+        lines.append("**Examples:**")
+        lines.append("`/override GL 44650.25`")
+        lines.append("`/override UMB 15000`")
+        lines.append("`/override CYBER 5000`")
+        lines.append("")
+        lines.append("**Coverage abbreviations:** PROP, GL, UMB, WC, AUTO, FLOOD, EPLI, CYBER, TERR")
+        await safe_reply(update, "\n".join(lines), parse_mode="Markdown")
+        return REVIEWING_EXTRACTION
+    
+    # Parse: COVERAGE AMOUNT
+    abbrev_map = {
+        "prop": "property", "property": "property",
+        "gl": "general_liability", "liability": "general_liability",
+        "umb": "umbrella", "umbrella": "umbrella", "excess": "umbrella",
+        "wc": "workers_comp", "workers": "workers_comp", "comp": "workers_comp",
+        "auto": "commercial_auto",
+        "flood": "flood", "epli": "epli", "cyber": "cyber",
+        "terr": "terrorism", "terrorism": "terrorism", "tria": "terrorism",
+        "crime": "crime", "inland": "inland_marine",
+    }
+    display_names = {
+        "property": "Property", "general_liability": "General Liability",
+        "umbrella": "Umbrella", "workers_comp": "Workers Comp",
+        "commercial_auto": "Commercial Auto", "flood": "Flood",
+        "epli": "EPLI", "cyber": "Cyber", "terrorism": "Terrorism/TRIA",
+        "crime": "Crime", "inland_marine": "Inland Marine",
+    }
+    
+    tokens = raw_text.replace(",", "").replace("$", "").split()
+    
+    if len(tokens) < 2:
+        await update.message.reply_text(
+            "Please provide both coverage and amount.\n"
+            "Example: /override GL 44650.25"
+        )
+        return REVIEWING_EXTRACTION
+    
+    cov_abbrev = tokens[0].lower()
+    cov_key = abbrev_map.get(cov_abbrev)
+    
+    if not cov_key:
+        await update.message.reply_text(
+            f"Unknown coverage: {tokens[0]}\n"
+            f"Valid options: PROP, GL, UMB, WC, AUTO, FLOOD, EPLI, CYBER, TERR"
+        )
+        return REVIEWING_EXTRACTION
+    
+    try:
+        amount = float(tokens[1])
+    except ValueError:
+        await update.message.reply_text(
+            f"Invalid amount: {tokens[1]}\n"
+            f"Example: /override GL 44650.25"
+        )
+        return REVIEWING_EXTRACTION
+    
+    coverages = session.extracted_data.get("coverages", {})
+    
+    if cov_key not in coverages:
+        await update.message.reply_text(
+            f"Coverage '{display_names.get(cov_key, cov_key)}' not found in extracted data.\n"
+            f"Available coverages: {', '.join(coverages.keys())}"
+        )
+        return REVIEWING_EXTRACTION
+    
+    old_premium = coverages[cov_key].get("total_premium", 0)
+    coverages[cov_key]["total_premium"] = amount
+    display = display_names.get(cov_key, cov_key)
+    
+    await safe_reply(update,
+        f"\u2705 **Premium Override Applied**\n\n"
+        f"**{display}:**\n"
+        f"  Previous: ${old_premium:,.2f}\n"
+        f"  Updated: ${amount:,.2f}\n\n"
+        f"Send /generate to create the proposal with updated premiums, "
+        f"or /override again for another coverage.",
+        parse_mode="Markdown"
+    )
+    return REVIEWING_EXTRACTION
+
+
 def get_proposal_conversation_handler() -> ConversationHandler:
     """Create and return the ConversationHandler for /proposal."""
     return ConversationHandler(
@@ -1168,6 +1292,7 @@ def get_proposal_conversation_handler() -> ConversationHandler:
                 MessageHandler(filters.Document.ALL, receive_file),
                 CommandHandler("extract", extract_data),
                 CommandHandler("expiring", set_expiring),
+                CommandHandler("override", override_premium),
                 CommandHandler("generate", generate_doc),  # Auto-extract if needed
                 CommandHandler("proposal_cancel", proposal_cancel),
             ],
@@ -1176,6 +1301,7 @@ def get_proposal_conversation_handler() -> ConversationHandler:
                 CommandHandler("generate", generate_doc),
                 CommandHandler("adjust", adjust_data),
                 CommandHandler("expiring", set_expiring),
+                CommandHandler("override", override_premium),
                 CommandHandler("extract", extract_data),  # Re-extract
                 CommandHandler("proposal_cancel", proposal_cancel),
             ],
@@ -1183,6 +1309,7 @@ def get_proposal_conversation_handler() -> ConversationHandler:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_expiring_text),
                 MessageHandler(filters.Document.ALL, receive_file),
                 CommandHandler("expiring", set_expiring),
+                CommandHandler("override", override_premium),
                 CommandHandler("extract", extract_data),
                 CommandHandler("generate", generate_doc),
                 CommandHandler("proposal_cancel", proposal_cancel),
@@ -1191,6 +1318,7 @@ def get_proposal_conversation_handler() -> ConversationHandler:
         fallbacks=[
             CommandHandler("extract", extract_data),
             CommandHandler("expiring", set_expiring),
+            CommandHandler("override", override_premium),
             CommandHandler("generate", generate_doc),
             CommandHandler("proposal_cancel", proposal_cancel),
             CommandHandler("proposal", proposal_start),  # Restart

@@ -1170,6 +1170,25 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                           col_widths=[1.5, 2.5, 0.8, 1.0, 1.2],
                           header_size=9, body_size=9)
     
+    # Schedule of Classes (GL - location exposures)
+    classes = cov.get("schedule_of_classes", [])
+    if classes:
+        add_subsection_header(doc, "Schedule of Classes")
+        headers = ["Location", "Classification", "Class Code", "Exposure Basis", "Exposure", "Premium"]
+        rows = [[
+            c.get("location", ""),
+            c.get("classification", ""),
+            c.get("class_code", ""),
+            c.get("exposure_basis", ""),
+            c.get("exposure", ""),
+            c.get("premium", "")
+        ] for c in classes]
+        from docx.enum.text import WD_ALIGN_PARAGRAPH as WD_ALIGN
+        create_styled_table(doc, headers, rows,
+                          col_widths=[1.8, 1.8, 0.8, 1.0, 1.0, 1.0],
+                          header_size=9, body_size=9,
+                          col_alignments={4: WD_ALIGN.RIGHT, 5: WD_ALIGN.RIGHT})
+    
     # Rating Basis (WC)
     rating = cov.get("rating_basis", [])
     if rating:
