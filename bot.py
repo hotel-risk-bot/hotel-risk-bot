@@ -1797,6 +1797,54 @@ async def marketing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Ã¢ÂÂÃ¢ÂÂ Daily Briefing Command (manual trigger) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
+async def marketing_wtx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /marketing_wtx - Get marketing summary with taxes & fees (Premium Tx)."""
+    if not HAS_MARKETING:
+        await update.message.reply_text("Marketing summary module not available.")
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "📊 *Marketing Summary (w/ Taxes & Fees)*\n\n"
+            "Usage: `/marketing_wtx Client Name`\n\n"
+            "Same as /marketing but shows *Premium Tx* (total premium\n"
+            "including taxes, fees & surcharges) instead of Base Premium.\n\n"
+            "Examples:\n"
+            "• `/marketing_wtx Triton Hospitality`\n"
+            "• `/marketing_wtx Ocean Partners`\n"
+            "• `/marketing_wtx Premier Resorts`",
+            parse_mode="Markdown",
+        )
+        return
+
+    client_name = " ".join(context.args)
+    await safe_reply_text(update.message, f"⏳ Generating marketing summary (w/ taxes) for *{client_name}*...", parse_mode="Markdown")
+
+    try:
+        summary = await get_marketing_summary(client_name, with_taxes=True)
+        # Split long messages
+        if len(summary) > 4000:
+            parts = []
+            while summary:
+                if len(summary) <= 4000:
+                    parts.append(summary)
+                    break
+                split_at = summary.rfind("\n", 0, 4000)
+                if split_at < 0:
+                    split_at = 4000
+                parts.append(summary[:split_at])
+                summary = summary[split_at:]
+            for part in parts:
+                await safe_reply_text(update.message, part, parse_mode="Markdown")
+        else:
+            await safe_reply_text(update.message, summary, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Error generating marketing summary (wtx): {e}")
+        await update.message.reply_text(
+            f"❌ Error generating marketing summary: {str(e)}",
+        )
+
+
 async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /briefing - Manually trigger morning briefing."""
     if not HAS_BRIEFING or not HAS_SHEETS:
@@ -1993,6 +2041,7 @@ def main():
 
     # Marketing summary
     app.add_handler(CommandHandler("marketing", marketing_command))
+    app.add_handler(CommandHandler("marketing_wtx", marketing_wtx_command))
 
     # Manual briefing/debrief triggers
     app.add_handler(CommandHandler("briefing", briefing_command))

@@ -484,8 +484,13 @@ COVERAGE_DETAIL_FUNCS = {
 # ── Build the summary ──────────────────────────────────────────────────
 
 def build_marketing_summary(policies: list, client_name: str = "",
-                             opportunity_name: str = "") -> str:
-    """Build a formatted marketing summary from policy records."""
+                             opportunity_name: str = "",
+                             with_taxes: bool = False) -> str:
+    """Build a formatted marketing summary from policy records.
+    
+    Args:
+        with_taxes: If True, use 'Premium Tx' (total w/ taxes & fees) instead of 'Base Premium'.
+    """
     if not policies:
         return f"No policies found for {client_name or opportunity_name}."
 
@@ -502,10 +507,17 @@ def build_marketing_summary(policies: list, client_name: str = "",
             insurance_co = str(insurance_co_raw).strip() if insurance_co_raw else "N/A"
 
         premium = 0
+        premium_field = "Premium Tx" if with_taxes else "Base Premium"
         try:
-            premium = float(str(flds.get("Base Premium", 0) or 0).replace("$", "").replace(",", ""))
+            premium = float(str(flds.get(premium_field, 0) or 0).replace("$", "").replace(",", ""))
         except (ValueError, TypeError):
             pass
+        # Fallback: if Premium Tx is 0/missing, try Base Premium
+        if with_taxes and premium == 0:
+            try:
+                premium = float(str(flds.get("Base Premium", 0) or 0).replace("$", "").replace(",", ""))
+            except (ValueError, TypeError):
+                pass
 
         comments = flds.get("Comments", "")
         if isinstance(comments, str) and len(comments) > 150:
@@ -539,7 +551,8 @@ def build_marketing_summary(policies: list, client_name: str = "",
 
     title = opportunity_name or client_name or "Client"
     lines = []
-    lines.append(f"📊 *Marketing Summary*")
+    premium_label = "w/ Taxes & Fees" if with_taxes else "Base Premium"
+    lines.append(f"📊 *Marketing Summary* ({premium_label})")
     lines.append(f"*{title}*")
     lines.append(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     lines.append(f"Total Policies: *{len(policies)}*")
@@ -572,7 +585,7 @@ def build_marketing_summary(policies: list, client_name: str = "",
 
         for p in policies_in_status:
             abbr = COVERAGE_ABBR.get(p["coverage_type"], p["coverage_type"][:4].upper())
-            premium_str = f"${p['premium']:,.0f}" if p['premium'] else "N/A"
+            premium_str = f"${p['premium']:,.2f}" if p['premium'] else "N/A"
             carrier_display = p["insurance_company"]
 
             lines.append(f"  *{abbr} — {carrier_display}*")
@@ -605,7 +618,7 @@ def build_marketing_summary(policies: list, client_name: str = "",
         lines.append(f"{'─' * 35}")
         for p in policies_in_status:
             abbr = COVERAGE_ABBR.get(p["coverage_type"], p["coverage_type"][:4].upper())
-            premium_str = f"${p['premium']:,.0f}" if p['premium'] else "N/A"
+            premium_str = f"${p['premium']:,.2f}" if p['premium'] else "N/A"
             lines.append(f"  *{abbr} — {p['insurance_company']}*")
             lines.append(f"    Premium: {premium_str}")
             detail_func = COVERAGE_DETAIL_FUNCS.get(p["coverage_type"])
@@ -655,11 +668,14 @@ def build_marketing_summary(policies: list, client_name: str = "",
     return "\n".join(lines)
 
 
-async def get_marketing_summary(client_name: str) -> str:
+async def get_marketing_summary(client_name: str, with_taxes: bool = False) -> str:
     """Main entry point: get marketing summary for a client/opportunity.
     
     Supports partial name matching - e.g., 'Pritchard' will find 'Pritchard Hospitality'.
     If no results found with full search term, tries individual words.
+    
+    Args:
+        with_taxes: If True, use 'Premium Tx' (total w/ taxes & fees) instead of 'Base Premium'.
     """
     logger.info(f"get_marketing_summary called for: '{client_name}'")
     
@@ -685,14 +701,14 @@ async def get_marketing_summary(client_name: str) -> str:
             policies = fetch_policies_for_client(client_name)
 
         if policies:
-            return build_marketing_summary(policies, client_name, opp_name)
+            return build_marketing_summary(policies, client_name, opp_name, with_taxes=with_taxes)
 
     # No opportunity found or no policies from opportunity - search policies directly
     logger.info(f"Trying direct policy search for '{client_name}'")
     policies = fetch_policies_for_client(client_name)
     
     if policies:
-        return build_marketing_summary(policies, client_name)
+        return build_marketing_summary(policies, client_name, with_taxes=with_taxes)
     
     # Still nothing - try searching with individual words (for partial matches)
     words = client_name.strip().split()
@@ -709,10 +725,10 @@ async def get_marketing_summary(client_name: str) -> str:
                     if policy_ids:
                         policies = fetch_policies_by_record_ids(policy_ids)
                         if policies:
-                            return build_marketing_summary(policies, client_name, opp_name)
+                            return build_marketing_summary(policies, client_name, opp_name, with_taxes=with_taxes)
                 
                 policies = fetch_policies_for_client(word)
                 if policies:
-                    return build_marketing_summary(policies, client_name)
+                    return build_marketing_summary(policies, client_name, with_taxes=with_taxes)
     
     return f"No policies found for {client_name}."
