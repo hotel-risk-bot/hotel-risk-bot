@@ -1167,14 +1167,14 @@ async def proposal_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def override_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Manually override the total premium for a coverage.
+    """Manually override the total premium for one or more coverages.
     
     Usage:
         /override GL 44650.25
-        /override UMB 15000
-        /override CYBER 5000
+        /override GL 44650.25 UMB 15000 CYBER 5000
+        /override GL 44650.25, UMB 15000, CYBER 5000
     
-    This sets the total_premium in the extracted data for the specified coverage.
+    This sets the total_premium in the extracted data for the specified coverage(s).
     Useful when agency commissions, fees, or taxes need to be manually added.
     """
     chat_id = update.effective_chat.id
@@ -1204,8 +1204,8 @@ async def override_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         lines.append("**Usage:** `/override COVERAGE AMOUNT`")
         lines.append("**Examples:**")
         lines.append("`/override GL 44650.25`")
-        lines.append("`/override UMB 15000`")
-        lines.append("`/override CYBER 5000`")
+        lines.append("`/override GL 44500 UMB 18500 CYBER 5000`")
+        lines.append("`/override GL 44500, UMB 18500, CYBER 5000`")
         lines.append("")
         lines.append("**Coverage abbreviations:** PROP, GL, UMB, WC, AUTO, FLOOD, EPLI, CYBER, TERR")
         await safe_reply(update, "\n".join(lines), parse_mode="Markdown")
@@ -1230,56 +1230,89 @@ async def override_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "crime": "Crime", "inland_marine": "Inland Marine",
     }
     
-    tokens = raw_text.replace(",", "").replace("$", "").split()
+    # Strip commas used as separators between pairs, and dollar signs
+    raw_text = raw_text.replace(",", " ").replace("$", "").strip()
+    tokens = raw_text.split()
     
     if len(tokens) < 2:
         await update.message.reply_text(
             "Please provide both coverage and amount.\n"
-            "Example: /override GL 44650.25"
-        )
-        return REVIEWING_EXTRACTION
-    
-    cov_abbrev = tokens[0].lower()
-    cov_key = abbrev_map.get(cov_abbrev)
-    
-    if not cov_key:
-        await update.message.reply_text(
-            f"Unknown coverage: {tokens[0]}\n"
-            f"Valid options: PROP, GL, UMB, WC, AUTO, FLOOD, EPLI, CYBER, TERR"
-        )
-        return REVIEWING_EXTRACTION
-    
-    try:
-        amount = float(tokens[1])
-    except ValueError:
-        await update.message.reply_text(
-            f"Invalid amount: {tokens[1]}\n"
-            f"Example: /override GL 44650.25"
+            "Example: /override GL 44650.25\n"
+            "Multiple: /override GL 44500 UMB 18500 CYBER 5000"
         )
         return REVIEWING_EXTRACTION
     
     coverages = session.extracted_data.get("coverages", {})
     
-    if cov_key not in coverages:
+    # Parse pairs: iterate tokens looking for COVERAGE AMOUNT pairs
+    results = []  # List of (display_name, old_premium, new_premium)
+    errors = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        cov_abbrev = token.lower()
+        cov_key = abbrev_map.get(cov_abbrev)
+        
+        if not cov_key:
+            # Try to see if it's a number (stray amount without coverage)
+            try:
+                float(token)
+                errors.append(f"Amount '{token}' has no coverage before it")
+            except ValueError:
+                errors.append(f"Unknown coverage: {token}")
+            i += 1
+            continue
+        
+        # Next token should be the amount
+        if i + 1 >= len(tokens):
+            errors.append(f"No amount provided for {token.upper()}")
+            i += 1
+            continue
+        
+        amount_str = tokens[i + 1]
+        try:
+            amount = float(amount_str)
+        except ValueError:
+            errors.append(f"Invalid amount for {token.upper()}: {amount_str}")
+            i += 2
+            continue
+        
+        if cov_key not in coverages:
+            errors.append(f"{display_names.get(cov_key, cov_key)} not found in extracted data")
+            i += 2
+            continue
+        
+        old_premium = coverages[cov_key].get("total_premium", 0)
+        coverages[cov_key]["total_premium"] = amount
+        display = display_names.get(cov_key, cov_key)
+        results.append((display, old_premium, amount))
+        i += 2
+    
+    if not results and errors:
         await update.message.reply_text(
-            f"Coverage '{display_names.get(cov_key, cov_key)}' not found in extracted data.\n"
-            f"Available coverages: {', '.join(coverages.keys())}"
+            "Could not process overrides:\n" + "\n".join(f"  • {e}" for e in errors) +
+            "\n\nExample: /override GL 44500 UMB 18500"
         )
         return REVIEWING_EXTRACTION
     
-    old_premium = coverages[cov_key].get("total_premium", 0)
-    coverages[cov_key]["total_premium"] = amount
-    display = display_names.get(cov_key, cov_key)
+    # Build confirmation message
+    lines = ["\u2705 **Premium Override(s) Applied**\n"]
+    for display, old_val, new_val in results:
+        lines.append(f"**{display}:**")
+        lines.append(f"  Previous: ${old_val:,.2f}")
+        lines.append(f"  Updated: ${new_val:,.2f}")
+        lines.append("")
     
-    await safe_reply(update,
-        f"\u2705 **Premium Override Applied**\n\n"
-        f"**{display}:**\n"
-        f"  Previous: ${old_premium:,.2f}\n"
-        f"  Updated: ${amount:,.2f}\n\n"
-        f"Send /generate to create the proposal with updated premiums, "
-        f"or /override again for another coverage.",
-        parse_mode="Markdown"
-    )
+    if errors:
+        lines.append("\u26a0\ufe0f **Warnings:**")
+        for e in errors:
+            lines.append(f"  • {e}")
+        lines.append("")
+    
+    lines.append("Send /generate to create the proposal with updated premiums, ")
+    lines.append("or /override again for more changes.")
+    
+    await safe_reply(update, "\n".join(lines), parse_mode="Markdown")
     return REVIEWING_EXTRACTION
 
 
