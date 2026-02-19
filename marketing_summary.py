@@ -388,9 +388,6 @@ def _liability_details(flds: dict) -> list:
     gl_ded = _safe_str(flds.get("GL Deductible"))
     if gl_ded != "—":
         details.append(f"    GL Deductible: {gl_ded}")
-    units = _safe_number(flds.get("Units"))
-    if units != "—":
-        details.append(f"    # of Units: {units}")
     locs = _safe_number(flds.get("# of Locs"))
     if locs != "—":
         details.append(f"    # of Locations: {locs}")
@@ -406,9 +403,6 @@ def _umbrella_details(flds: dict) -> list:
     sales = _safe_currency(flds.get("Gross Sales"))
     if sales != "—":
         details.append(f"    Total Sales: {sales}")
-    units = _safe_number(flds.get("Units"))
-    if units != "—":
-        details.append(f"    # of Units: {units}")
     locs = _safe_number(flds.get("# of Locs"))
     if locs != "—":
         details.append(f"    # of Locations: {locs}")
@@ -453,9 +447,6 @@ def _wc_details(flds: dict) -> list:
 def _epli_details(flds: dict) -> list:
     """Return detail lines for an EPLI policy."""
     details = []
-    units = _safe_number(flds.get("Units"))
-    if units != "—":
-        details.append(f"    # of Units: {units}")
     locs = _safe_number(flds.get("# of Locs"))
     if locs != "—":
         details.append(f"    # of Locations: {locs}")
@@ -465,9 +456,6 @@ def _epli_details(flds: dict) -> list:
 def _auto_details(flds: dict) -> list:
     """Return detail lines for an Auto policy."""
     details = []
-    units = _safe_number(flds.get("Units"))
-    if units != "—":
-        details.append(f"    # of Vehicles/Units: {units}")
     return details
 
 
@@ -591,6 +579,11 @@ def build_marketing_summary(policies: list, client_name: str = "",
             lines.append(f"  *{abbr} — {carrier_display}*")
             lines.append(f"    Premium: {premium_str}")
 
+            # # of Units (show for all coverage types)
+            units_val = _safe_number(p["fields"].get("Units"))
+            if units_val != "\u2014":
+                lines.append(f"    # of Units: {units_val}")
+
             # Coverage-specific details
             detail_func = COVERAGE_DETAIL_FUNCS.get(p["coverage_type"])
             if detail_func:
@@ -599,12 +592,12 @@ def build_marketing_summary(policies: list, client_name: str = "",
 
             # Broker
             broker_val = p["broker"]
-            if broker_val != "—":
+            if broker_val != "\u2014":
                 lines.append(f"    Broker: {broker_val}")
 
             # Comments
             if p["comments"]:
-                lines.append(f"    💬 _{p['comments']}_")
+                lines.append(f"    \U0001f4ac _{p['comments']}_")
 
             lines.append("")
 
@@ -621,15 +614,19 @@ def build_marketing_summary(policies: list, client_name: str = "",
             premium_str = f"${p['premium']:,.2f}" if p['premium'] else "N/A"
             lines.append(f"  *{abbr} — {p['insurance_company']}*")
             lines.append(f"    Premium: {premium_str}")
+            # # of Units (show for all coverage types)
+            units_val = _safe_number(p["fields"].get("Units"))
+            if units_val != "\u2014":
+                lines.append(f"    # of Units: {units_val}")
             detail_func = COVERAGE_DETAIL_FUNCS.get(p["coverage_type"])
             if detail_func:
                 lines.extend(detail_func(p["fields"]))
             broker_val = p["broker"]
-            if broker_val != "—":
+            if broker_val != "\u2014":
                 lines.append(f"    Broker: {broker_val}")
             if p["comments"]:
-                lines.append(f"    💬 _{p['comments']}_")
-        lines.append("")
+                lines.append(f"    \U0001f4ac _{p['comments']}_")
+            lines.append("")
 
     # ── Action items ────────────────────────────────────────────────
 
