@@ -589,6 +589,14 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     for key, cov in coverages.items():
         logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, premium={cov.get('total_premium', 0)}")
     
+    # Log expiring data
+    exp_premiums = session.extracted_data.get('expiring_premiums', {})
+    exp_details = session.extracted_data.get('expiring_details', {})
+    logger.info(f"Expiring premiums in extracted_data: {exp_premiums}")
+    logger.info(f"Expiring details keys in extracted_data: {list(exp_details.keys())}")
+    logger.info(f"Full extracted_data top-level keys: {list(session.extracted_data.keys())}")
+    logger.info(f"Full extracted_data: {session.extracted_data}"[:2000])
+    
     await update.message.reply_text(
         "📝 **Generating proposal document...**\n\n"
         "Creating branded DOCX with all coverage sections, compliance pages, and signature blocks.\n"

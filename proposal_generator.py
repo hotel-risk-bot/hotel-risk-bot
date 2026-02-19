@@ -400,8 +400,17 @@ def add_callout_box(doc, text, size=10):
 
 
 def add_page_break(doc):
-    """Add a page break."""
+    """Add a page break with a spacer paragraph to push content below the header.
+    Word suppresses space_before at the top of a new page, so we add an empty
+    spacer paragraph with a small font size and fixed spacing to create clearance."""
     doc.add_page_break()
+    # Add invisible spacer paragraph - Word won't suppress this
+    spacer = doc.add_paragraph()
+    spacer.paragraph_format.space_before = Pt(0)
+    spacer.paragraph_format.space_after = Pt(24)
+    spacer.paragraph_format.line_spacing = Pt(2)
+    run = spacer.add_run()
+    run.font.size = Pt(2)
 
 
 def fmt_currency(amount):
@@ -631,6 +640,11 @@ def generate_premium_summary(doc, data):
     coverages = data.get("coverages", {})
     expiring = data.get("expiring_premiums", {})
     expiring_details = data.get("expiring_details", {})
+    
+    logger.info(f"Premium Summary - coverages keys: {list(coverages.keys())}")
+    logger.info(f"Premium Summary - expiring keys: {list(expiring.keys())} values: {expiring}")
+    logger.info(f"Premium Summary - expiring_details keys: {list(expiring_details.keys())}")
+    logger.info(f"Premium Summary - coverage_names keys: {list(coverage_names.keys())}" if 'coverage_names' in dir() else "coverage_names not yet defined")
     
     coverage_names = {
         "property": "Property",
@@ -873,12 +887,32 @@ def generate_locations(doc, data):
     add_section_header(doc, "Schedule of Locations")
     
     raw_locations = data.get("locations", [])
-    # Deduplicate locations by address (case-insensitive)
+    # Deduplicate locations by normalized address (case-insensitive, abbreviation-aware)
+    def normalize_addr(s):
+        """Normalize address for dedup: uppercase, strip, replace common variants."""
+        s = s.strip().upper()
+        # Normalize common street abbreviations
+        replacements = {
+            " STREET": " ST", " AVENUE": " AVE", " BOULEVARD": " BLVD",
+            " DRIVE": " DR", " ROAD": " RD", " LANE": " LN",
+            " COURT": " CT", " PLACE": " PL", " CIRCLE": " CIR",
+            " HIGHWAY": " HWY", " PARKWAY": " PKWY", " TERRACE": " TER",
+            " NORTH": " N", " SOUTH": " S", " EAST": " E", " WEST": " W",
+            " NORTHWEST": " NW", " NORTHEAST": " NE", " SOUTHWEST": " SW",
+            " SOUTHEAST": " SE",
+            ".": "", ",": "",
+        }
+        for old, new in replacements.items():
+            s = s.replace(old, new)
+        # Remove extra whitespace
+        s = " ".join(s.split())
+        return s
+    
     seen_addrs = set()
     locations = []
     for loc in raw_locations:
-        addr_key = (loc.get("address", "").strip().upper() + "|" + 
-                    loc.get("city", "").strip().upper() + "|" +
+        addr_key = (normalize_addr(loc.get("address", "")) + "|" + 
+                    normalize_addr(loc.get("city", "")) + "|" +
                     loc.get("state", "").strip().upper())
         if addr_key not in seen_addrs:
             seen_addrs.add(addr_key)
