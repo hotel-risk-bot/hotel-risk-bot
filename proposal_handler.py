@@ -21,6 +21,7 @@ from telegram.ext import (
 
 from proposal_extractor import ProposalExtractor
 from proposal_generator import generate_proposal
+from sov_parser import parse_sov, is_sov_file, format_sov_summary
 
 logger = logging.getLogger(__name__)
 
@@ -377,18 +378,67 @@ async def extract_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
                     )
                 
             elif file_info["file_type"] in ["excel", "csv"]:
-                data = extractor.extract_excel_data(file_info["local_path"])
-                excel_data = [{"filename": filename, "data": data}]
-                file_data = await asyncio.to_thread(
-                    extractor.structure_insurance_data,
-                    [],
-                    excel_data,
-                    session.client_name
-                )
-                if "error" not in file_data:
-                    session.extracted_data = _merge_extraction_results(
-                        session.extracted_data, file_data
+                local_path = file_info["local_path"]
+                
+                # Check if this is an SOV spreadsheet
+                if file_info["file_type"] == "excel" and is_sov_file(local_path):
+                    logger.info(f"Detected SOV spreadsheet: {filename}")
+                    sov_data = await asyncio.to_thread(parse_sov, local_path)
+                    
+                    if "error" in sov_data:
+                        await update.message.reply_text(
+                            f"\u26a0\ufe0f SOV parse error for {filename}: {sov_data['error']}"
+                        )
+                    else:
+                        # Store SOV data in session
+                        if session.extracted_data is None:
+                            session.extracted_data = {}
+                        session.extracted_data["sov_data"] = sov_data
+                        
+                        # Also populate locations from SOV if not already set
+                        sov_locations = []
+                        for loc in sov_data.get("locations", []):
+                            loc_entry = {
+                                "name": loc.get("dba") or loc.get("hotel_flag") or loc.get("corporate_name", ""),
+                                "address": loc.get("address", ""),
+                                "city": loc.get("city", ""),
+                                "state": loc.get("state", ""),
+                                "zip": loc.get("zip_code", ""),
+                                "rooms": loc.get("num_rooms", 0),
+                                "tiv": loc.get("tiv", 0),
+                                "building_value": loc.get("building_value", 0),
+                                "contents_value": loc.get("contents_value", 0),
+                                "bi_value": loc.get("bi_value", 0),
+                                "construction": loc.get("construction_type", ""),
+                                "year_built": loc.get("year_built", 0),
+                                "stories": loc.get("stories", 0),
+                                "sprinkler": loc.get("sprinkler_pct", ""),
+                                "roof_type": loc.get("roof_type", ""),
+                                "roof_year": loc.get("roof_year", 0),
+                                "flood_zone": loc.get("flood_zone", ""),
+                                "aop_deductible": loc.get("aop_deductible", 0),
+                            }
+                            sov_locations.append(loc_entry)
+                        
+                        session.extracted_data["locations"] = sov_locations
+                        session.extracted_data["sov_totals"] = sov_data.get("totals", {})
+                        
+                        sov_summary = format_sov_summary(sov_data)
+                        await safe_reply(update, f"\u2705 **{filename}** — SOV parsed:\n\n{sov_summary}", parse_mode="Markdown")
+                else:
+                    # Generic Excel processing via GPT
+                    data = extractor.extract_excel_data(local_path)
+                    excel_data = [{"filename": filename, "data": data}]
+                    file_data = await asyncio.to_thread(
+                        extractor.structure_insurance_data,
+                        [],
+                        excel_data,
+                        session.client_name
                     )
+                    if "error" not in file_data:
+                        session.extracted_data = _merge_extraction_results(
+                            session.extracted_data, file_data
+                        )
             
             session.processed_files.add(filename)
         

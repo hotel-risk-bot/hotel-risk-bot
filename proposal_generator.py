@@ -891,43 +891,85 @@ def generate_information_summary(doc, data):
     add_callout_box(doc, "The information contained in this proposal is based on data provided by the insured and/or their representatives. HUB International makes no warranty as to the accuracy of this information.")
 
 
-def generate_locations(doc, data):
-    """Section 8: Locations"""
-    add_page_break(doc)
-    add_section_header(doc, "Schedule of Locations")
-    
-    raw_locations = data.get("locations", [])
-    # Deduplicate locations by normalized address (case-insensitive, abbreviation-aware)
-    def normalize_addr(s):
-        """Normalize address for dedup: uppercase, strip, replace common variants."""
-        s = s.strip().upper()
-        # Normalize common street abbreviations
-        replacements = {
-            " STREET": " ST", " AVENUE": " AVE", " BOULEVARD": " BLVD",
-            " DRIVE": " DR", " ROAD": " RD", " LANE": " LN",
-            " COURT": " CT", " PLACE": " PL", " CIRCLE": " CIR",
-            " HIGHWAY": " HWY", " PARKWAY": " PKWY", " TERRACE": " TER",
-            " NORTH": " N", " SOUTH": " S", " EAST": " E", " WEST": " W",
-            " NORTHWEST": " NW", " NORTHEAST": " NE", " SOUTHWEST": " SW",
-            " SOUTHEAST": " SE",
-            ".": "", ",": "",
-        }
-        for old, new in replacements.items():
-            s = s.replace(old, new)
-        # Remove extra whitespace
-        s = " ".join(s.split())
-        return s
-    
+def _normalize_addr(s):
+    """Normalize address for dedup: uppercase, strip, replace common variants."""
+    s = s.strip().upper()
+    replacements = {
+        " STREET": " ST", " AVENUE": " AVE", " BOULEVARD": " BLVD",
+        " DRIVE": " DR", " ROAD": " RD", " LANE": " LN",
+        " COURT": " CT", " PLACE": " PL", " CIRCLE": " CIR",
+        " HIGHWAY": " HWY", " PARKWAY": " PKWY", " TERRACE": " TER",
+        " NORTH": " N", " SOUTH": " S", " EAST": " E", " WEST": " W",
+        " NORTHWEST": " NW", " NORTHEAST": " NE", " SOUTHWEST": " SW",
+        " SOUTHEAST": " SE",
+        ".": "", ",": "",
+    }
+    for old, new in replacements.items():
+        s = s.replace(old, new)
+    s = " ".join(s.split())
+    return s
+
+
+def _dedup_locations(raw_locations):
+    """Deduplicate locations by normalized address."""
     seen_addrs = set()
     locations = []
     for loc in raw_locations:
-        addr_key = (normalize_addr(loc.get("address", "")) + "|" + 
-                    normalize_addr(loc.get("city", "")) + "|" +
+        addr_key = (_normalize_addr(loc.get("address", "")) + "|" + 
+                    _normalize_addr(loc.get("city", "")) + "|" +
                     loc.get("state", "").strip().upper())
         if addr_key not in seen_addrs:
             seen_addrs.add(addr_key)
             locations.append(loc)
-    if locations:
+    return locations
+
+
+def generate_locations(doc, data):
+    """Section 8: Locations — uses SOV data when available for richer detail."""
+    add_page_break(doc)
+    add_section_header(doc, "Schedule of Locations")
+    
+    raw_locations = data.get("locations", [])
+    locations = _dedup_locations(raw_locations)
+    sov_data = data.get("sov_data")
+    
+    if sov_data and sov_data.get("locations"):
+        # Rich SOV-based location table
+        sov_locs = sov_data["locations"]
+        headers = ["#", "Property Name", "Address", "City", "ST", "Rooms", "Yr Built", "Construction", "TIV"]
+        rows = []
+        for i, loc in enumerate(sov_locs, 1):
+            name = loc.get("dba") or loc.get("hotel_flag") or loc.get("corporate_name", "")
+            rows.append([
+                str(i),
+                name,
+                loc.get("address", ""),
+                loc.get("city", ""),
+                loc.get("state", ""),
+                str(loc.get("num_rooms", "")) if loc.get("num_rooms") else "",
+                str(loc.get("year_built", "")) if loc.get("year_built") else "",
+                loc.get("construction_type", ""),
+                fmt_currency(loc.get("tiv", 0)) if loc.get("tiv") else ""
+            ])
+        
+        # Add totals row
+        totals = sov_data.get("totals", {})
+        rows.append([
+            "", "TOTAL", "", "", "",
+            str(totals.get("num_rooms", "")),
+            "", "",
+            fmt_currency(totals.get("tiv", 0))
+        ])
+        
+        create_styled_table(doc, headers, rows,
+                          col_widths=[0.3, 1.5, 1.3, 0.8, 0.3, 0.5, 0.5, 1.0, 1.0],
+                          header_size=8, body_size=8)
+        
+        # Add note about SOV
+        add_formatted_paragraph(doc, "", size=6)
+        add_formatted_paragraph(doc, "See attached Statement of Values for complete property details.",
+                              size=9, italic=True, color=CHARCOAL)
+    elif locations:
         has_entity = any(loc.get("corporate_entity") for loc in locations)
         if has_entity:
             headers = ["#", "Corporate Entity", "Address", "City", "ST", "ZIP", "Description"]
@@ -1003,9 +1045,43 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     create_styled_table(doc, ["Item", "Details"], carrier_rows, col_widths=[2.5, 5.0],
                        header_size=10, body_size=10)
     
-    # Schedule of Values (Property)
-    sov = cov.get("schedule_of_values", [])
-    if sov:
+    # Schedule of Values (Property) - prefer SOV data if available
+    sov_data = data.get("sov_data")
+    sov_from_quote = cov.get("schedule_of_values", [])
+    
+    if coverage_key == "property" and sov_data and sov_data.get("locations"):
+        # Use SOV spreadsheet data for detailed Schedule of Values
+        add_subsection_header(doc, "Schedule of Values")
+        sov_locs = sov_data["locations"]
+        headers = ["#", "Location", "Building", "Contents", "BI/Rents", "TIV"]
+        rows = []
+        for i, loc in enumerate(sov_locs, 1):
+            name = loc.get("dba") or loc.get("hotel_flag") or loc.get("corporate_name", "")
+            addr = f"{loc.get('address', '')}, {loc.get('city', '')}, {loc.get('state', '')}"
+            loc_label = f"{name}\n{addr}" if name else addr
+            rows.append([
+                str(i),
+                loc_label,
+                fmt_currency(loc.get("building_value", 0)),
+                fmt_currency(loc.get("contents_value", 0)),
+                fmt_currency(loc.get("bi_value", 0)),
+                fmt_currency(loc.get("tiv", 0))
+            ])
+        # Add totals row
+        totals = sov_data.get("totals", {})
+        rows.append([
+            "", "TOTAL",
+            fmt_currency(totals.get("building_value", 0)),
+            fmt_currency(totals.get("contents_value", 0)),
+            fmt_currency(totals.get("bi_value", 0)),
+            fmt_currency(totals.get("tiv", 0))
+        ])
+        create_styled_table(doc, headers, rows,
+                          col_widths=[0.3, 2.2, 1.2, 1.0, 1.0, 1.3],
+                          header_size=9, body_size=8,
+                          col_alignments={2: WD_ALIGN_PARAGRAPH.RIGHT, 3: WD_ALIGN_PARAGRAPH.RIGHT,
+                                         4: WD_ALIGN_PARAGRAPH.RIGHT, 5: WD_ALIGN_PARAGRAPH.RIGHT})
+    elif sov_from_quote:
         add_subsection_header(doc, "Schedule of Values")
         headers = ["Location", "Building", "Contents", "BI/Rents", "TIV"]
         rows = [[
@@ -1014,7 +1090,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
             fmt_currency(s.get("contents", 0)),
             fmt_currency(s.get("business_income", 0)),
             fmt_currency(s.get("tiv", 0))
-        ] for s in sov]
+        ] for s in sov_from_quote]
         create_styled_table(doc, headers, rows,
                           col_widths=[2.0, 1.4, 1.2, 1.2, 1.2],
                           header_size=9, body_size=9)
