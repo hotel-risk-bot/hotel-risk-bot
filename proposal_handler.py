@@ -38,6 +38,14 @@ logger = logging.getLogger(__name__)
 proposal_sessions = {}
 
 
+
+def _escape_md(text: str) -> str:
+    """Escape special Telegram Markdown v1 characters in text (for filenames etc.)."""
+    for ch in ('_', '*', '`', '['):
+        text = text.replace(ch, f'\\{ch}')
+    return text
+
+
 class ProposalSession:
     """Tracks state for an active proposal generation session."""
     
@@ -57,12 +65,13 @@ class ProposalSession:
             "file_type": file_type
         })
     
-    def get_file_summary(self) -> str:
+    def get_file_summary(self, escape_md: bool = False) -> str:
         if not self.uploaded_files:
             return "No files uploaded yet."
         lines = []
         for i, f in enumerate(self.uploaded_files, 1):
-            lines.append(f"  {i}. {f['filename']} ({f['file_type']})")
+            fn = _escape_md(f['filename']) if escape_md else f['filename']
+            lines.append(f"  {i}. {fn} ({f['file_type']})")
         return "\n".join(lines)
     
     def cleanup(self):
@@ -199,10 +208,11 @@ async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         
         file_count = len(session.uploaded_files)
         unprocessed = len([f for f in session.uploaded_files if f['filename'] not in session.processed_files])
-        extract_hint = f"\n\n📌 **{unprocessed} new file(s)** ready for extraction. Send /extract to process." if unprocessed > 0 and session.extracted_data else ""
+        extract_hint = f"\n\n\U0001f4cc **{unprocessed} new file(s)** ready for extraction. Send /extract to process." if unprocessed > 0 and session.extracted_data else ""
+        safe_fn = _escape_md(filename)
         await update.message.reply_text(
-            f"✅ Received: **{filename}** ({file_type.upper()})\n\n"
-            f"**Files uploaded ({file_count}):**\n{session.get_file_summary()}"
+            f"\u2705 Received: **{safe_fn}** ({file_type.upper()})\n\n"
+            f"**Files uploaded ({file_count}):**\n{session.get_file_summary(escape_md=True)}"
             f"{extract_hint}\n\n"
             f"Upload more files or send /extract when ready.",
             parse_mode="Markdown"
@@ -374,7 +384,8 @@ async def extract_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
                     )
                     
                     await update.message.reply_text(
-                        f"✅ **{filename}** — found: {', '.join(covs_found) if covs_found else 'no coverages'}"
+                        f"\u2705 **{_escape_md(filename)}** \u2014 found: {', '.join(covs_found) if covs_found else 'no coverages'}",
+                        parse_mode="Markdown"
                     )
                 
             elif file_info["file_type"] in ["excel", "csv"]:
@@ -424,7 +435,7 @@ async def extract_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
                         session.extracted_data["sov_totals"] = sov_data.get("totals", {})
                         
                         sov_summary = format_sov_summary(sov_data)
-                        await safe_reply(update, f"\u2705 **{filename}** — SOV parsed:\n\n{sov_summary}", parse_mode="Markdown")
+                        await safe_reply(update, f"\u2705 **{_escape_md(filename)}** \u2014 SOV parsed:\n\n{sov_summary}", parse_mode="Markdown")
                 else:
                     # Generic Excel processing via GPT
                     data = extractor.extract_excel_data(local_path)
