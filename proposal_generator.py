@@ -236,7 +236,8 @@ def set_cell_vertical_alignment(cell, align="center"):
 
 
 def add_formatted_paragraph(doc, text, size=11, color=CLASSIC_BLUE, bold=False,
-                            alignment=WD_ALIGN_PARAGRAPH.LEFT, space_before=0, space_after=0):
+                            italic=False, alignment=WD_ALIGN_PARAGRAPH.LEFT,
+                            space_before=0, space_after=0):
     """Add a formatted paragraph to the document."""
     p = doc.add_paragraph()
     p.alignment = alignment
@@ -247,6 +248,7 @@ def add_formatted_paragraph(doc, text, size=11, color=CLASSIC_BLUE, bold=False,
     run.font.size = Pt(size)
     run.font.color.rgb = color
     run.font.bold = bold
+    run.font.italic = italic
     run.font.name = "Calibri"
     return p
 
