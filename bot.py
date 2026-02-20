@@ -69,6 +69,12 @@ except ImportError:
     HAS_MARKETING = False
 
 try:
+    from marketing_update_generator import generate_marketing_update
+    HAS_MARKETING_UPDATE = True
+except ImportError:
+    HAS_MARKETING_UPDATE = False
+
+try:
     from proposal_handler import get_proposal_conversation_handler, extract_standalone, generate_standalone
     HAS_PROPOSAL = True
 except Exception as _proposal_err:
@@ -1048,7 +1054,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Ã¢ÂÂ¢ /consulting `query` Ã¢ÂÂ Search Claims\n"
         "Ã¢ÂÂ¢ /report `query` Ã¢ÂÂ Executive PDF Report\n"
         "Ã¢ÂÂ¢ /sales `query` Ã¢ÂÂ Search Sales System\n"
-        "Ã¢ÂÂ¢ /marketing `client` Ã¢ÂÂ Marketing Summary\n\n"
+         "Ã¢ÂÂ¢ /marketing `client` Ã¢ÂÂ Marketing Summary\n"
+        "\u2022 /marketingsummary `client` \u2014 Marketing Update DOCX (internal)\n"
+        "\u2022 /marketingsummaryclient `client` \u2014 Marketing Update DOCX (client)\n\n"
         "*Task Management:*\n"
         "Ã¢ÂÂ¢ /task `Client | Task | Priority` Ã¢ÂÂ Add task\n"
         "Ã¢ÂÂ¢ /done `number` Ã¢ÂÂ Complete a task\n"
@@ -1794,8 +1802,8 @@ async def marketing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Ã¢ÂÂÃ¢ÂÂ Daily Briefing Command (manual trigger) Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
-async def marketingwtx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /marketingwtx - Get marketing summary with taxes & fees (Premium Tx)."""
+async def marketingtx_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /marketingtx - Get marketing summary with taxes & fees (Premium Tx)."""
     if not HAS_MARKETING:
         await update.message.reply_text("Marketing summary module not available.")
         return
@@ -1803,13 +1811,13 @@ async def marketingwtx_command(update: Update, context: ContextTypes.DEFAULT_TYP
     if not context.args:
         await update.message.reply_text(
             "📊 *Marketing Summary (w/ Taxes & Fees)*\n\n"
-            "Usage: `/marketingwtx Client Name`\n\n"
+            "Usage: `/marketingtx Client Name`\n\n"
             "Same as /marketing but shows *Premium Tx* (total premium\n"
             "including taxes, fees & surcharges) instead of Base Premium.\n\n"
             "Examples:\n"
-            "• `/marketingwtx Triton Hospitality`\n"
-            "• `/marketingwtx Ocean Partners`\n"
-            "• `/marketingwtx Premier Resorts`",
+            "• `/marketingtx Triton Hospitality`\n"
+            "• `/marketingtx Ocean Partners`\n"
+            "• `/marketingtx Premier Resorts`",
             parse_mode="Markdown",
         )
         return
@@ -1839,6 +1847,86 @@ async def marketingwtx_command(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.error(f"Error generating marketing summary (wtx): {e}")
         await update.message.reply_text(
             f"❌ Error generating marketing summary: {str(e)}",
+        )
+
+
+async def marketingsummary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /marketingsummary - Generate internal Marketing Update DOCX from Airtable."""
+    if not HAS_MARKETING_UPDATE:
+        await update.message.reply_text("Marketing update module not available.")
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "\U0001f4ca *Marketing Summary (Internal DOCX)*\n\n"
+            "Usage: `/marketingsummary Client Name`\n\n"
+            "Generates a professional Marketing Update document\n"
+            "with commission, revenue, rates, and broker info.\n\n"
+            "Examples:\n"
+            "\u2022 `/marketingsummary Triton Hospitality`\n"
+            "\u2022 `/marketingsummary Ocean Partners`\n"
+            "\u2022 `/marketingsummary Premier Resorts`",
+            parse_mode="Markdown",
+        )
+        return
+
+    client_name = " ".join(context.args)
+    await safe_reply_text(update.message, f"\u23f3 Generating internal Marketing Update for *{client_name}*...", parse_mode="Markdown")
+
+    try:
+        result = await generate_marketing_update(client_name, is_internal=True)
+        if result.endswith(".docx"):
+            with open(result, "rb") as f:
+                await update.message.reply_document(
+                    document=InputFile(f, filename=os.path.basename(result)),
+                    caption=f"\u2705 Marketing Update (Internal) for {client_name}",
+                )
+        else:
+            await safe_reply_text(update.message, result, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Error generating marketing update: {e}", exc_info=True)
+        await update.message.reply_text(
+            f"\u274c Error generating marketing update: {str(e)}",
+        )
+
+
+async def marketingsummaryclient_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /marketingsummaryclient - Generate client-facing Marketing Update DOCX from Airtable."""
+    if not HAS_MARKETING_UPDATE:
+        await update.message.reply_text("Marketing update module not available.")
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "\U0001f4ca *Marketing Summary (Client DOCX)*\n\n"
+            "Usage: `/marketingsummaryclient Client Name`\n\n"
+            "Generates a client-facing Marketing Update document\n"
+            "(excludes rates, commission, revenue, broker info).\n\n"
+            "Examples:\n"
+            "\u2022 `/marketingsummaryclient Triton Hospitality`\n"
+            "\u2022 `/marketingsummaryclient Ocean Partners`\n"
+            "\u2022 `/marketingsummaryclient Premier Resorts`",
+            parse_mode="Markdown",
+        )
+        return
+
+    client_name = " ".join(context.args)
+    await safe_reply_text(update.message, f"\u23f3 Generating client Marketing Update for *{client_name}*...", parse_mode="Markdown")
+
+    try:
+        result = await generate_marketing_update(client_name, is_internal=False)
+        if result.endswith(".docx"):
+            with open(result, "rb") as f:
+                await update.message.reply_document(
+                    document=InputFile(f, filename=os.path.basename(result)),
+                    caption=f"\u2705 Marketing Update (Client) for {client_name}",
+                )
+        else:
+            await safe_reply_text(update.message, result, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Error generating client marketing update: {e}", exc_info=True)
+        await update.message.reply_text(
+            f"\u274c Error generating marketing update: {str(e)}",
         )
 
 
@@ -2036,9 +2124,13 @@ def main():
     app.add_handler(CommandHandler("pipeline", pipeline_command))
     app.add_handler(CommandHandler("renewals", renewals_command))
 
-    # Marketing summary
+    # Marketing summary (text)
     app.add_handler(CommandHandler("marketing", marketing_command))
-    app.add_handler(CommandHandler("marketingwtx", marketingwtx_command))
+    app.add_handler(CommandHandler("marketingtx", marketingtx_command))
+
+    # Marketing update DOCX generators
+    app.add_handler(CommandHandler("marketingsummary", marketingsummary_command))
+    app.add_handler(CommandHandler("marketingsummaryclient", marketingsummaryclient_command))
 
     # Manual briefing/debrief triggers
     app.add_handler(CommandHandler("briefing", briefing_command))
