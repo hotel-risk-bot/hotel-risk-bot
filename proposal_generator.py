@@ -311,12 +311,12 @@ def create_styled_table(doc, headers, rows, col_widths=None, header_size=10, bod
         p = cell.paragraphs[0]
         # Determine header alignment: use header_alignments if specified, else center
         h_align = WD_ALIGN_PARAGRAPH.CENTER
-        if header_alignments:
+        if header_alignments is not None:
             if isinstance(header_alignments, dict):
-                if i in header_alignments and header_alignments[i]:
+                if i in header_alignments and header_alignments[i] is not None:
                     h_align = header_alignments[i]
             elif isinstance(header_alignments, (list, tuple)):
-                if i < len(header_alignments) and header_alignments[i]:
+                if i < len(header_alignments) and header_alignments[i] is not None:
                     h_align = header_alignments[i]
         p.alignment = h_align
         p.paragraph_format.space_before = Pt(4)
@@ -347,12 +347,12 @@ def create_styled_table(doc, headers, rows, col_widths=None, header_size=10, bod
             set_cell_width(cell, col_widths[col_idx] if col_idx < len(col_widths) else 1.0)
             set_cell_vertical_alignment(cell, "center")
             # Apply column alignment if specified
-            if col_alignments:
+            if col_alignments is not None:
                 if isinstance(col_alignments, dict):
-                    if col_idx in col_alignments and col_alignments[col_idx]:
+                    if col_idx in col_alignments and col_alignments[col_idx] is not None:
                         p.alignment = col_alignments[col_idx]
                 elif isinstance(col_alignments, (list, tuple)):
-                    if col_idx < len(col_alignments) and col_alignments[col_idx]:
+                    if col_idx < len(col_alignments) and col_alignments[col_idx] is not None:
                         p.alignment = col_alignments[col_idx]
             # Alternating row colors
             if row_idx % 2 == 1:

@@ -531,6 +531,40 @@ The JSON structure should be:
       ],
       "forms_endorsements": [],
       "subjectivities": []
+    }},
+    "terrorism": {{
+      "carrier": "Carrier name",
+      "carrier_admitted": true or false,
+      "am_best_rating": "Rating",
+      "premium": 0,
+      "taxes_fees": 0,
+      "total_premium": 0,
+      "limits": [
+        {{"description": "Certified Acts of Terrorism", "limit": "$X or Policy Limit"}},
+        {{"description": "Non-Certified Acts / Active Assailant", "limit": "$X or N/A"}}
+      ],
+      "additional_coverages": [
+        {{"description": "Coverage name", "limit": "$X"}}
+      ],
+      "forms_endorsements": [],
+      "subjectivities": []
+    }},
+    "cyber": {{
+      "carrier": "Carrier name",
+      "carrier_admitted": true or false,
+      "am_best_rating": "Rating",
+      "premium": 0,
+      "taxes_fees": 0,
+      "total_premium": 0,
+      "limits": [
+        {{"description": "Aggregate Limit", "limit": "$X"}},
+        {{"description": "Retention/Deductible", "limit": "$X"}}
+      ],
+      "additional_coverages": [
+        {{"description": "Coverage name", "limit": "$X"}}
+      ],
+      "forms_endorsements": [],
+      "subjectivities": []
     }}
   }},
   "named_insureds": ["List of all named insureds from the Named Insured or First Named Insured fields"],
@@ -560,6 +594,7 @@ The JSON structure should be:
 }}
 
 IMPORTANT:
+- COVERAGE CLASSIFICATION: A standalone terrorism/TRIA policy is NOT general liability. If a document is from Lloyd's of London, AEGIS, or similar and covers ONLY terrorism/TRIA/certified acts of terrorism/active assailant, classify it as "terrorism" NOT "general_liability". General Liability covers bodily injury, property damage, personal & advertising injury with occurrence/aggregate limits. Terrorism covers certified/non-certified acts of terrorism. If a single policy bundles both, put the terrorism portion in "terrorism" and the GL portion in "general_liability".
 - Only include coverage sections that appear in the documents
 - Extract EVERY form number and endorsement exactly as written
 - Include form dates (e.g., "06/07" in "CP 00 10 06/07")

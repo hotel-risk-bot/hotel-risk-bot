@@ -1278,7 +1278,18 @@ async def override_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             continue
         
         if cov_key not in coverages:
-            errors.append(f"{display_names.get(cov_key, cov_key)} not found in extracted data")
+            # Create a new coverage entry with just the premium
+            coverages[cov_key] = {
+                "carrier": "TBD",
+                "carrier_admitted": False,
+                "premium": amount,
+                "taxes_fees": 0,
+                "total_premium": amount,
+                "limits": [],
+                "forms_endorsements": [],
+            }
+            display = display_names.get(cov_key, cov_key)
+            results.append((display + " (NEW)", 0, amount))
             i += 2
             continue
         
