@@ -533,7 +533,13 @@ The JSON structure should be:
       "subjectivities": []
     }}
   }},
-  "named_insureds": ["List of all named insureds"],
+  "named_insureds": ["List of all named insureds from the Named Insured or First Named Insured fields"],
+  "additional_named_insureds": [
+    {{"name": "Entity name", "dba": "DBA if shown"}}
+  ],
+  "additional_insureds": [
+    {{"name": "Entity or person name", "relationship": "Franchisor/Mortgagee/Manager/etc", "description": "Additional details"}}
+  ],
   "additional_interests": [
     {{"type": "Mortgagee/Loss Payee/etc", "name_address": "Full name and address", "description": "Description"}}
   ],
@@ -562,6 +568,8 @@ IMPORTANT:
 - ALWAYS preserve cents in premium amounts (e.g., $60,513.35 not $60,513)
 - Mark excluded coverages explicitly
 - For Property: ALWAYS include Flood and Earthquake rows even if excluded
+- For additional_named_insureds: Search ALL pages for "Additional Named Insured", "Additional Named Insureds Schedule", "Named Insured Schedule", or similar headings. These are often on a separate page listing multiple entities (e.g., LLCs, management companies, DBAs). Extract every entity listed.
+- For additional_insureds: Search for "Additional Insured", "Additional Insured Schedule", or endorsement pages listing additional insureds (franchisors, mortgagees, managers). Extract all of them.
 
 DOCUMENT TEXT:
 {document_text}"""

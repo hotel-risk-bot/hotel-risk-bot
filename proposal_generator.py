@@ -266,7 +266,7 @@ def add_subsection_header(doc, text):
 
 
 def create_styled_table(doc, headers, rows, col_widths=None, header_size=10, body_size=10,
-                        total_width=7.5, col_alignments=None):
+                        total_width=7.5, col_alignments=None, header_alignments=None):
     """Create a table with HUB styling: Electric Blue header, alternating rows.
     
     Args:
@@ -277,7 +277,9 @@ def create_styled_table(doc, headers, rows, col_widths=None, header_size=10, bod
         header_size: Font size for header row (default 10pt)
         body_size: Font size for body rows (default 10pt)
         total_width: Total table width in inches (default 7.5)
-        col_alignments: List of WD_ALIGN_PARAGRAPH values per column. If None, all left-aligned.
+        col_alignments: Dict or list of WD_ALIGN_PARAGRAPH values per column for body rows. If None, all left-aligned.
+        header_alignments: Dict or list of WD_ALIGN_PARAGRAPH values per column for header row.
+                          If None, all center-aligned (default behavior).
     """
     table = doc.add_table(rows=1 + len(rows), cols=len(headers))
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -307,7 +309,16 @@ def create_styled_table(doc, headers, rows, col_widths=None, header_size=10, bod
         cell = table.rows[0].cells[i]
         cell.text = ""
         p = cell.paragraphs[0]
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        # Determine header alignment: use header_alignments if specified, else center
+        h_align = WD_ALIGN_PARAGRAPH.CENTER
+        if header_alignments:
+            if isinstance(header_alignments, dict):
+                if i in header_alignments and header_alignments[i]:
+                    h_align = header_alignments[i]
+            elif isinstance(header_alignments, (list, tuple)):
+                if i < len(header_alignments) and header_alignments[i]:
+                    h_align = header_alignments[i]
+        p.alignment = h_align
         p.paragraph_format.space_before = Pt(4)
         p.paragraph_format.space_after = Pt(4)
         p.paragraph_format.line_spacing = Pt(header_size + 2)
@@ -798,7 +809,8 @@ def generate_payment_options(doc, data):
         headers = ["Carrier", "Payment Terms", "Minimum Earned Premium"]
         rows = [[po.get("carrier", ""), po.get("terms", ""), po.get("mep", "")] for po in payment_opts]
         create_styled_table(doc, headers, rows, col_widths=[2.2, 3.3, 2.0],
-                           header_size=10, body_size=10)
+                           header_size=10, body_size=10,
+                           col_alignments={2: WD_ALIGN_PARAGRAPH.CENTER})
     else:
         add_formatted_paragraph(doc, "Payment terms to be confirmed upon binding.", size=11)
 
@@ -859,6 +871,37 @@ def generate_named_insureds(doc, data):
         headers = ["#", "Named Insured"]
         rows = [["1", data.get("client_info", {}).get("named_insured", "TBD")]]
         create_styled_table(doc, headers, rows, col_widths=[0.5, 7.0],
+                           header_size=10, body_size=10)
+    
+    # Additional Named Insureds
+    addl_named = data.get("additional_named_insureds", [])
+    if addl_named:
+        add_subsection_header(doc, "Additional Named Insureds")
+        headers = ["#", "Additional Named Insured"]
+        rows = []
+        for i, ani in enumerate(addl_named, 1):
+            if isinstance(ani, dict):
+                name = ani.get("name", "")
+                dba = ani.get("dba", "")
+                display = f"{name} DBA {dba}" if dba else name
+            else:
+                display = str(ani)
+            rows.append([str(i), display])
+        create_styled_table(doc, headers, rows, col_widths=[0.5, 7.0],
+                           header_size=10, body_size=10)
+    
+    # Additional Insureds
+    addl_insureds = data.get("additional_insureds", [])
+    if addl_insureds:
+        add_subsection_header(doc, "Additional Insureds")
+        headers = ["#", "Additional Insured", "Relationship"]
+        rows = []
+        for i, ai in enumerate(addl_insureds, 1):
+            if isinstance(ai, dict):
+                rows.append([str(i), ai.get("name", ""), ai.get("relationship", "")])
+            else:
+                rows.append([str(i), str(ai), ""])
+        create_styled_table(doc, headers, rows, col_widths=[0.5, 4.5, 2.5],
                            header_size=10, body_size=10)
     
     # Note box
@@ -1002,9 +1045,14 @@ def generate_locations(doc, data):
             fmt_currency(totals.get("tiv", 0))
         ])
         
+        L = WD_ALIGN_PARAGRAPH.LEFT
+        C = WD_ALIGN_PARAGRAPH.CENTER
+        R = WD_ALIGN_PARAGRAPH.RIGHT
         create_styled_table(doc, headers, rows,
                           col_widths=[0.3, 1.5, 1.3, 0.8, 0.3, 0.5, 0.5, 1.0, 1.0],
-                          header_size=8, body_size=8)
+                          header_size=8, body_size=8,
+                          header_alignments={0: L, 1: L, 2: L, 3: L, 4: L, 5: L, 6: L, 7: L, 8: C},
+                          col_alignments={8: R})
         
         # Add note about SOV
         add_formatted_paragraph(doc, "", size=6)
@@ -1083,8 +1131,10 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     if cov.get("policy_period"):
         carrier_rows.append(["Policy Period", cov["policy_period"]])
     
+    L = WD_ALIGN_PARAGRAPH.LEFT
     create_styled_table(doc, ["Item", "Details"], carrier_rows, col_widths=[2.5, 5.0],
-                       header_size=10, body_size=10)
+                       header_size=10, body_size=10,
+                       header_alignments={0: L, 1: L})
     
     # Schedule of Values (Property) - prefer SOV data if available
     sov_data = data.get("sov_data")
@@ -1142,8 +1192,15 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         add_subsection_header(doc, "Coverage Limits")
         headers = ["Description", "Limit"]
         rows = [[lim.get("description", ""), lim.get("limit", "")] for lim in limits]
+        # Left-align headers; center Limit values for umbrella/excess
+        L = WD_ALIGN_PARAGRAPH.LEFT
+        limit_body_align = {}
+        if coverage_key in ("umbrella", "cyber", "epli", "flood", "terrorism"):
+            limit_body_align = {1: WD_ALIGN_PARAGRAPH.CENTER}
         create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
-                           header_size=10, body_size=10)
+                           header_size=10, body_size=10,
+                           header_alignments={0: L, 1: L},
+                           col_alignments=limit_body_align)
     
     # Deductibles (Property)
     deductibles = cov.get("deductibles", [])
@@ -1151,8 +1208,10 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         add_subsection_header(doc, "Deductibles")
         headers = ["Peril", "Deductible"]
         rows = [[ded.get("description", ""), ded.get("amount", "")] for ded in deductibles]
+        L = WD_ALIGN_PARAGRAPH.LEFT
         create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
-                           header_size=10, body_size=10)
+                           header_size=10, body_size=10,
+                           header_alignments={0: L, 1: L})
     
     # Schedule of Hazards (GL)
     hazards = cov.get("schedule_of_hazards", [])
@@ -1222,14 +1281,17 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     if addl:
         add_subsection_header(doc, "Additional Coverages")
         has_ded = any(ac.get("deductible") for ac in addl)
+        L = WD_ALIGN_PARAGRAPH.LEFT
         if has_ded:
             headers = ["Description", "Limit", "Deductible"]
             rows = [[ac.get("description", ""), ac.get("limit", ""), ac.get("deductible", "")] for ac in addl]
-            create_styled_table(doc, headers, rows, col_widths=[3.5, 2.0, 2.0])
+            create_styled_table(doc, headers, rows, col_widths=[3.5, 2.0, 2.0],
+                              header_alignments={0: L, 1: L, 2: L})
         else:
             headers = ["Description", "Limit"]
             rows = [[ac.get("description", ""), ac.get("limit", "")] for ac in addl]
-            create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0])
+            create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
+                              header_alignments={0: L, 1: L})
     
     # Underlying Insurance (Umbrella)
     underlying = cov.get("underlying_insurance", [])
@@ -1237,7 +1299,8 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         add_subsection_header(doc, "Underlying Insurance")
         headers = ["Carrier", "Coverage", "Limits"]
         rows = [[u.get("carrier", ""), u.get("coverage", ""), u.get("limits", "")] for u in underlying]
-        create_styled_table(doc, headers, rows, col_widths=[2.5, 2.5, 2.5])
+        create_styled_table(doc, headers, rows, col_widths=[2.5, 2.5, 2.5],
+                          col_alignments={2: WD_ALIGN_PARAGRAPH.CENTER})
     
     # Tower Structure (Umbrella)
     tower = cov.get("tower_structure", [])
@@ -1261,8 +1324,10 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         add_subsection_header(doc, "Forms & Endorsements")
         headers = ["Form Number", "Description"]
         rows = [[f.get("form_number", ""), f.get("description", "")] for f in forms]
+        L = WD_ALIGN_PARAGRAPH.LEFT
         create_styled_table(doc, headers, rows, col_widths=[2.0, 5.5],
-                           header_size=9, body_size=9)
+                           header_size=9, body_size=9,
+                           header_alignments={0: L, 1: L})
 
 
 def generate_confirmation_to_bind(doc, data):
