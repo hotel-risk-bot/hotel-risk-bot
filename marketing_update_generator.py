@@ -571,7 +571,8 @@ def parse_policies(policies: list):
 
         base_premium = _get_float(flds.get("Base Premium"))
         premium_tx = _get_float(flds.get("Premium Tx"))
-        # Use Premium Tx if available, else Base Premium
+        # Always use Premium Tx for premium totals (includes taxes/fees)
+        # Only fall back to Base Premium if Premium Tx is truly zero/missing
         premium_with_tax = premium_tx if premium_tx > 0 else base_premium
 
         commission = _get_float(flds.get("Commission"))
@@ -728,22 +729,7 @@ def add_page_header(doc):
         run.add_picture(LOGO_PATH, width=Inches(1.8))
     text_cell = htable.rows[0].cells[1]
     text_cell.width = Inches(4.5)
-    p = text_cell.paragraphs[0]
-    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    p.paragraph_format.space_after = Pt(0)
-    run = p.add_run("Franchise Division")
-    run.font.size = Pt(12)
-    run.font.color.rgb = ELECTRIC_BLUE
-    run.font.bold = True
-    run.font.name = "Calibri"
-    p2 = text_cell.add_paragraph()
-    p2.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    p2.paragraph_format.space_before = Pt(0)
-    run2 = p2.add_run("Hotel Insurance Programs")
-    run2.font.size = Pt(12)
-    run2.font.color.rgb = ELECTRIC_BLUE
-    run2.font.bold = True
-    run2.font.name = "Calibri"
+    # Intentionally left blank - no subtitle text in header
     for row in htable.rows:
         for cell in row.cells:
             remove_cell_borders(cell)
@@ -1116,7 +1102,12 @@ def _build_property_carrier(p, is_internal=True):
     if is_internal:
         # Calculate rate from base premium / TIV if property_rate not available
         if p["property_rate"]:
-            values["Property Rate"] = _safe_currency(p["property_rate"])
+            # Property rate should include dollars and cents
+            try:
+                rate_val = float(str(p["property_rate"]).replace("$", "").replace(",", ""))
+                values["Property Rate"] = f"${rate_val:.2f}"
+            except (ValueError, TypeError):
+                values["Property Rate"] = str(p["property_rate"])
         elif p["base_premium"] and p["tiv"]:
             try:
                 tiv_val = float(str(p["tiv"]).replace("$", "").replace(",", ""))
