@@ -101,6 +101,56 @@ STATUS_PRIORITY = {
     "Blocked": 8, "Lost": 9,
 }
 
+# ── Carrier Abbreviation Map ──
+CARRIER_ABBR_MAP = {
+    'SLAKE': 'Southlake Specialty Insurance Company',
+    'ORGIN': 'Origin Specialty',
+    'ARCH': 'Arch Insurance',
+    'CONCERT': 'Concert Group',
+    'TRAV': 'Travelers',
+    'ZENITH': 'Zenith National Insurance',
+    'HARTFORD': 'The Hartford',
+    'PHILA': 'Philadelphia Insurance',
+    'BERKS': 'Berkshire Hathaway Specialty Insurance',
+    'WESTFIELD': 'Westfield Specialty',
+    'CORE': 'Core Specialty',
+    'EVEREST': 'Everest National Insurance Company',
+    'RIVINGTON': 'Rivington Insurance',
+    'KINSALE': 'Kinsale Capital Group',
+    'IRONSHORE': 'Ironshore Insurance Services',
+    'HDI': 'HDI Global Specialty',
+    'GRAY': 'Gray Surplus Lines',
+    'EVANSTON': 'Evanston Insurance Company',
+    'ADMIRAL': 'Admiral Insurance Company',
+    'AMWINS': 'AmWins',
+    'RT': 'RT Specialty',
+    'STARR': 'Starr Surplus Lines',
+    'ZURICH': 'Zurich Insurance',
+    'CHUBB': 'Chubb',
+    'AIG': 'AIG',
+    'CNA': 'CNA Insurance',
+    'LIBERTY': 'Liberty Mutual',
+    'MARKEL': 'Markel Insurance',
+    'COLONY': 'Colony Specialty',
+    'SCOTTSDALE': 'Scottsdale Insurance',
+    'NAUTILUS': 'Nautilus Insurance',
+    'EMPLOYERS': 'Employers Insurance',
+    'PINNACOL': 'Pinnacol Assurance',
+    'GUARD': 'Guard Insurance',
+    'AMTRUST': 'AmTrust Financial',
+}
+
+# ── Broker Abbreviation Map ──
+BROKER_ABBR_MAP = {
+    'AMWINS': 'AmWins',
+    'RT': 'RT Specialty',
+    'CRC': 'CRC Group',
+    'BURNS': 'Burns & Wilcox',
+    'RSG': 'Ryan Specialty Group',
+    'USI': 'USI Insurance Services',
+    'WHOLESALE': 'Wholesale Trading',
+}
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # UTILITY FUNCTIONS
@@ -172,6 +222,49 @@ def _safe_percent(val, default="—"):
         return default
 
 
+def _resolve_carrier_name(raw_name):
+    """Resolve carrier abbreviation to full name using the carrier map."""
+    if not raw_name or raw_name == "N/A":
+        return raw_name or "N/A"
+    name = str(raw_name).strip()
+    # Check if the raw name is an abbreviation
+    upper = name.upper()
+    if upper in CARRIER_ABBR_MAP:
+        return CARRIER_ABBR_MAP[upper]
+    # Check if it contains a known abbreviation as a substring
+    for abbr, full in CARRIER_ABBR_MAP.items():
+        if name.upper() == abbr:
+            return full
+    return name
+
+
+def _fmt_limit(val):
+    """Format limits as $20M, $10M, $5M, $500k, etc."""
+    if not val or val == "\u2014" or val == "—":
+        return "\u2014"
+    try:
+        clean = str(val).replace("$", "").replace(",", "").strip()
+        num = float(clean)
+        if num >= 1_000_000:
+            m = num / 1_000_000
+            if m == int(m):
+                return f"${int(m)}M"
+            else:
+                return f"${m:.1f}M"
+        elif num >= 1_000:
+            k = num / 1_000
+            if k == int(k):
+                return f"${int(k)}k"
+            else:
+                return f"${k:.1f}k"
+        elif num > 0:
+            return f"${int(num):,}"
+        else:
+            return "\u2014"
+    except (ValueError, TypeError):
+        return str(val) if val else "\u2014"
+
+
 def _get_float(val, default=0):
     if val is None:
         return default
@@ -209,8 +302,10 @@ def _resolve_broker_from_fields(flds: dict) -> str:
     """Resolve broker name from policy fields. Checks multiple paths."""
     # Path 1: Broker ABBR rollup (from Related Broker)
     broker_abbr = flds.get("Broker ABBR")
-    if broker_abbr and str(broker_abbr).strip() and str(broker_abbr).strip() != "—":
-        return str(broker_abbr).strip()
+    if broker_abbr and str(broker_abbr).strip() and str(broker_abbr).strip() != "\u2014":
+        raw = str(broker_abbr).strip()
+        # Map known abbreviations to full names
+        return BROKER_ABBR_MAP.get(raw.upper(), raw)
 
     # Path 2: Check Direct field - if True, it's a direct placement
     direct = flds.get("Direct")
@@ -308,6 +403,8 @@ def _status_color_hex(display_status):
         return None  # White / alternating
     elif display_status == "Pending":
         return PENDING_YELLOW_HEX
+    elif display_status in ("Declined", "Blocked", "Lost"):
+        return "FDE8E8"  # Light red for declined/blocked
     else:
         return None
 
@@ -465,6 +562,8 @@ def parse_policies(policies: list):
             insurance_co = ", ".join(str(ic) for ic in insurance_co_raw if ic) or "N/A"
         else:
             insurance_co = str(insurance_co_raw).strip() if insurance_co_raw else "N/A"
+        # Resolve carrier abbreviation to full name
+        insurance_co = _resolve_carrier_name(insurance_co)
 
         status = flds.get("Status", "Unknown")
         display_status = _map_status_for_display(status)
@@ -491,21 +590,21 @@ def parse_policies(policies: list):
             "num_locs": flds.get("# of Locs"),
             "tiv": flds.get("TIV"),
             "property_rate": flds.get("Property Rate"),
-            "property_limit": _safe_str(flds.get("Property Limit")),
+            "property_limit": _fmt_limit(flds.get("Property Limit")),
             "aop": _safe_str(flds.get("AOP")),
             "wind_type": _safe_str(flds.get("Wind Type")),
             "wind": _safe_str(flds.get("Wind")),
             "aow": _safe_str(flds.get("AOW")),
             "water_damage": _safe_str(flds.get("Water Damage")),
-            "flood_limit": _safe_str(flds.get("Flood Limit")),
+            "flood_limit": _fmt_limit(flds.get("Flood Limit")),
             "flood_deductible": _safe_str(flds.get("Flood Deductible")),
-            "eq_limit": _safe_str(flds.get("EQ Limit")),
+            "eq_limit": _fmt_limit(flds.get("EQ Limit")),
             "eq_deductible": _safe_str(flds.get("Earthquake Deductible")),
             "gross_sales": flds.get("Gross Sales"),
             "gl_rate": flds.get("GL Rate $"),
             "gl_rate_unit": flds.get("GL Rate (u)"),
             "gl_deductible": _safe_str(flds.get("GL Deductible")),
-            "umb_limit": _safe_str(flds.get("UMB Limit")),
+            "umb_limit": _fmt_limit(flds.get("UMB Limit")),
             "total_payroll": flds.get("Total Payroll"),
             "exp_mod": flds.get("Exp Mod"),
             "safety_credit": flds.get("Safety"),
@@ -990,6 +1089,20 @@ def create_carrier_comparison_table(doc, coverage_title, metrics, carriers):
 
 def _build_property_carrier(p, is_internal=True):
     """Build carrier dict for property comparison table."""
+    is_declined = p["display_status"] in ("Declined", "Blocked", "Lost")
+    if is_declined:
+        values = {"Premium": "Declined"}
+        if p["broker"] != "\u2014":
+            values["Broker"] = p["broker"]
+        comments = p.get("comments", "")
+        if isinstance(comments, str) and len(comments) > 150:
+            comments = comments[:147] + "..."
+        return {
+            "name": p["carrier"],
+            "status": p["display_status"],
+            "values": values,
+            "notes": comments if comments else "Declined to quote",
+        }
     values = {
         "Premium": _safe_currency(p["premium_tx"]) if p["premium_tx"] else "Pending",
         "TIV": _safe_currency_int(p["tiv"]),
@@ -1056,6 +1169,24 @@ def _get_property_metrics(carriers_data, is_internal=True):
 
 
 def _build_gl_carrier(p, is_internal=True):
+    is_declined = p["display_status"] in ("Declined", "Blocked", "Lost")
+    if is_declined:
+        # For declined carriers, show minimal info with reason
+        values = {
+            "Premium": "Declined",
+        }
+        if p["broker"] != "\u2014":
+            values["Broker"] = p["broker"]
+        comments = p.get("comments", "")
+        if isinstance(comments, str) and len(comments) > 150:
+            comments = comments[:147] + "..."
+        return {
+            "name": p["carrier"],
+            "status": p["display_status"],
+            "values": values,
+            "notes": comments if comments else "Declined to quote",
+        }
+
     values = {
         "Premium": _safe_currency(p["premium_tx"]) if p["premium_tx"] else "Pending",
         "# of Units": _safe_number(p["units"]),
@@ -1109,6 +1240,20 @@ def _get_gl_metrics(carriers_data, is_internal=True):
 
 
 def _build_umbrella_carrier(p, is_internal=True):
+    is_declined = p["display_status"] in ("Declined", "Blocked", "Lost")
+    if is_declined:
+        values = {"Premium": "Declined"}
+        if p["broker"] != "\u2014":
+            values["Broker"] = p["broker"]
+        comments = p.get("comments", "")
+        if isinstance(comments, str) and len(comments) > 150:
+            comments = comments[:147] + "..."
+        return {
+            "name": p["carrier"],
+            "status": p["display_status"],
+            "values": values,
+            "notes": comments if comments else "Declined to quote",
+        }
     values = {
         "Premium": _safe_currency(p["premium_tx"]) if p["premium_tx"] else "Pending",
         "# of Units": _safe_number(p["units"]),
@@ -1174,6 +1319,20 @@ def _get_umbrella_metrics(carriers_data, is_internal=True):
 
 
 def _build_wc_carrier(p, is_internal=True):
+    is_declined = p["display_status"] in ("Declined", "Blocked", "Lost")
+    if is_declined:
+        values = {"Premium": "Declined"}
+        if p["broker"] != "\u2014":
+            values["Broker"] = p["broker"]
+        comments = p.get("comments", "")
+        if isinstance(comments, str) and len(comments) > 150:
+            comments = comments[:147] + "..."
+        return {
+            "name": p["carrier"],
+            "status": p["display_status"],
+            "values": values,
+            "notes": comments if comments else "Declined to quote",
+        }
     values = {
         "Premium": _safe_currency(p["premium_tx"]) if p["premium_tx"] else "Pending",
         "Total Payroll": _safe_currency_int(p["total_payroll"]),
@@ -1233,6 +1392,20 @@ def _get_wc_metrics(carriers_data, is_internal=True):
 
 def _build_generic_carrier(p, is_internal=True):
     """Generic carrier builder for EPLI, Cyber, Flood, Auto, etc."""
+    is_declined = p["display_status"] in ("Declined", "Blocked", "Lost")
+    if is_declined:
+        values = {"Premium": "Declined"}
+        if p["broker"] != "\u2014":
+            values["Broker"] = p["broker"]
+        comments = p.get("comments", "")
+        if isinstance(comments, str) and len(comments) > 150:
+            comments = comments[:147] + "..."
+        return {
+            "name": p["carrier"],
+            "status": p["display_status"],
+            "values": values,
+            "notes": comments if comments else "Declined to quote",
+        }
     values = {
         "Premium": _safe_currency(p["premium_tx"]) if p["premium_tx"] else "Pending",
     }
@@ -1298,6 +1471,236 @@ def _get_generic_metrics(carriers_data, is_internal=True):
             if m in all_values and any(v != "\u2014" for v in all_values[m]):
                 metrics.append(m)
     return metrics
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TOWER BUILDERS (combine multi-carrier placements into single column)
+# ══════════════════════════════════════════════════════════════════════════
+
+def _build_property_tower(policies, is_internal=True):
+    """For multi-carrier property placements, combine incumbents into a single 'Property Tower' column."""
+    incumbents = sorted([p for p in policies if p["status"] == "Incumbent"],
+                        key=lambda x: x["premium_tx"], reverse=True)
+    if len(incumbents) <= 1:
+        return None  # No tower needed
+
+    tower_prem = sum(p["premium_tx"] for p in incumbents)
+    tower_tiv = incumbents[0]["tiv"] if incumbents else 0
+    blended_rate = sum(p["property_rate"] or 0 for p in incumbents) / len(incumbents) if incumbents else 0
+
+    # Get max limits
+    def _max_limit(pols, key):
+        vals = []
+        for p in pols:
+            v = p.get(key, "\u2014")
+            if v and v != "\u2014":
+                try:
+                    clean = str(v).replace("$", "").replace(",", "").replace("M", "000000").replace("k", "000")
+                    vals.append(float(clean))
+                except (ValueError, TypeError):
+                    pass
+        return _fmt_limit(str(int(max(vals)))) if vals else "\u2014"
+
+    values = {
+        "Premium": _safe_currency(tower_prem),
+        "TIV": _safe_currency_int(tower_tiv),
+        "# of Locations": _safe_number(incumbents[0]["num_locs"]),
+        "AOP Deductible": incumbents[0]["aop"],
+        "Wind": f"{incumbents[0]['wind']} ({incumbents[0]['wind_type']})" if incumbents[0]["wind"] != "\u2014" else "\u2014",
+        "AOW (All Other Wind)": incumbents[0]["aow"],
+        "Water Damage": incumbents[0]["water_damage"],
+    }
+    if is_internal:
+        values["Blended Rate"] = f"${blended_rate:.2f}" if blended_rate else "\u2014"
+    prop_limit = _max_limit(incumbents, "property_limit")
+    if prop_limit != "\u2014":
+        values["Property Limit"] = prop_limit
+    flood_limit = _max_limit(incumbents, "flood_limit")
+    if flood_limit != "\u2014":
+        values["Flood Limit"] = flood_limit
+    eq_limit = _max_limit(incumbents, "eq_limit")
+    if eq_limit != "\u2014":
+        values["EQ Limit"] = eq_limit
+    if incumbents[0]["broker"] != "\u2014":
+        values["Broker"] = incumbents[0]["broker"]
+    if is_internal:
+        total_rev = sum(p["revenue"] for p in incumbents if p["revenue"])
+        comm = incumbents[0]["commission"]
+        all_same = all(p["commission"] == comm for p in incumbents)
+        if comm:
+            values["Commission"] = _safe_percent(comm) + ("" if all_same else " (blended)")
+        if total_rev:
+            values["Revenue"] = _safe_currency(total_rev)
+
+    return {
+        "name": f"Property Tower ({len(incumbents)} carriers)",
+        "status": "Expiring",
+        "values": values,
+        "notes": f"Expiring tower: {', '.join(p['carrier'] for p in incumbents)}",
+    }
+
+
+def _build_umbrella_tower(policies, is_internal=True):
+    """For multi-carrier umbrella placements, combine incumbents into a single 'Umbrella Tower' column."""
+    incumbents = sorted([p for p in policies if p["status"] == "Incumbent"],
+                        key=lambda x: x["premium_tx"], reverse=True)
+    if len(incumbents) <= 1:
+        return None  # No tower needed
+
+    tower_prem = sum(p["premium_tx"] for p in incumbents)
+    total_limit = 0
+    layer_names = ["Primary", "1st Excess", "2nd Excess", "3rd Excess", "4th Excess"]
+    tower_desc = []
+    for i, p in enumerate(incumbents):
+        layer = layer_names[i] if i < len(layer_names) else f"{i+1}th Excess"
+        tower_desc.append(f"{p['carrier']} ({p['umb_limit']} {layer})")
+        try:
+            clean = str(p["umb_limit"]).replace("$", "").replace(",", "").replace("M", "000000").replace("k", "000")
+            total_limit += float(clean)
+        except (ValueError, TypeError):
+            pass
+
+    values = {
+        "Premium": _safe_currency(tower_prem),
+        "# of Units": _safe_number(incumbents[0]["units"]),
+        "# of Locations": _safe_number(incumbents[0]["num_locs"]),
+        "Umbrella Limit": _fmt_limit(str(int(total_limit))) + " (combined)" if total_limit else "\u2014",
+        "Total Sales": _safe_currency_int(incumbents[0]["gross_sales"]),
+    }
+    if incumbents[0]["broker"] != "\u2014":
+        values["Broker"] = incumbents[0]["broker"]
+    if is_internal:
+        total_rev = sum(p["revenue"] for p in incumbents if p["revenue"])
+        if incumbents[0]["commission"]:
+            values["Commission"] = _safe_percent(incumbents[0]["commission"])
+        if total_rev:
+            values["Revenue"] = _safe_currency(total_rev)
+
+    return {
+        "name": f"Umbrella Tower ({len(incumbents)} layers)",
+        "status": "Expiring",
+        "values": values,
+        "notes": f"Tower: {', '.join(tower_desc)}",
+    }
+
+
+def _add_internal_detail_pages(doc, by_coverage, parsed_policies):
+    """Add internal-only detail pages for Property Tower, Umbrella Tower, and GL Detail."""
+    has_detail = False
+
+    # Property Carrier Detail
+    prop_policies = by_coverage.get("Property", [])
+    incumbents = sorted([p for p in prop_policies if p["status"] == "Incumbent"],
+                        key=lambda x: x["premium_tx"], reverse=True)
+    if len(incumbents) > 1:
+        if not has_detail:
+            add_page_break(doc)
+            add_section_header(doc, "Internal Detail Pages")
+            add_callout_box(doc, "The following pages are for internal use only and should not be shared with the client.",
+                           size=10, shading_hex="FDE8E8")
+            has_detail = True
+
+        add_formatted_paragraph(doc, "", size=6, space_before=0, space_after=0)
+        add_subsection_header(doc, "Property Carrier Detail (Expiring Tower)")
+        add_formatted_paragraph(doc,
+            "The following table breaks out each individual carrier within the expiring property placement tower.",
+            size=10, color=CLASSIC_BLUE, space_before=2, space_after=8)
+
+        # Build individual carrier columns for the tower
+        tower_carriers = []
+        for p in incumbents:
+            carrier_dict = _build_property_carrier(p, is_internal=True)
+            # Add base premium to values
+            carrier_dict["values"]["Base Premium"] = _safe_currency(p["base_premium"])
+            tower_carriers.append(carrier_dict)
+
+        metrics = ["Base Premium", "Premium"] + _get_property_metrics(tower_carriers, is_internal=True)
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_metrics = []
+        for m in metrics:
+            if m not in seen:
+                seen.add(m)
+                unique_metrics.append(m)
+        create_carrier_comparison_table(doc, "Property Tower Detail", unique_metrics, tower_carriers)
+
+        # Add totals note
+        total_base = sum(p["base_premium"] for p in incumbents)
+        total_prem = sum(p["premium_tx"] for p in incumbents)
+        total_rev = sum(p["revenue"] for p in incumbents if p["revenue"])
+        add_callout_box(doc,
+            f"Tower Totals: Base Premium {_safe_currency(total_base)} | "
+            f"Premium w/ Tax {_safe_currency(total_prem)} | "
+            f"Total Revenue {_safe_currency(total_rev)}",
+            size=9)
+
+    # Umbrella Tower Detail
+    umb_policies = by_coverage.get("Umbrella", [])
+    umb_incumbents = sorted([p for p in umb_policies if p["status"] == "Incumbent"],
+                            key=lambda x: x["premium_tx"], reverse=True)
+    if len(umb_incumbents) > 1:
+        if not has_detail:
+            add_page_break(doc)
+            add_section_header(doc, "Internal Detail Pages")
+            add_callout_box(doc, "The following pages are for internal use only and should not be shared with the client.",
+                           size=10, shading_hex="FDE8E8")
+            has_detail = True
+
+        add_page_break(doc)
+        add_subsection_header(doc, "Umbrella Tower Detail (Expiring)")
+
+        layer_names = ["Primary", "1st Excess", "2nd Excess", "3rd Excess", "4th Excess"]
+        tower_carriers = []
+        for i, p in enumerate(umb_incumbents):
+            layer = layer_names[i] if i < len(layer_names) else f"{i+1}th Excess"
+            carrier_dict = _build_umbrella_carrier(p, is_internal=True)
+            carrier_dict["name"] = f"{p['carrier']} ({layer})"
+            carrier_dict["values"]["Base Premium"] = _safe_currency(p["base_premium"])
+            tower_carriers.append(carrier_dict)
+
+        metrics = ["Base Premium", "Premium", "Umbrella Limit", "# of Units", "Rate/Unit", "Broker", "Commission", "Revenue"]
+        # Filter to only metrics that exist
+        all_vals = {}
+        for c in tower_carriers:
+            for k, v in c["values"].items():
+                if k not in all_vals:
+                    all_vals[k] = []
+                all_vals[k].append(v)
+        metrics = [m for m in metrics if m in all_vals]
+        create_carrier_comparison_table(doc, "Umbrella Tower Detail", metrics, tower_carriers)
+
+    # GL Quoted Detail (if more than 2 GL policies)
+    gl_policies = by_coverage.get("Liability", [])
+    if len(gl_policies) > 2:
+        if not has_detail:
+            add_page_break(doc)
+            add_section_header(doc, "Internal Detail Pages")
+            add_callout_box(doc, "The following pages are for internal use only and should not be shared with the client.",
+                           size=10, shading_hex="FDE8E8")
+            has_detail = True
+
+        add_page_break(doc)
+        add_subsection_header(doc, "GL Quoted Detail")
+
+        gl_carriers = []
+        for p in gl_policies:
+            carrier_dict = _build_gl_carrier(p, is_internal=True)
+            carrier_dict["values"]["Base Premium"] = _safe_currency(p["base_premium"])
+            carrier_dict["values"]["Status"] = p["display_status"]
+            gl_carriers.append(carrier_dict)
+
+        metrics = ["Status", "Base Premium", "Premium", "Total Sales", "GL Rate", "GL Rate/Unit",
+                   "# of Units", "Broker", "Commission", "Revenue"]
+        all_vals = {}
+        for c in gl_carriers:
+            for k, v in c["values"].items():
+                if k not in all_vals:
+                    all_vals[k] = []
+                all_vals[k].append(v)
+        metrics = [m for m in metrics if m in all_vals]
+        create_carrier_comparison_table(doc, "GL Detail", metrics, gl_carriers)
+
+    return has_detail
 
 
 # Coverage type -> (carrier_builder, metrics_builder) mapping
@@ -1419,12 +1822,16 @@ def build_premium_comparison_internal(by_coverage, parsed_policies):
         rev_str = "—"
         broker_str = "—"
         if bound:
-            carrier_name = bound[0]["carrier"]
+            if len(bound) > 1:
+                carrier_name = f"{len(bound)}-Carrier Placement"
+            else:
+                carrier_name = bound[0]["carrier"]
             if bound[0]["commission"]:
                 comm_str = _safe_percent(bound[0]["commission"])
-            if bound[0]["revenue"]:
-                rev_str = _safe_currency(bound[0]["revenue"])
-                total_commission_revenue += bound[0]["revenue"]
+            total_rev = sum(p["revenue"] for p in bound if p["revenue"])
+            if total_rev:
+                rev_str = _safe_currency(total_rev)
+                total_commission_revenue += total_rev
             broker_str = bound[0]["broker"]
         elif quoted:
             carrier_name = quoted[0]["carrier"]
@@ -1432,8 +1839,14 @@ def build_premium_comparison_internal(by_coverage, parsed_policies):
                 comm_str = _safe_percent(quoted[0]["commission"])
             broker_str = quoted[0]["broker"]
         elif expiring:
-            carrier_name = expiring[0]["carrier"]
-            broker_str = expiring[0]["broker"]
+            # For multi-carrier expiring (e.g., property tower), show combined name
+            if len(expiring) > 1:
+                carrier_name = f"{len(expiring)}-Carrier Tower"
+                # Use broker from first carrier for tower
+                broker_str = expiring[0]["broker"]
+            else:
+                carrier_name = expiring[0]["carrier"]
+                broker_str = expiring[0]["broker"]
         else:
             carrier_name = policies[0]["carrier"] if policies else "—"
 
@@ -1757,9 +2170,40 @@ def generate_marketing_update_docx(
         builder_func, metrics_func = COVERAGE_BUILDERS.get(ct, (_build_generic_carrier, _get_generic_metrics))
 
         carriers_data = []
-        for p in policies:
-            carrier_dict = builder_func(p, is_internal=is_internal)
-            carriers_data.append(carrier_dict)
+
+        # For Property: use tower view if multiple incumbents
+        if ct == "Property":
+            tower = _build_property_tower(policies, is_internal=is_internal)
+            if tower:
+                carriers_data.append(tower)
+                # Add non-incumbent carriers individually
+                for p in policies:
+                    if p["status"] != "Incumbent":
+                        carrier_dict = builder_func(p, is_internal=is_internal)
+                        carriers_data.append(carrier_dict)
+            else:
+                for p in policies:
+                    carrier_dict = builder_func(p, is_internal=is_internal)
+                    carriers_data.append(carrier_dict)
+        # For Umbrella: use tower view if multiple incumbents (client version)
+        elif ct == "Umbrella":
+            tower = _build_umbrella_tower(policies, is_internal=is_internal)
+            if tower and not is_internal:
+                # Client version: show combined tower
+                carriers_data.append(tower)
+                for p in policies:
+                    if p["status"] != "Incumbent":
+                        carrier_dict = builder_func(p, is_internal=is_internal)
+                        carriers_data.append(carrier_dict)
+            else:
+                # Internal version: show individual carriers for full detail
+                for p in policies:
+                    carrier_dict = builder_func(p, is_internal=is_internal)
+                    carriers_data.append(carrier_dict)
+        else:
+            for p in policies:
+                carrier_dict = builder_func(p, is_internal=is_internal)
+                carriers_data.append(carrier_dict)
 
         if not carriers_data:
             continue
@@ -1775,6 +2219,10 @@ def generate_marketing_update_docx(
         create_carrier_comparison_table(doc, short_title, metrics, carriers_data)
         add_formatted_paragraph(doc, "", size=8, space_before=0, space_after=0)
         first_on_page = False
+
+    # Internal detail pages (Property Tower Detail, Umbrella Tower Detail, GL Detail)
+    if is_internal:
+        _add_internal_detail_pages(doc, by_coverage, parsed_policies)
 
     # ════════════════════════════════════════════════════════════════
     # NEXT STEPS & COVERAGE SUMMARY
