@@ -1772,15 +1772,18 @@ def build_premium_comparison(by_coverage, parsed_policies):
                 is_included = True
                 break
 
+        # Always add expiring premium to total regardless of proposed status
+        if expiring_premium:
+            total_expiring += expiring_premium
+
         if proposed_premium > 0:
-            exp_str = _safe_currency(expiring_premium) if expiring_premium else "—"
+            exp_str = _safe_currency(expiring_premium) if expiring_premium else "\u2014"
             prop_str = _safe_currency(proposed_premium)
             if expiring_premium > 0:
                 change = proposed_premium - expiring_premium
                 pct_change = (change / expiring_premium) * 100
                 change_str = f"+${change:,.0f}" if change > 0 else f"-${abs(change):,.0f}"
                 pct_str = f"+{pct_change:.1f}%" if change > 0 else f"{pct_change:.1f}%"
-                total_expiring += expiring_premium
                 total_proposed += proposed_premium
             else:
                 change_str = "\u2014"
@@ -1792,8 +1795,6 @@ def build_premium_comparison(by_coverage, parsed_policies):
             rows.append([display_name, "Included in GL", exp_str, "Included", "\u2014", "\u2014"])
         else:
             exp_str = _safe_currency(expiring_premium) if expiring_premium else "\u2014"
-            if expiring_premium:
-                total_expiring += expiring_premium
             pending_coverages.append(display_name)
             rows.append([display_name, carrier_name, exp_str, "Pending", "\u2014", "\u2014"])
 
@@ -1874,15 +1875,18 @@ def build_premium_comparison_internal(by_coverage, parsed_policies):
                 is_included = True
                 break
 
+        # Always add expiring premium to total regardless of proposed status
+        if expiring_premium:
+            total_expiring += expiring_premium
+
         if proposed_premium > 0:
-            exp_str = _safe_currency(expiring_premium) if expiring_premium else "—"
+            exp_str = _safe_currency(expiring_premium) if expiring_premium else "\u2014"
             prop_str = _safe_currency(proposed_premium)
             if expiring_premium > 0:
                 change = proposed_premium - expiring_premium
                 pct_change = (change / expiring_premium) * 100
                 change_str = f"+${change:,.0f}" if change > 0 else f"-${abs(change):,.0f}"
                 pct_str = f"+{pct_change:.1f}%" if change > 0 else f"{pct_change:.1f}%"
-                total_expiring += expiring_premium
                 total_proposed += proposed_premium
             else:
                 change_str = "\u2014"
@@ -1894,8 +1898,6 @@ def build_premium_comparison_internal(by_coverage, parsed_policies):
             rows.append([display_name, "Included in GL", exp_str, "Included", "\u2014", "\u2014", "\u2014", "\u2014", "\u2014"])
         else:
             exp_str = _safe_currency(expiring_premium) if expiring_premium else "\u2014"
-            if expiring_premium:
-                total_expiring += expiring_premium
             pending_coverages.append(display_name)
             rows.append([display_name, carrier_name, exp_str, "Pending", "\u2014", "\u2014", comm_str, rev_str, broker_str])
 
@@ -2241,31 +2243,39 @@ def generate_marketing_update_docx(
         add_subsection_header(doc, display_title)
         create_carrier_comparison_table(doc, short_title, metrics, table_carriers)
 
-        # Show declined carriers as notes below the table
+        # Show declined carriers as a clean note below the table
         if declined_carriers:
-            declined_names = []
+            p_label = doc.add_paragraph()
+            p_label.paragraph_format.space_before = Pt(4)
+            p_label.paragraph_format.space_after = Pt(1)
+            p_label.paragraph_format.left_indent = Inches(0.1)
+            run_label = p_label.add_run("Declined Markets:")
+            run_label.font.size = Pt(8)
+            run_label.font.color.rgb = RGBColor(0x88, 0x88, 0x88)
+            run_label.font.bold = True
+            run_label.font.italic = True
+            run_label.font.name = "Calibri"
+
             for dc in declined_carriers:
                 name = dc["name"]
                 notes = dc.get("notes", "")
                 broker = dc.get("values", {}).get("Broker", "")
-                parts = [name]
+                # Build line: "Carrier Name (via Broker) — reason"
+                line = name
                 if broker:
-                    parts.append(f"via {broker}")
+                    line += f" (via {broker})"
                 if notes and notes != "Declined to quote":
-                    # Truncate long notes
-                    short_notes = notes[:80] + "..." if len(notes) > 80 else notes
-                    parts.append(f"\u2014 {short_notes}")
-                declined_names.append(" ".join(parts))
-            declined_text = f"Declined: {'; '.join(declined_names)}"
-            p_declined = doc.add_paragraph()
-            p_declined.paragraph_format.space_before = Pt(2)
-            p_declined.paragraph_format.space_after = Pt(4)
-            p_declined.paragraph_format.left_indent = Inches(0.1)
-            run_d = p_declined.add_run(declined_text)
-            run_d.font.size = Pt(8)
-            run_d.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
-            run_d.font.italic = True
-            run_d.font.name = "Calibri"
+                    short_notes = notes[:100] + "..." if len(notes) > 100 else notes
+                    line += f" \u2014 {short_notes}"
+                p_dc = doc.add_paragraph()
+                p_dc.paragraph_format.space_before = Pt(0)
+                p_dc.paragraph_format.space_after = Pt(1)
+                p_dc.paragraph_format.left_indent = Inches(0.25)
+                run_dc = p_dc.add_run(f"\u2022 {line}")
+                run_dc.font.size = Pt(7.5)
+                run_dc.font.color.rgb = RGBColor(0x88, 0x88, 0x88)
+                run_dc.font.italic = True
+                run_dc.font.name = "Calibri"
 
         add_formatted_paragraph(doc, "", size=8, space_before=0, space_after=0)
         first_on_page = False
