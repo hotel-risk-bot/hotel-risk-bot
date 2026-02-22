@@ -1079,7 +1079,7 @@ def _build_property_carrier(p, is_internal=True):
     is_declined = p["display_status"] in ("Declined", "Blocked", "Lost")
     if is_declined:
         values = {"Premium": "Declined"}
-        if p["broker"] != "\u2014":
+        if is_internal and p["broker"] != "\u2014":
             values["Broker"] = p["broker"]
         comments = p.get("comments", "")
         if isinstance(comments, str) and len(comments) > 150:
@@ -1099,35 +1099,33 @@ def _build_property_carrier(p, is_internal=True):
         "AOW (All Other Wind)": p["aow"],
         "Water Damage": p["water_damage"],
     }
-    if is_internal:
-        # Calculate rate from base premium / TIV if property_rate not available
-        if p["property_rate"]:
-            # Property rate should include dollars and cents
-            try:
-                rate_val = float(str(p["property_rate"]).replace("$", "").replace(",", ""))
-                values["Property Rate"] = f"${rate_val:.2f}"
-            except (ValueError, TypeError):
-                values["Property Rate"] = str(p["property_rate"])
-        elif p["base_premium"] and p["tiv"]:
-            try:
-                tiv_val = float(str(p["tiv"]).replace("$", "").replace(",", ""))
-                if tiv_val > 0:
-                    calc_rate = (p["base_premium"] / tiv_val) * 100
-                    values["Property Rate"] = f"${calc_rate:.2f}"
-                else:
-                    values["Property Rate"] = "\u2014"
-            except (ValueError, TypeError):
+    # Property rate shown on both internal and client versions (with dollars and cents)
+    if p["property_rate"]:
+        try:
+            rate_val = float(str(p["property_rate"]).replace("$", "").replace(",", ""))
+            values["Property Rate"] = f"${rate_val:.2f}"
+        except (ValueError, TypeError):
+            values["Property Rate"] = str(p["property_rate"])
+    elif p["base_premium"] and p["tiv"]:
+        try:
+            tiv_val = float(str(p["tiv"]).replace("$", "").replace(",", ""))
+            if tiv_val > 0:
+                calc_rate = (p["base_premium"] / tiv_val) * 100
+                values["Property Rate"] = f"${calc_rate:.2f}"
+            else:
                 values["Property Rate"] = "\u2014"
-        else:
+        except (ValueError, TypeError):
             values["Property Rate"] = "\u2014"
+    else:
+        values["Property Rate"] = "\u2014"
     if p["property_limit"] != "\u2014":
         values["Property Limit"] = p["property_limit"]
     if p["flood_limit"] != "\u2014":
         values["Flood Limit"] = p["flood_limit"]
     if p["eq_limit"] != "\u2014":
         values["EQ Limit"] = p["eq_limit"]
-    # Broker on all policies
-    if p["broker"] != "\u2014":
+    # Broker only on internal version
+    if is_internal and p["broker"] != "\u2014":
         values["Broker"] = p["broker"]
     if is_internal:
         if p["commission"]:
@@ -1150,9 +1148,8 @@ def _build_property_carrier(p, is_internal=True):
 
 def _get_property_metrics(carriers_data, is_internal=True):
     """Determine which property metrics to show based on available data."""
-    metrics = ["Premium", "TIV", "# of Locations"]
-    if is_internal:
-        metrics.append("Property Rate")
+    # Property Rate shown on both versions
+    metrics = ["Premium", "TIV", "# of Locations", "Property Rate"]
     metrics.extend(["AOP Deductible", "Wind", "AOW (All Other Wind)", "Water Damage"])
 
     # Only add optional metrics if any carrier has data
@@ -1163,7 +1160,10 @@ def _get_property_metrics(carriers_data, is_internal=True):
                 all_values[k] = []
             all_values[k].append(v)
 
-    optional_metrics = ["Property Limit", "Flood Limit", "EQ Limit", "Broker"]
+    optional_metrics = ["Property Limit", "Flood Limit", "EQ Limit"]
+    # Broker only on internal version
+    if is_internal:
+        optional_metrics.append("Broker")
     if is_internal:
         optional_metrics.extend(["Commission", "Revenue"])
 
@@ -1181,7 +1181,7 @@ def _build_gl_carrier(p, is_internal=True):
         values = {
             "Premium": "Declined",
         }
-        if p["broker"] != "\u2014":
+        if is_internal and p["broker"] != "\u2014":
             values["Broker"] = p["broker"]
         comments = p.get("comments", "")
         if isinstance(comments, str) and len(comments) > 150:
@@ -1200,11 +1200,25 @@ def _build_gl_carrier(p, is_internal=True):
         "GL Deductible": p["gl_deductible"],
         "# of Locations": _safe_number(p["num_locs"]),
     }
-    if is_internal:
-        values["GL Rate"] = _safe_currency(p["gl_rate"]) if p["gl_rate"] else "\u2014"
-        values["GL Rate/Unit"] = _safe_currency(p["gl_rate_unit"]) if p["gl_rate_unit"] else "\u2014"
-    # Broker on all policies
-    if p["broker"] != "\u2014":
+    # GL rates shown on both versions (with dollars and cents)
+    if p["gl_rate"]:
+        try:
+            gl_rate_val = float(str(p["gl_rate"]).replace("$", "").replace(",", ""))
+            values["GL Rate"] = f"${gl_rate_val:,.2f}"
+        except (ValueError, TypeError):
+            values["GL Rate"] = str(p["gl_rate"])
+    else:
+        values["GL Rate"] = "\u2014"
+    if p["gl_rate_unit"]:
+        try:
+            gl_rate_unit_val = float(str(p["gl_rate_unit"]).replace("$", "").replace(",", ""))
+            values["GL Rate/Unit"] = f"${gl_rate_unit_val:,.2f}"
+        except (ValueError, TypeError):
+            values["GL Rate/Unit"] = str(p["gl_rate_unit"])
+    else:
+        values["GL Rate/Unit"] = "\u2014"
+    # Broker only on internal version
+    if is_internal and p["broker"] != "\u2014":
         values["Broker"] = p["broker"]
     if is_internal:
         if p["commission"]:
@@ -1225,9 +1239,8 @@ def _build_gl_carrier(p, is_internal=True):
 
 
 def _get_gl_metrics(carriers_data, is_internal=True):
-    metrics = ["Premium", "# of Units", "Total Sales"]
-    if is_internal:
-        metrics.extend(["GL Rate", "GL Rate/Unit"])
+    # GL rates shown on both versions
+    metrics = ["Premium", "# of Units", "Total Sales", "GL Rate", "GL Rate/Unit"]
     metrics.extend(["GL Deductible", "# of Locations"])
     all_values = {}
     for c in carriers_data:
@@ -1235,10 +1248,10 @@ def _get_gl_metrics(carriers_data, is_internal=True):
             if k not in all_values:
                 all_values[k] = []
             all_values[k].append(v)
-    # Broker on all versions
-    if "Broker" in all_values and any(v != "\u2014" for v in all_values["Broker"]):
-        metrics.append("Broker")
+    # Broker only on internal version
     if is_internal:
+        if "Broker" in all_values and any(v != "\u2014" for v in all_values["Broker"]):
+            metrics.append("Broker")
         for m in ["Commission", "Revenue"]:
             if m in all_values and any(v != "\u2014" for v in all_values[m]):
                 metrics.append(m)
@@ -1249,7 +1262,7 @@ def _build_umbrella_carrier(p, is_internal=True):
     is_declined = p["display_status"] in ("Declined", "Blocked", "Lost")
     if is_declined:
         values = {"Premium": "Declined"}
-        if p["broker"] != "\u2014":
+        if is_internal and p["broker"] != "\u2014":
             values["Broker"] = p["broker"]
         comments = p.get("comments", "")
         if isinstance(comments, str) and len(comments) > 150:
@@ -1281,8 +1294,8 @@ def _build_umbrella_carrier(p, is_internal=True):
             values["Rate/$1K Sales"] = f"${rate_per_sales:,.2f}"
         except (ValueError, TypeError, ZeroDivisionError):
             pass
-    # Broker on all policies
-    if p["broker"] != "\u2014":
+    # Broker only on internal version
+    if is_internal and p["broker"] != "\u2014":
         values["Broker"] = p["broker"]
     if is_internal:
         if p["commission"]:
@@ -1314,10 +1327,10 @@ def _get_umbrella_metrics(carriers_data, is_internal=True):
     for m in ["Rate/Unit", "Rate/$1K Sales"]:
         if m in all_values and any(v != "\u2014" for v in all_values.get(m, [])):
             metrics.append(m)
-    # Broker on all versions
-    if "Broker" in all_values and any(v != "\u2014" for v in all_values["Broker"]):
-        metrics.append("Broker")
+    # Broker only on internal version
     if is_internal:
+        if "Broker" in all_values and any(v != "\u2014" for v in all_values["Broker"]):
+            metrics.append("Broker")
         for m in ["Commission", "Revenue"]:
             if m in all_values and any(v != "\u2014" for v in all_values[m]):
                 metrics.append(m)
@@ -1328,7 +1341,7 @@ def _build_wc_carrier(p, is_internal=True):
     is_declined = p["display_status"] in ("Declined", "Blocked", "Lost")
     if is_declined:
         values = {"Premium": "Declined"}
-        if p["broker"] != "\u2014":
+        if is_internal and p["broker"] != "\u2014":
             values["Broker"] = p["broker"]
         comments = p.get("comments", "")
         if isinstance(comments, str) and len(comments) > 150:
@@ -1343,8 +1356,8 @@ def _build_wc_carrier(p, is_internal=True):
         "Premium": _safe_currency(p["premium_tx"]) if p["premium_tx"] else "Pending",
         "Total Payroll": _safe_currency_int(p["total_payroll"]),
     }
-    # Broker on all policies
-    if p["broker"] != "\u2014":
+    # Broker only on internal version
+    if is_internal and p["broker"] != "\u2014":
         values["Broker"] = p["broker"]
     if p["exp_mod"]:
         try:
@@ -1386,10 +1399,10 @@ def _get_wc_metrics(carriers_data, is_internal=True):
     for m in ["Exp Mod", "Safety Credit", "Drug Free Credit"]:
         if m in all_values and any(v not in ("\u2014", "No") for v in all_values[m]):
             metrics.append(m)
-    # Broker on all versions
-    if "Broker" in all_values and any(v != "\u2014" for v in all_values["Broker"]):
-        metrics.append("Broker")
+    # Broker only on internal version
     if is_internal:
+        if "Broker" in all_values and any(v != "\u2014" for v in all_values["Broker"]):
+            metrics.append("Broker")
         for m in ["Commission", "Revenue"]:
             if m in all_values and any(v != "\u2014" for v in all_values[m]):
                 metrics.append(m)
@@ -1401,7 +1414,7 @@ def _build_generic_carrier(p, is_internal=True):
     is_declined = p["display_status"] in ("Declined", "Blocked", "Lost")
     if is_declined:
         values = {"Premium": "Declined"}
-        if p["broker"] != "\u2014":
+        if is_internal and p["broker"] != "\u2014":
             values["Broker"] = p["broker"]
         comments = p.get("comments", "")
         if isinstance(comments, str) and len(comments) > 150:
@@ -1435,8 +1448,8 @@ def _build_generic_carrier(p, is_internal=True):
         if p["gross_sales"]:
             values["Gross Sales"] = _safe_currency_int(p["gross_sales"])
 
-    # Broker on all policies (not just internal)
-    if p["broker"] != "\u2014":
+    # Broker only on internal version
+    if is_internal and p["broker"] != "\u2014":
         values["Broker"] = p["broker"]
 
     if is_internal:
@@ -1467,7 +1480,10 @@ def _get_generic_metrics(carriers_data, is_internal=True):
             all_values[k].append(v)
     # Add metrics that have data (available on all versions)
     optional = ["# of Units", "# of Locations", "Gross Sales", "Limit", "Flood Limit", "Flood Deductible",
-                "Building Limit", "BPP Limit", "Retention", "Broker"]
+                "Building Limit", "BPP Limit", "Retention"]
+    # Broker only on internal version
+    if is_internal:
+        optional.append("Broker")
     for m in optional:
         if m in all_values and any(v != "\u2014" for v in all_values[m]):
             metrics.append(m)
@@ -1527,8 +1543,8 @@ def _build_property_tower(policies, is_internal=True):
         "AOW (All Other Wind)": incumbents[0]["aow"],
         "Water Damage": incumbents[0]["water_damage"],
     }
-    if is_internal:
-        values["Property Rate"] = f"${blended_rate:.2f}" if blended_rate else "\u2014"
+    # Property rate on both versions
+    values["Property Rate"] = f"${blended_rate:.2f}" if blended_rate else "\u2014"
     prop_limit = _max_limit(incumbents, "property_limit")
     if prop_limit != "\u2014":
         values["Property Limit"] = prop_limit
@@ -1538,7 +1554,8 @@ def _build_property_tower(policies, is_internal=True):
     eq_limit = _max_limit(incumbents, "eq_limit")
     if eq_limit != "\u2014":
         values["EQ Limit"] = eq_limit
-    if incumbents[0]["broker"] != "\u2014":
+    # Broker only on internal version
+    if is_internal and incumbents[0]["broker"] != "\u2014":
         values["Broker"] = incumbents[0]["broker"]
     if is_internal:
         total_rev = sum(p["revenue"] for p in incumbents if p["revenue"])
@@ -1584,7 +1601,8 @@ def _build_umbrella_tower(policies, is_internal=True):
         "Umbrella Limit": _fmt_limit(str(int(total_limit))) + " (combined)" if total_limit else "\u2014",
         "Total Sales": _safe_currency_int(incumbents[0]["gross_sales"]),
     }
-    if incumbents[0]["broker"] != "\u2014":
+    # Broker only on internal version
+    if is_internal and incumbents[0]["broker"] != "\u2014":
         values["Broker"] = incumbents[0]["broker"]
     if is_internal:
         total_rev = sum(p["revenue"] for p in incumbents if p["revenue"])
