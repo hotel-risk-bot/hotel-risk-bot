@@ -173,13 +173,14 @@ def _safe_str(val, default="—"):
 
 
 def _safe_currency(val, default="—"):
+    """Format as currency without cents (e.g., $1,788,571)."""
     if val is None:
         return default
     try:
         n = float(str(val).replace("$", "").replace(",", ""))
         if n == 0:
             return default
-        return f"${n:,.2f}"
+        return f"${n:,.0f}"
     except (ValueError, TypeError):
         return default
 
@@ -1113,7 +1114,21 @@ def _build_property_carrier(p, is_internal=True):
         "Water Damage": p["water_damage"],
     }
     if is_internal:
-        values["Property Rate"] = _safe_currency(p["property_rate"]) if p["property_rate"] else "\u2014"
+        # Calculate rate from base premium / TIV if property_rate not available
+        if p["property_rate"]:
+            values["Property Rate"] = _safe_currency(p["property_rate"])
+        elif p["base_premium"] and p["tiv"]:
+            try:
+                tiv_val = float(str(p["tiv"]).replace("$", "").replace(",", ""))
+                if tiv_val > 0:
+                    calc_rate = (p["base_premium"] / tiv_val) * 100
+                    values["Property Rate"] = f"${calc_rate:.2f}"
+                else:
+                    values["Property Rate"] = "\u2014"
+            except (ValueError, TypeError):
+                values["Property Rate"] = "\u2014"
+        else:
+            values["Property Rate"] = "\u2014"
     if p["property_limit"] != "\u2014":
         values["Property Limit"] = p["property_limit"]
     if p["flood_limit"] != "\u2014":
@@ -1485,8 +1500,19 @@ def _build_property_tower(policies, is_internal=True):
         return None  # No tower needed
 
     tower_prem = sum(p["premium_tx"] for p in incumbents)
-    tower_tiv = incumbents[0]["tiv"] if incumbents else 0
-    blended_rate = sum(p["property_rate"] or 0 for p in incumbents) / len(incumbents) if incumbents else 0
+    # TIV is the same across all carriers in the tower (shared exposure)
+    tower_tiv = 0
+    for p in incumbents:
+        if p["tiv"]:
+            try:
+                tiv_val = float(str(p["tiv"]).replace("$", "").replace(",", ""))
+                if tiv_val > tower_tiv:
+                    tower_tiv = tiv_val
+            except (ValueError, TypeError):
+                pass
+    # Blended rate = combined base premium / TIV * 100 (rate per $100)
+    tower_base_prem = sum(p["base_premium"] for p in incumbents)
+    blended_rate = (tower_base_prem / tower_tiv * 100) if tower_tiv > 0 and tower_base_prem > 0 else 0
 
     # Get max limits
     def _max_limit(pols, key):
@@ -1511,7 +1537,7 @@ def _build_property_tower(policies, is_internal=True):
         "Water Damage": incumbents[0]["water_damage"],
     }
     if is_internal:
-        values["Blended Rate"] = f"${blended_rate:.2f}" if blended_rate else "\u2014"
+        values["Property Rate"] = f"${blended_rate:.2f}" if blended_rate else "\u2014"
     prop_limit = _max_limit(incumbents, "property_limit")
     if prop_limit != "\u2014":
         values["Property Limit"] = prop_limit
@@ -1761,35 +1787,35 @@ def build_premium_comparison(by_coverage, parsed_policies):
             if expiring_premium > 0:
                 change = proposed_premium - expiring_premium
                 pct_change = (change / expiring_premium) * 100
-                change_str = f"+${change:,.2f}" if change > 0 else f"-${abs(change):,.2f}"
+                change_str = f"+${change:,.0f}" if change > 0 else f"-${abs(change):,.0f}"
                 pct_str = f"+{pct_change:.1f}%" if change > 0 else f"{pct_change:.1f}%"
                 total_expiring += expiring_premium
                 total_proposed += proposed_premium
             else:
-                change_str = "—"
-                pct_str = "—"
+                change_str = "\u2014"
+                pct_str = "\u2014"
                 total_proposed += proposed_premium
             rows.append([display_name, carrier_name, exp_str, prop_str, change_str, pct_str])
         elif is_included:
-            exp_str = "—" if not expiring_premium else _safe_currency(expiring_premium)
-            rows.append([display_name, "Included in GL", exp_str, "Included", "—", "—"])
+            exp_str = "\u2014" if not expiring_premium else _safe_currency(expiring_premium)
+            rows.append([display_name, "Included in GL", exp_str, "Included", "\u2014", "\u2014"])
         else:
-            exp_str = _safe_currency(expiring_premium) if expiring_premium else "—"
+            exp_str = _safe_currency(expiring_premium) if expiring_premium else "\u2014"
             if expiring_premium:
                 total_expiring += expiring_premium
             pending_coverages.append(display_name)
-            rows.append([display_name, carrier_name, exp_str, "Pending", "—", "—"])
+            rows.append([display_name, carrier_name, exp_str, "Pending", "\u2014", "\u2014"])
 
     # Total row
     total_change = total_proposed - total_expiring if total_expiring > 0 else 0
     total_pct = (total_change / total_expiring * 100) if total_expiring > 0 else 0
-    total_change_str = f"+${total_change:,.2f}" if total_change > 0 else f"-${abs(total_change):,.2f}" if total_change != 0 else "—"
-    total_pct_str = f"+{total_pct:.1f}%" if total_change > 0 else f"{total_pct:.1f}%" if total_change != 0 else "—"
+    total_change_str = f"+${total_change:,.0f}" if total_change > 0 else f"-${abs(total_change):,.0f}" if total_change != 0 else "\u2014"
+    total_pct_str = f"+{total_pct:.1f}%" if total_change > 0 else f"{total_pct:.1f}%" if total_change != 0 else "\u2014"
 
     rows.append([
         "TOTAL", "",
-        _safe_currency(total_expiring) if total_expiring else "—",
-        _safe_currency(total_proposed) if total_proposed else "—",
+        _safe_currency(total_expiring) if total_expiring else "\u2014",
+        _safe_currency(total_proposed) if total_proposed else "\u2014",
         total_change_str, total_pct_str,
     ])
 
@@ -1863,37 +1889,37 @@ def build_premium_comparison_internal(by_coverage, parsed_policies):
             if expiring_premium > 0:
                 change = proposed_premium - expiring_premium
                 pct_change = (change / expiring_premium) * 100
-                change_str = f"+${change:,.2f}" if change > 0 else f"-${abs(change):,.2f}"
+                change_str = f"+${change:,.0f}" if change > 0 else f"-${abs(change):,.0f}"
                 pct_str = f"+{pct_change:.1f}%" if change > 0 else f"{pct_change:.1f}%"
                 total_expiring += expiring_premium
                 total_proposed += proposed_premium
             else:
-                change_str = "—"
-                pct_str = "—"
+                change_str = "\u2014"
+                pct_str = "\u2014"
                 total_proposed += proposed_premium
             rows.append([display_name, carrier_name, exp_str, prop_str, change_str, pct_str, comm_str, rev_str, broker_str])
         elif is_included:
-            exp_str = "—" if not expiring_premium else _safe_currency(expiring_premium)
-            rows.append([display_name, "Included in GL", exp_str, "Included", "—", "—", "—", "—", "—"])
+            exp_str = "\u2014" if not expiring_premium else _safe_currency(expiring_premium)
+            rows.append([display_name, "Included in GL", exp_str, "Included", "\u2014", "\u2014", "\u2014", "\u2014", "\u2014"])
         else:
-            exp_str = _safe_currency(expiring_premium) if expiring_premium else "—"
+            exp_str = _safe_currency(expiring_premium) if expiring_premium else "\u2014"
             if expiring_premium:
                 total_expiring += expiring_premium
             pending_coverages.append(display_name)
-            rows.append([display_name, carrier_name, exp_str, "Pending", "—", "—", comm_str, rev_str, broker_str])
+            rows.append([display_name, carrier_name, exp_str, "Pending", "\u2014", "\u2014", comm_str, rev_str, broker_str])
 
     # Total row
     total_change = total_proposed - total_expiring if total_expiring > 0 else 0
     total_pct = (total_change / total_expiring * 100) if total_expiring > 0 else 0
-    total_change_str = f"+${total_change:,.2f}" if total_change > 0 else f"-${abs(total_change):,.2f}" if total_change != 0 else "—"
-    total_pct_str = f"+{total_pct:.1f}%" if total_change > 0 else f"{total_pct:.1f}%" if total_change != 0 else "—"
+    total_change_str = f"+${total_change:,.0f}" if total_change > 0 else f"-${abs(total_change):,.0f}" if total_change != 0 else "\u2014"
+    total_pct_str = f"+{total_pct:.1f}%" if total_change > 0 else f"{total_pct:.1f}%" if total_change != 0 else "\u2014"
 
     rows.append([
         "TOTAL", "",
-        _safe_currency(total_expiring) if total_expiring else "—",
-        _safe_currency(total_proposed) if total_proposed else "—",
-        total_change_str, total_pct_str, "—",
-        _safe_currency(total_commission_revenue) if total_commission_revenue else "—", "—",
+        _safe_currency(total_expiring) if total_expiring else "\u2014",
+        _safe_currency(total_proposed) if total_proposed else "\u2014",
+        total_change_str, total_pct_str, "\u2014",
+        _safe_currency(total_commission_revenue) if total_commission_revenue else "\u2014", "\u2014",
     ])
 
     return rows, total_change, total_pct, pending_coverages
@@ -2208,15 +2234,48 @@ def generate_marketing_update_docx(
         if not carriers_data:
             continue
 
-        metrics = metrics_func(carriers_data, is_internal=is_internal)
+        # Separate declined carriers from the main table
+        active_carriers = [c for c in carriers_data if c["status"] not in ("Declined", "Blocked", "Lost")]
+        declined_carriers = [c for c in carriers_data if c["status"] in ("Declined", "Blocked", "Lost")]
+
+        # Use active carriers for the main table (or all if none are active)
+        table_carriers = active_carriers if active_carriers else carriers_data
+        metrics = metrics_func(table_carriers, is_internal=is_internal)
 
         # Page break management - avoid too many tables on one page
-        if not first_on_page and len(carriers_data) > 2:
+        if not first_on_page and len(table_carriers) > 2:
             add_page_break(doc)
             first_on_page = True
 
         add_subsection_header(doc, display_title)
-        create_carrier_comparison_table(doc, short_title, metrics, carriers_data)
+        create_carrier_comparison_table(doc, short_title, metrics, table_carriers)
+
+        # Show declined carriers as notes below the table
+        if declined_carriers:
+            declined_names = []
+            for dc in declined_carriers:
+                name = dc["name"]
+                notes = dc.get("notes", "")
+                broker = dc.get("values", {}).get("Broker", "")
+                parts = [name]
+                if broker:
+                    parts.append(f"via {broker}")
+                if notes and notes != "Declined to quote":
+                    # Truncate long notes
+                    short_notes = notes[:80] + "..." if len(notes) > 80 else notes
+                    parts.append(f"\u2014 {short_notes}")
+                declined_names.append(" ".join(parts))
+            declined_text = f"Declined: {'; '.join(declined_names)}"
+            p_declined = doc.add_paragraph()
+            p_declined.paragraph_format.space_before = Pt(2)
+            p_declined.paragraph_format.space_after = Pt(4)
+            p_declined.paragraph_format.left_indent = Inches(0.1)
+            run_d = p_declined.add_run(declined_text)
+            run_d.font.size = Pt(8)
+            run_d.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+            run_d.font.italic = True
+            run_d.font.name = "Calibri"
+
         add_formatted_paragraph(doc, "", size=8, space_before=0, space_after=0)
         first_on_page = False
 
