@@ -557,6 +557,13 @@ def build_verification_summary(data: dict) -> str:
         if cov:
             carrier = cov.get("carrier", "N/A")
             premium = cov.get("total_premium", 0)
+            if premium is None:
+                premium = 0
+            elif not isinstance(premium, (int, float)):
+                try:
+                    premium = float(str(premium).replace(",", "").replace("$", ""))
+                except (ValueError, TypeError):
+                    premium = 0
             total_premium += premium
             admitted = "Admitted" if cov.get("carrier_admitted", True) else "Non-Admitted"
             
