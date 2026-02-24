@@ -671,7 +671,9 @@ def generate_premium_summary(doc, data):
     coverage_names = {
         "property": "Property",
         "general_liability": "General Liability",
-        "umbrella": "Umbrella",
+        "umbrella": "Umbrella / Excess",
+        "umbrella_layer_2": "2nd Excess Layer",
+        "umbrella_layer_3": "3rd Excess Layer",
         "workers_comp": "Workers Compensation",
         "commercial_auto": "Commercial Auto",
         "flood": "Flood",
@@ -679,7 +681,8 @@ def generate_premium_summary(doc, data):
         "cyber": "Cyber",
         "terrorism": "Terrorism / TRIA",
         "crime": "Crime",
-        "inland_marine": "Inland Marine"
+        "inland_marine": "Inland Marine",
+        "employee_benefits": "Employee Benefits"
     }
     
     headers = ["Coverage", "Carrier", "Expiring", "Proposed", "$ Change", "% Change"]
@@ -827,7 +830,9 @@ def generate_subjectivities(doc, data):
     coverage_names = {
         "property": "Property",
         "general_liability": "General Liability",
-        "umbrella": "Umbrella",
+        "umbrella": "Umbrella / Excess",
+        "umbrella_layer_2": "2nd Excess Layer",
+        "umbrella_layer_3": "3rd Excess Layer",
         "workers_comp": "Workers Compensation",
         "commercial_auto": "Commercial Auto"
     }
@@ -987,9 +992,10 @@ def generate_locations(doc, data):
     sov_data = data.get("sov_data")
     
     if sov_data and sov_data.get("locations"):
-        # Rich SOV-based location table
+        # Rich SOV-based location table with property value breakdown
         sov_locs = sov_data["locations"]
-        headers = ["#", "Property Name", "Address", "City", "ST", "Rooms", "Yr Built", "Construction", "TIV"]
+        headers = ["#", "Property Name", "Address", "City", "ST", "Rooms", "Construction",
+                   "Building", "Contents", "BI/Rents", "TIV"]
         rows = []
         loc_num = 0
         
@@ -1011,8 +1017,10 @@ def generate_locations(doc, data):
                 loc.get("city", ""),
                 loc.get("state", ""),
                 str(loc.get("num_rooms", "")) if loc.get("num_rooms") else "",
-                str(loc.get("year_built", "")) if loc.get("year_built") else "",
                 loc.get("construction_type", ""),
+                fmt_currency(loc.get("building_value", 0)) if loc.get("building_value") else "",
+                fmt_currency(loc.get("contents_value", 0)) if loc.get("contents_value") else "",
+                fmt_currency(loc.get("bi_value", 0)) if loc.get("bi_value") else "",
                 fmt_currency(loc.get("tiv", 0)) if loc.get("tiv") else ""
             ])
         
@@ -1030,9 +1038,11 @@ def generate_locations(doc, data):
                     loc.get("address", ""),
                     loc.get("city", ""),
                     loc.get("state", ""),
-                    "",  # no rooms for non-hotel locations
-                    "",  # no year built
-                    "",  # no construction type
+                    "",  # no rooms
+                    "",  # no construction
+                    "",  # no building value
+                    "",  # no contents
+                    "",  # no BI
                     ""   # no TIV
                 ])
         
@@ -1041,7 +1051,10 @@ def generate_locations(doc, data):
         rows.append([
             "", "TOTAL", "", "", "",
             str(totals.get("num_rooms", "")),
-            "", "",
+            "",
+            fmt_currency(totals.get("building_value", 0)),
+            fmt_currency(totals.get("contents_value", 0)),
+            fmt_currency(totals.get("bi_value", 0)),
             fmt_currency(totals.get("tiv", 0))
         ])
         
@@ -1049,10 +1062,10 @@ def generate_locations(doc, data):
         C = WD_ALIGN_PARAGRAPH.CENTER
         R = WD_ALIGN_PARAGRAPH.RIGHT
         create_styled_table(doc, headers, rows,
-                          col_widths=[0.3, 1.5, 1.3, 0.8, 0.3, 0.5, 0.5, 1.0, 1.0],
-                          header_size=8, body_size=8,
-                          header_alignments={0: L, 1: L, 2: L, 3: L, 4: L, 5: L, 6: L, 7: L, 8: C},
-                          col_alignments={8: R})
+                          col_widths=[0.25, 1.0, 1.0, 0.65, 0.25, 0.4, 0.75, 0.85, 0.75, 0.75, 0.85],
+                          header_size=7, body_size=7,
+                          header_alignments={0: L, 1: L, 2: L, 3: L, 4: L, 5: C, 6: L, 7: R, 8: R, 9: R, 10: R},
+                          col_alignments={5: C, 7: R, 8: R, 9: R, 10: R})
         
         # Add note about SOV
         add_formatted_paragraph(doc, "", size=6)
@@ -1233,20 +1246,52 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     classes = cov.get("schedule_of_classes", [])
     if classes:
         add_subsection_header(doc, "Schedule of Classes")
-        headers = ["Location", "Classification", "Class Code", "Exposure Basis", "Exposure", "Premium"]
-        rows = [[
-            c.get("location", ""),
-            c.get("classification", ""),
-            c.get("class_code", ""),
-            c.get("exposure_basis", ""),
-            c.get("exposure", ""),
-            c.get("premium", "")
-        ] for c in classes]
-        from docx.enum.text import WD_ALIGN_PARAGRAPH as WD_ALIGN
-        create_styled_table(doc, headers, rows,
-                          col_widths=[1.8, 1.8, 0.8, 1.0, 1.0, 1.0],
-                          header_size=9, body_size=9,
-                          col_alignments={4: WD_ALIGN.RIGHT, 5: WD_ALIGN.RIGHT})
+        # Check if we have address/brand data for the enhanced format
+        has_address = any(c.get("address") or c.get("brand_dba") for c in classes if isinstance(c, dict))
+        
+        if has_address:
+            # Enhanced format: Address | Brand/DBA | Classification | Exposure | Premium
+            headers = ["Address", "Brand / DBA", "Classification", "Exposure", "Premium"]
+            rows = []
+            for c in classes:
+                if not isinstance(c, dict):
+                    continue
+                addr = c.get("address", "")
+                brand = c.get("brand_dba", "")
+                # Fall back to location field if no address
+                if not addr and c.get("location"):
+                    addr = c.get("location", "")
+                classification = c.get("classification", "")
+                exposure_basis = c.get("exposure_basis", "")
+                exposure = c.get("exposure", "")
+                premium = c.get("premium", "")
+                # Combine exposure basis and amount
+                if exposure_basis and exposure:
+                    exposure_str = f"{exposure} ({exposure_basis})"
+                else:
+                    exposure_str = str(exposure) if exposure else ""
+                rows.append([addr, brand, classification, exposure_str, str(premium) if premium else ""])
+            from docx.enum.text import WD_ALIGN_PARAGRAPH as WD_ALIGN
+            create_styled_table(doc, headers, rows,
+                              col_widths=[2.0, 1.5, 1.5, 1.3, 1.0],
+                              header_size=8, body_size=8,
+                              col_alignments={3: WD_ALIGN.RIGHT, 4: WD_ALIGN.RIGHT})
+        else:
+            # Original format with location numbers
+            headers = ["Location", "Classification", "Class Code", "Exposure Basis", "Exposure", "Premium"]
+            rows = [[
+                c.get("location", ""),
+                c.get("classification", ""),
+                c.get("class_code", ""),
+                c.get("exposure_basis", ""),
+                c.get("exposure", ""),
+                c.get("premium", "")
+            ] for c in classes]
+            from docx.enum.text import WD_ALIGN_PARAGRAPH as WD_ALIGN
+            create_styled_table(doc, headers, rows,
+                              col_widths=[1.8, 1.8, 0.8, 1.0, 1.0, 1.0],
+                              header_size=9, body_size=9,
+                              col_alignments={4: WD_ALIGN.RIGHT, 5: WD_ALIGN.RIGHT})
     
     # Rating Basis (WC)
     rating = cov.get("rating_basis", [])
@@ -1460,7 +1505,9 @@ def generate_carrier_rating(doc, data):
     coverage_names = {
         "property": "Property",
         "general_liability": "General Liability",
-        "umbrella": "Umbrella",
+        "umbrella": "Umbrella / Excess",
+        "umbrella_layer_2": "2nd Excess Layer",
+        "umbrella_layer_3": "3rd Excess Layer",
         "workers_comp": "Workers Compensation",
         "commercial_auto": "Commercial Auto"
     }
@@ -1778,6 +1825,10 @@ def generate_proposal(data: dict, output_path: str) -> str:
         generate_coverage_section(doc, data, "commercial_auto", "Commercial Auto Coverage")
     if "umbrella" in coverages:
         generate_coverage_section(doc, data, "umbrella", "Umbrella / Excess Liability Coverage")
+    if "umbrella_layer_2" in coverages:
+        generate_coverage_section(doc, data, "umbrella_layer_2", "2nd Excess Liability Layer")
+    if "umbrella_layer_3" in coverages:
+        generate_coverage_section(doc, data, "umbrella_layer_3", "3rd Excess Liability Layer")
     if "cyber" in coverages:
         generate_coverage_section(doc, data, "cyber", "Cyber Liability Coverage")
     if "epli" in coverages:

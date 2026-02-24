@@ -21,7 +21,7 @@ from telegram.ext import (
 
 from proposal_extractor import ProposalExtractor
 from proposal_generator import generate_proposal
-from sov_parser import parse_sov, is_sov_file, format_sov_summary
+from sov_parser import parse_sov, is_sov_file, format_sov_summary, aggregate_locations
 
 logger = logging.getLogger(__name__)
 
@@ -437,6 +437,10 @@ async def extract_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
                     logger.info(f"Detected SOV spreadsheet: {filename}")
                     sov_data = await asyncio.to_thread(parse_sov, local_path)
                     
+                    # Aggregate building-level rows into location-level summaries
+                    if "error" not in sov_data:
+                        sov_data = aggregate_locations(sov_data)
+                    
                     if "error" in sov_data:
                         await update.message.reply_text(
                             f"\u26a0\ufe0f SOV parse error for {filename}: {sov_data['error']}"
@@ -579,8 +583,11 @@ def build_verification_summary(data: dict) -> str:
         "flood": "FLOOD",
         "terrorism": "TERRORISM / TRIA",
         "crime": "CRIME",
+        "employee_benefits": "EMPLOYEE BENEFITS",
         "equipment_breakdown": "EQUIPMENT BREAKDOWN",
-        "inland_marine": "INLAND MARINE"
+        "inland_marine": "INLAND MARINE",
+        "umbrella_layer_2": "2ND EXCESS LAYER",
+        "umbrella_layer_3": "3RD EXCESS LAYER"
     }
     
     total_premium = 0
@@ -720,6 +727,43 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     for key, cov in coverages.items():
         logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, premium={cov.get('total_premium', 0)}")
     
+    # Enrich GL schedule_of_classes with SOV address/brand data
+    sov_data = session.extracted_data.get('sov_data', {})
+    sov_locations = sov_data.get('locations', []) if sov_data else []
+    gl_cov = coverages.get('general_liability', {})
+    if gl_cov and sov_locations:
+        classes = gl_cov.get('schedule_of_classes', [])
+        if classes:
+            # Build lookup from location number to SOV data
+            sov_lookup = {}
+            for loc in sov_locations:
+                loc_num = loc.get('location_num', loc.get('building_num', 0))
+                if loc_num:
+                    sov_lookup[str(loc_num)] = loc
+            
+            for cls_entry in classes:
+                if not isinstance(cls_entry, dict):
+                    continue
+                # If no address/brand, try to enrich from SOV
+                if not cls_entry.get('address') or not cls_entry.get('brand_dba'):
+                    loc_str = str(cls_entry.get('location', ''))
+                    # Extract location number from strings like "Loc 1", "Location 1", "1"
+                    import re
+                    loc_match = re.search(r'(\d+)', loc_str)
+                    if loc_match:
+                        loc_num = loc_match.group(1)
+                        sov_loc = sov_lookup.get(loc_num)
+                        if sov_loc:
+                            if not cls_entry.get('address'):
+                                addr = sov_loc.get('address', '')
+                                city = sov_loc.get('city', '')
+                                state = sov_loc.get('state', '')
+                                if addr:
+                                    cls_entry['address'] = f"{addr}, {city}, {state}" if city else addr
+                            if not cls_entry.get('brand_dba'):
+                                cls_entry['brand_dba'] = sov_loc.get('dba', '') or sov_loc.get('hotel_flag', '')
+            logger.info(f"Enriched {len(classes)} GL schedule_of_classes entries with SOV data")
+    
     # Log expiring data
     exp_premiums = session.extracted_data.get('expiring_premiums', {})
     exp_details = session.extracted_data.get('expiring_details', {})
@@ -816,7 +860,8 @@ def _parse_expiring_block(raw_text: str) -> tuple:
         "auto": "commercial_auto", "commercial_auto": "commercial_auto",
         "flood": "flood", "epli": "epli", "cyber": "cyber",
         "crime": "crime", "crim": "crime",
-        "eb": "equipment_breakdown", "equipment_breakdown": "equipment_breakdown",
+        "eb": "employee_benefits", "employee_benefits": "employee_benefits",
+        "equipment_breakdown": "equipment_breakdown",
         "equipment": "equipment_breakdown",
         "inland_marine": "inland_marine",
         "im": "inland_marine", "bop": "bop",
@@ -827,6 +872,7 @@ def _parse_expiring_block(raw_text: str) -> tuple:
         "umbrella": "Umbrella", "workers_comp": "Workers Comp",
         "commercial_auto": "Commercial Auto", "flood": "Flood",
         "epli": "EPLI", "cyber": "Cyber", "crime": "Crime",
+        "employee_benefits": "Employee Benefits",
         "equipment_breakdown": "Equipment Breakdown",
         "inland_marine": "Inland Marine", "bop": "BOP",
     }
@@ -1276,7 +1322,8 @@ async def override_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "flood": "flood", "epli": "epli", "cyber": "cyber",
         "terr": "terrorism", "terrorism": "terrorism", "tria": "terrorism",
         "crime": "crime", "crim": "crime",
-        "eb": "equipment_breakdown", "equipment_breakdown": "equipment_breakdown",
+        "eb": "employee_benefits", "employee_benefits": "employee_benefits",
+        "equipment_breakdown": "equipment_breakdown",
         "equipment": "equipment_breakdown",
         "inland": "inland_marine",
     }
@@ -1285,7 +1332,8 @@ async def override_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "umbrella": "Umbrella", "workers_comp": "Workers Comp",
         "commercial_auto": "Commercial Auto", "flood": "Flood",
         "epli": "EPLI", "cyber": "Cyber", "terrorism": "Terrorism/TRIA",
-        "crime": "Crime", "equipment_breakdown": "Equipment Breakdown",
+        "crime": "Crime", "employee_benefits": "Employee Benefits",
+        "equipment_breakdown": "Equipment Breakdown",
         "inland_marine": "Inland Marine",
     }
     

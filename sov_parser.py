@@ -31,12 +31,15 @@ COLUMN_MAP = {
     "dba": "dba",
     "hotel flag": "hotel_flag",
     "brand": "hotel_flag",
+    "location name": "dba",
     "location #": "location_num",
     "location number": "location_num",
     "loc #": "location_num",
     "building #": "building_num",
     "building number": "building_num",
     "bldg #": "building_num",
+    "* bldg no.": "building_num",
+    "*bldg no.": "building_num",
 
     # Address fields
     "address": "address",
@@ -58,16 +61,24 @@ COLUMN_MAP = {
     "* building value": "building_value",
     "*building value": "building_value",
     "bldg value": "building_value",
+    "real property value": "building_value",
+    "*real property value": "building_value",
+    "* real property value": "building_value",
+    "*real property value ($)": "building_value",
     "contents value": "contents_value",
     "*contents value": "contents_value",
     "* contents value": "contents_value",
     "contents": "contents_value",
+    "personal property value": "contents_value",
+    "personal property value ($)": "contents_value",
     "business income/rents": "bi_value",
     "buisness income/rents": "bi_value",  # common typo in templates
     "*buisness income/rents": "bi_value",
     "* buisness income/rents": "bi_value",
     "*business income/rents": "bi_value",
     "* business income/rents": "bi_value",
+    "bi/rental income": "bi_value",
+    "bi/rental income ($)": "bi_value",
     "bi value": "bi_value",
     "bi": "bi_value",
     "pool value": "pool_value",
@@ -78,12 +89,16 @@ COLUMN_MAP = {
     "other": "other_value",
     "tiv": "tiv",
     "total insured value": "tiv",
+    "*total tiv": "tiv",
 
     # Construction details
     "occupancy description": "occupancy",
     "occupancy": "occupancy",
     "construction code (iso)*": "construction_code",
     "construction code": "construction_code",
+    "*iso const": "construction_code",
+    "iso const": "construction_code",
+    "iso construction": "construction_code",
     "construction type": "construction_type",
     "construction": "construction_type",
     "no. of stories": "stories",
@@ -113,6 +128,9 @@ COLUMN_MAP = {
     "# of rooms": "num_rooms",
     "rooms": "num_rooms",
     "number of rooms": "num_rooms",
+    "*# of units": "num_rooms",
+    "# of units": "num_rooms",
+    "units": "num_rooms",
 
     # Other
     "eifs?": "eifs",
@@ -210,18 +228,45 @@ def _map_columns(ws, header_row: int) -> dict:
     Returns {column_index: field_name}.
     """
     col_map = {}
+    # Track which fields have already been mapped to prevent duplicates
+    # (first column wins for each field name)
+    mapped_fields = set()
+    
     for cell in ws[header_row]:
         if cell.value:
-            normalized = _normalize_header(str(cell.value))
-            # Try exact match first
-            if normalized in COLUMN_MAP:
-                col_map[cell.column] = COLUMN_MAP[normalized]
-            else:
-                # Try partial match
+            raw = str(cell.value)
+            normalized = _normalize_header(raw)
+            # Strip leading asterisks and clean for matching
+            cleaned = re.sub(r'^\*+\s*', '', normalized).strip()
+            # Also strip trailing ($) or similar
+            cleaned_no_dollar = re.sub(r'\s*\(\$\)\s*$', '', cleaned).strip()
+            
+            matched_field = None
+            
+            # Try exact match on normalized, cleaned, and cleaned_no_dollar
+            for variant in [normalized, cleaned, cleaned_no_dollar]:
+                if variant in COLUMN_MAP:
+                    matched_field = COLUMN_MAP[variant]
+                    break
+            
+            # Try partial match only if no exact match found
+            # Use word-boundary-aware matching to avoid false positives
+            # (e.g., "addressnum" should NOT match "address")
+            if not matched_field:
                 for header_variant, field_name in COLUMN_MAP.items():
-                    if header_variant in normalized or normalized in header_variant:
-                        col_map[cell.column] = field_name
+                    # Skip very short variants for partial matching
+                    if len(header_variant) < 4:
+                        continue
+                    # Check if variant appears as a word boundary match in the header
+                    pattern = r'(?:^|\b|\s)' + re.escape(header_variant) + r'(?:$|\b|\s)'
+                    if re.search(pattern, normalized) or re.search(pattern, cleaned):
+                        matched_field = field_name
                         break
+            
+            # Only map if field hasn't been mapped yet (first column wins)
+            if matched_field and matched_field not in mapped_fields:
+                col_map[cell.column] = matched_field
+                mapped_fields.add(matched_field)
 
     logger.info(f"Mapped {len(col_map)} columns: {list(col_map.values())}")
     return col_map
@@ -421,6 +466,94 @@ def parse_sov(file_path: str) -> dict:
     }
 
     logger.info(f"SOV parsed: {len(locations)} locations, Total TIV: ${totals['tiv']:,.0f}")
+    return result
+
+
+def aggregate_locations(sov_data: dict) -> dict:
+    """
+    Aggregate building-level SOV rows into location-level summaries.
+    Many SOVs list multiple buildings per location (e.g., Days Inn has 4 buildings).
+    This groups them by building_num (location identifier) and sums values.
+    Returns a new sov_data dict with aggregated locations and updated totals.
+    """
+    if "error" in sov_data:
+        return sov_data
+    
+    raw_locations = sov_data.get("locations", [])
+    if not raw_locations:
+        return sov_data
+    
+    from collections import OrderedDict
+    agg = OrderedDict()
+    
+    for loc in raw_locations:
+        # Use building_num as the location grouping key (this is the location number in AmRisc SOVs)
+        key = loc.get("building_num", loc.get("location_num", 0))
+        if key not in agg:
+            agg[key] = {
+                "location_num": key,
+                "dba": loc.get("dba", ""),
+                "hotel_flag": loc.get("hotel_flag", ""),
+                "corporate_name": loc.get("corporate_name", ""),
+                "client_name": loc.get("client_name", ""),
+                "address": loc.get("address", ""),
+                "city": loc.get("city", ""),
+                "state": loc.get("state", ""),
+                "zip_code": loc.get("zip_code", ""),
+                "county": loc.get("county", ""),
+                "construction_type": loc.get("construction_type", ""),
+                "construction_code": loc.get("construction_code", ""),
+                "year_built": loc.get("year_built", 0),
+                "stories": loc.get("stories", 0),
+                "num_rooms": 0,
+                "building_value": 0.0,
+                "contents_value": 0.0,
+                "bi_value": 0.0,
+                "other_value": 0.0,
+                "pool_value": 0.0,
+                "sign_value": 0.0,
+                "tiv": 0.0,
+                "square_footage": 0,
+                "occupancy": loc.get("occupancy", ""),
+                "sprinkler_pct": loc.get("sprinkler_pct", ""),
+                "flood_zone": loc.get("flood_zone", ""),
+                "_building_count": 0,
+            }
+        entry = agg[key]
+        entry["num_rooms"] += loc.get("num_rooms", 0)
+        entry["building_value"] += loc.get("building_value", 0)
+        entry["contents_value"] += loc.get("contents_value", 0)
+        entry["bi_value"] += loc.get("bi_value", 0)
+        entry["other_value"] += loc.get("other_value", 0)
+        entry["pool_value"] += loc.get("pool_value", 0)
+        entry["sign_value"] += loc.get("sign_value", 0)
+        entry["tiv"] += loc.get("tiv", 0)
+        entry["square_footage"] += loc.get("square_footage", 0)
+        entry["_building_count"] += 1
+        # Use highest stories value
+        if loc.get("stories", 0) > entry["stories"]:
+            entry["stories"] = loc["stories"]
+    
+    aggregated = list(agg.values())
+    
+    # Recalculate totals
+    totals = {
+        "building_value": sum(loc.get("building_value", 0) for loc in aggregated),
+        "contents_value": sum(loc.get("contents_value", 0) for loc in aggregated),
+        "bi_value": sum(loc.get("bi_value", 0) for loc in aggregated),
+        "tiv": sum(loc.get("tiv", 0) for loc in aggregated),
+        "num_rooms": sum(loc.get("num_rooms", 0) for loc in aggregated),
+        "num_locations": len(aggregated),
+    }
+    
+    result = dict(sov_data)
+    result["locations"] = aggregated
+    result["locations_raw"] = raw_locations  # Keep raw building-level data
+    result["totals"] = totals
+    result["summary"] = dict(sov_data.get("summary", {}))
+    result["summary"]["num_locations"] = len(aggregated)
+    
+    logger.info(f"Aggregated {len(raw_locations)} buildings into {len(aggregated)} locations")
     return result
 
 

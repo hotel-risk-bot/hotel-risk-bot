@@ -459,7 +459,7 @@ The JSON structure should be:
       ],
       "aggregate_applies": "Per Location or Per Policy",
       "schedule_of_classes": [
-        {{"location": "Loc 1 - Address or Name", "classification": "Hotels/Motels", "class_code": "XXXXX", "exposure_basis": "Sales/Revenue/Area/Units", "exposure": "$X or number", "premium": "$X"}}
+        {{"location": "Loc 1", "address": "Street Address", "brand_dba": "Hotel Brand or DBA Name", "classification": "Hotels/Motels", "class_code": "XXXXX", "exposure_basis": "Sales/Revenue/Area/Units", "exposure": "$X or number", "premium": "$X"}}
       ],
       "additional_coverages": [
         {{"description": "Coverage name", "limit": "$X", "deductible": "$X"}}
@@ -470,7 +470,7 @@ The JSON structure should be:
       "subjectivities": []
     }},
     "umbrella": {{
-      "carrier": "Carrier name",
+      "carrier": "Primary layer carrier name",
       "carrier_admitted": true or false,
       "am_best_rating": "Rating",
       "premium": 0,
@@ -487,10 +487,44 @@ The JSON structure should be:
         {{"carrier": "Carrier", "coverage": "General Liability", "limits": "$X Occ / $X Agg"}}
       ],
       "tower_structure": [
-        {{"layer": "Primary", "carrier": "Carrier", "limits": "$XM xs $XM", "premium": 0, "total_cost": 0}}
+        {{"layer": "Primary", "carrier": "Carrier", "limits": "$5M xs Primary", "premium": 0, "total_cost": 0}}
       ],
       "first_dollar_defense": true,
       "tria_included": true,
+      "forms_endorsements": [],
+      "subjectivities": []
+    }},
+    "umbrella_layer_2": {{
+      "carrier": "Second layer carrier name (if a second excess layer exists)",
+      "carrier_admitted": true or false,
+      "am_best_rating": "Rating",
+      "premium": 0,
+      "taxes_fees": 0,
+      "total_premium": 0,
+      "limits": [
+        {{"description": "Each Occurrence", "limit": "$X"}},
+        {{"description": "Aggregate", "limit": "$X"}}
+      ],
+      "tower_structure": [
+        {{"layer": "2nd Excess", "carrier": "Carrier", "limits": "$5M xs $5M", "premium": 0, "total_cost": 0}}
+      ],
+      "forms_endorsements": [],
+      "subjectivities": []
+    }},
+    "umbrella_layer_3": {{
+      "carrier": "Third layer carrier name (if a third excess layer exists)",
+      "carrier_admitted": true or false,
+      "am_best_rating": "Rating",
+      "premium": 0,
+      "taxes_fees": 0,
+      "total_premium": 0,
+      "limits": [
+        {{"description": "Each Occurrence", "limit": "$X"}},
+        {{"description": "Aggregate", "limit": "$X"}}
+      ],
+      "tower_structure": [
+        {{"layer": "3rd Excess", "carrier": "Carrier", "limits": "$5M xs $10M", "premium": 0, "total_cost": 0}}
+      ],
       "forms_endorsements": [],
       "subjectivities": []
     }},
@@ -598,13 +632,15 @@ IMPORTANT:
 - Only include coverage sections that appear in the documents
 - Extract EVERY form number and endorsement exactly as written
 - Include form dates (e.g., "06/07" in "CP 00 10 06/07")
-- For total_premium: This MUST be the all-in out-the-door number. Look for "Total Cost of Policy", "Total Policy Premium", "Total Due", "Grand Total", or any final total line. It includes base premium + broker fees + surplus lines tax + stamping fee + fire marshal tax + inspection fees + FSLSO fees + EMPA surcharge + any other taxes/fees/surcharges. If no single total line exists, calculate total_premium = premium + taxes_fees. CRITICAL: total_premium must ALWAYS be >= premium. If the quote shows separate line items for taxes and fees, ADD them to the base premium to get total_premium
-- For GL schedule_of_classes: Extract the location-by-location exposure schedule showing each location's classification, exposure basis (sales/revenue/area/units/acres), and exposure amount. Include vacant land and all non-hotel locations
+- For total_premium: This MUST be the all-in out-the-door number. Look for "Total Package Cost", "Total Cost of Policy", "Total Policy Cost", "Total Policy Premium", "Total Due", "Grand Total", or any final total line. It includes base premium + broker fees + surplus lines tax + stamping fee + fire marshal tax + inspection fees + FSLSO fees + EMPA surcharge + any other taxes/fees/surcharges. If no single total line exists, calculate total_premium = premium + taxes_fees. CRITICAL: total_premium must ALWAYS be >= premium. If the quote shows separate line items for taxes and fees, ADD them to the base premium to get total_premium
+- For GL policies that include BOTH General Liability AND Liquor Liability in a single package: The "premium" field should be the combined package premium (GL + Liquor), and "total_premium" should be the Total Package Cost (premium + broker fee + surplus lines tax + stamping fee). For example if GL premium is $408,733, Liquor is $10,287, Total Package Premium is $419,020, and Total Package Cost is $442,471, then premium=$419,020 and total_premium=$442,471
+- For GL schedule_of_classes: Extract the location-by-location exposure schedule showing each location's classification, exposure basis (sales/revenue/area/units), and exposure amount. Include vacant land, restaurants, liquor, sundry, and all non-hotel locations. For each entry, include the "address" (street address) and "brand_dba" (hotel brand name like Courtyard by Marriott, Hampton Inn, Days Inn, Best Western, etc.). If the quote only shows location numbers, map them to addresses/brands from the SOV or other documents. Include ALL exposure classes for each location (e.g., Hotel/Motel, Restaurant, Liquor Liability as separate rows for the same location)
 - ALWAYS preserve cents in premium amounts (e.g., $60,513.35 not $60,513)
 - Mark excluded coverages explicitly
 - For Property: ALWAYS include Flood and Earthquake rows even if excluded
 - For additional_named_insureds: Search ALL pages for "Additional Named Insured", "Additional Named Insureds Schedule", "Named Insured Schedule", or similar headings. These are often on a separate page listing multiple entities (e.g., LLCs, management companies, DBAs). Extract every entity listed.
 - For additional_insureds: Search for "Additional Insured", "Additional Insured Schedule", or endorsement pages listing additional insureds (franchisors, mortgagees, managers). Extract all of them.
+- UMBRELLA/EXCESS LAYERS: When multiple umbrella/excess liability quotes are provided (e.g., separate PDFs for different layers), extract EACH layer as a separate coverage entry. Use "umbrella" for the primary excess layer, "umbrella_layer_2" for the second excess layer ($XM xs $XM), and "umbrella_layer_3" for the third excess layer ($XM xs $XM). Each layer has its own carrier, premium, limits, forms, and subjectivities. The tower_structure field should show that layer's position. Look for "Controlling Underlying" or "Schedule of Underlying" to determine the layer position. If a quote says it sits excess of another carrier's layer, it is a higher layer.
 
 DOCUMENT TEXT:
 {document_text}"""
