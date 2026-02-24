@@ -893,11 +893,29 @@ def generate_payment_options(doc, data):
     
     payment_opts = data.get("payment_options", [])
     if payment_opts:
-        headers = ["Carrier", "Payment Terms", "Minimum Earned Premium"]
-        rows = [[po.get("carrier", ""), po.get("terms", ""), po.get("mep", "")] for po in payment_opts]
-        create_styled_table(doc, headers, rows, col_widths=[2.2, 3.3, 2.0],
-                           header_size=10, body_size=10,
-                           col_alignments={2: WD_ALIGN_PARAGRAPH.CENTER})
+        # Filter out commission-related entries and clean commission text from terms
+        import re
+        filtered_opts = []
+        for po in payment_opts:
+            terms = po.get("terms", "")
+            carrier = po.get("carrier", "")
+            # Skip entries that are purely about commission
+            if carrier.lower().strip() in ("commission", "broker fee", "broker"):
+                continue
+            # Remove commission-related sentences from terms text
+            terms = re.sub(r'[^.]*commission[^.]*\.?', '', terms, flags=re.IGNORECASE).strip()
+            terms = re.sub(r'[^.]*broker fee[^.]*\.?', '', terms, flags=re.IGNORECASE).strip()
+            if terms or po.get("mep"):
+                filtered_opts.append({"carrier": carrier, "terms": terms, "mep": po.get("mep", "")})
+        
+        if filtered_opts:
+            headers = ["Carrier", "Payment Terms", "Minimum Earned Premium"]
+            rows = [[po.get("carrier", ""), po.get("terms", ""), po.get("mep", "")] for po in filtered_opts]
+            create_styled_table(doc, headers, rows, col_widths=[2.2, 3.3, 2.0],
+                               header_size=10, body_size=10,
+                               col_alignments={2: WD_ALIGN_PARAGRAPH.CENTER})
+        else:
+            add_formatted_paragraph(doc, "Payment terms to be confirmed upon binding.", size=11)
     else:
         add_formatted_paragraph(doc, "Payment terms to be confirmed upon binding.", size=11)
 
@@ -1167,6 +1185,70 @@ def generate_locations(doc, data):
                 "on_liability": addr_key in liability_addr_keys,
             })
             seen_addr_keys.add(addr_key)
+    
+    # Third: GL schedule_of_classes locations not already in master list
+    # This catches liability-only locations (e.g., LaPlace, vacant land) that aren't on SOV or extracted locations
+    gl_seen_addrs = set()  # Deduplicate GL entries (multiple classes per location)
+    for entry in gl_classes:
+        if not isinstance(entry, dict):
+            continue
+        addr = entry.get("address", "")
+        if not addr:
+            continue
+        # Parse address - may contain "Street, City, ST ZIP" or just street
+        addr_norm = _normalize_addr(addr)
+        if addr_norm in gl_seen_addrs:
+            continue
+        gl_seen_addrs.add(addr_norm)
+        
+        # Check if this address is already in the master list
+        already_in = False
+        for ml in master_locations:
+            ml_addr_norm = _normalize_addr(ml.get("address", ""))
+            if addr_norm == ml_addr_norm or addr_norm in ml_addr_norm or ml_addr_norm in addr_norm:
+                already_in = True
+                break
+        
+        if not already_in:
+            # Try to parse city/state from the address string (e.g., "4285 Highway 51, LaPlace, LA 70068")
+            import re
+            parts = [p.strip() for p in addr.split(",")]
+            street = parts[0] if parts else addr
+            city = ""
+            state = ""
+            if len(parts) >= 3:
+                street = parts[0]
+                city = parts[1]
+                # State might be "LA 70068" or just "LA"
+                st_match = re.match(r'([A-Z]{2})\s*\d*', parts[2].strip())
+                if st_match:
+                    state = st_match.group(1)
+            elif len(parts) == 2:
+                street = parts[0]
+                st_match = re.match(r'([A-Z]{2})\s*\d*', parts[1].strip())
+                if st_match:
+                    state = st_match.group(1)
+                else:
+                    city = parts[1]
+            
+            brand = entry.get("brand_dba", "") or entry.get("classification", "")
+            if not brand or not brand.strip():
+                brand = "Pending"
+            
+            addr_key = (_normalize_addr(street) + "|" +
+                       _normalize_addr(city) + "|" +
+                       state.strip().upper())
+            if addr_key not in seen_addr_keys:
+                master_locations.append({
+                    "name": brand,
+                    "address": street,
+                    "city": city,
+                    "state": state,
+                    "tiv": 0,
+                    "on_property": addr_key in property_addr_keys,
+                    "on_liability": True,  # It's from GL, so always on liability
+                })
+                seen_addr_keys.add(addr_key)
     
     if master_locations:
         CHECK = "\u2713"  # Unicode checkmark

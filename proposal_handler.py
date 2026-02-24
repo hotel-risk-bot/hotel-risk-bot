@@ -840,16 +840,19 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
                     f"\u2705 **Proposal Generated**\n\n"
                     f"**Client:** {safe_client}\n"
                     f"**File:** {safe_filename}\n\n"
-                    f"Review the document and make any final edits as needed.\n"
-                    f"Send /proposal to start a new proposal."
+                    f"Session remains active. You can:\n"
+                    f"\u2022 /override to adjust premiums\n"
+                    f"\u2022 Upload additional quotes + /extract\n"
+                    f"\u2022 /expiring to update expiring data\n"
+                    f"\u2022 /generate to regenerate proposal\n"
+                    f"\u2022 /proposal\\_cancel to end session"
                 ),
                 parse_mode="Markdown"
             )
         
-        # Cleanup session
-        clear_session(chat_id)
-        
-        return ConversationHandler.END
+        # Keep session alive - return to REVIEWING_EXTRACTION so user can
+        # /override, upload more files, /extract, and /generate again
+        return REVIEWING_EXTRACTION
         
     except Exception as e:
         logger.error(f"Error generating proposal: {e}", exc_info=True)

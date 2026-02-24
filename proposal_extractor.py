@@ -623,7 +623,7 @@ The JSON structure should be:
     "total": 0
   }},
   "payment_options": [
-    {{"carrier": "Carrier", "terms": "Payment terms", "mep": "Minimum earned premium"}}
+    {{"carrier": "Carrier", "terms": "Payment terms (exclude commission/broker fee info)", "mep": "Minimum earned premium"}}
   ]
 }}
 
