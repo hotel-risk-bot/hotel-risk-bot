@@ -1067,123 +1067,148 @@ def _dedup_locations(raw_locations):
 
 
 def generate_locations(doc, data):
-    """Section 8: Locations — uses SOV data when available for richer detail."""
+    """Section 8: Locations — unified schedule with Property/Liability coverage checkmarks."""
     add_page_break(doc)
     add_section_header(doc, "Schedule of Locations")
     
     raw_locations = data.get("locations", [])
     locations = _dedup_locations(raw_locations)
     sov_data = data.get("sov_data")
+    coverages = data.get("coverages", {})
     
+    # Build a master list of all locations from all sources
+    # Each entry: {name, address, city, state, tiv, on_property, on_liability}
+    master_locations = []
+    seen_addr_keys = set()
+    
+    # --- Determine which addresses are on the PROPERTY policy ---
+    property_addr_keys = set()
     if sov_data and sov_data.get("locations"):
-        # Rich SOV-based location table with property value breakdown
-        sov_locs = sov_data["locations"]
-        headers = ["#", "Property Name", "Address", "City", "ST", "Rooms", "Construction",
-                   "Building", "Contents", "BI/Rents", "TIV"]
-        rows = []
-        loc_num = 0
-        
-        # Build set of SOV addresses for dedup
-        sov_addresses = set()
-        for loc in sov_locs:
+        for loc in sov_data["locations"]:
             addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
                        _normalize_addr(loc.get("city", "")) + "|" +
                        loc.get("state", "").strip().upper())
-            sov_addresses.add(addr_key)
-        
-        for loc in sov_locs:
-            loc_num += 1
-            name = loc.get("dba") or loc.get("hotel_flag") or loc.get("corporate_name", "")
-            rows.append([
-                str(loc_num),
-                name,
-                loc.get("address", ""),
-                loc.get("city", ""),
-                loc.get("state", ""),
-                str(loc.get("num_rooms", "")) if loc.get("num_rooms") else "",
-                loc.get("construction_type", ""),
-                fmt_currency(loc.get("building_value", 0)) if loc.get("building_value") else "",
-                fmt_currency(loc.get("contents_value", 0)) if loc.get("contents_value") else "",
-                fmt_currency(loc.get("bi_value", 0)) if loc.get("bi_value") else "",
-                fmt_currency(loc.get("tiv", 0)) if loc.get("tiv") else ""
-            ])
-        
-        # Merge non-SOV locations from extracted data (e.g., vacant land, liability-only locations)
+            property_addr_keys.add(addr_key)
+    elif "property" in coverages:
+        # If no SOV but property coverage exists, all extracted locations are on property
         for loc in locations:
             addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
                        _normalize_addr(loc.get("city", "")) + "|" +
                        loc.get("state", "").strip().upper())
-            if addr_key not in sov_addresses and loc.get("address"):
-                loc_num += 1
-                desc = loc.get("description", "")
-                rows.append([
-                    str(loc_num),
-                    desc or loc.get("corporate_entity", ""),
-                    loc.get("address", ""),
-                    loc.get("city", ""),
-                    loc.get("state", ""),
-                    "",  # no rooms
-                    "",  # no construction
-                    "",  # no building value
-                    "",  # no contents
-                    "",  # no BI
-                    ""   # no TIV
-                ])
+            property_addr_keys.add(addr_key)
+    
+    # --- Determine which addresses are on the LIABILITY policy ---
+    liability_addr_keys = set()
+    gl_cov = coverages.get("general_liability", {})
+    gl_classes = gl_cov.get("schedule_of_classes", []) if isinstance(gl_cov, dict) else []
+    for entry in gl_classes:
+        if isinstance(entry, dict):
+            addr = entry.get("address", "")
+            if addr:
+                # Try to find matching city/state from SOV or locations
+                matched = False
+                for loc in (sov_data.get("locations", []) if sov_data else []) + locations:
+                    if _normalize_addr(addr) in _normalize_addr(loc.get("address", "")) or \
+                       _normalize_addr(loc.get("address", "")) in _normalize_addr(addr):
+                        addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
+                                   _normalize_addr(loc.get("city", "")) + "|" +
+                                   loc.get("state", "").strip().upper())
+                        liability_addr_keys.add(addr_key)
+                        matched = True
+                        break
+                if not matched:
+                    liability_addr_keys.add(_normalize_addr(addr) + "||")
+    # If GL exists but no schedule_of_classes addresses, assume all locations are on liability
+    if "general_liability" in coverages and not liability_addr_keys:
+        for loc in (sov_data.get("locations", []) if sov_data else []) + locations:
+            addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
+                       _normalize_addr(loc.get("city", "")) + "|" +
+                       loc.get("state", "").strip().upper())
+            liability_addr_keys.add(addr_key)
+    
+    # --- Build master location list ---
+    # First: SOV locations (property locations)
+    if sov_data and sov_data.get("locations"):
+        for loc in sov_data["locations"]:
+            addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
+                       _normalize_addr(loc.get("city", "")) + "|" +
+                       loc.get("state", "").strip().upper())
+            name = loc.get("dba") or loc.get("hotel_flag") or loc.get("corporate_name", "")
+            if not name or not name.strip():
+                name = "Pending"
+            tiv = loc.get("tiv", 0)
+            master_locations.append({
+                "name": name,
+                "address": loc.get("address", ""),
+                "city": loc.get("city", ""),
+                "state": loc.get("state", ""),
+                "tiv": tiv,
+                "on_property": addr_key in property_addr_keys,
+                "on_liability": addr_key in liability_addr_keys,
+            })
+            seen_addr_keys.add(addr_key)
+    
+    # Second: extracted locations not already in SOV
+    for loc in locations:
+        addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
+                   _normalize_addr(loc.get("city", "")) + "|" +
+                   loc.get("state", "").strip().upper())
+        if addr_key not in seen_addr_keys and loc.get("address"):
+            name = loc.get("description", "") or loc.get("corporate_entity", "")
+            if not name or not name.strip():
+                name = "Pending"
+            master_locations.append({
+                "name": name,
+                "address": loc.get("address", ""),
+                "city": loc.get("city", ""),
+                "state": loc.get("state", ""),
+                "tiv": 0,
+                "on_property": addr_key in property_addr_keys,
+                "on_liability": addr_key in liability_addr_keys,
+            })
+            seen_addr_keys.add(addr_key)
+    
+    if master_locations:
+        CHECK = "\u2713"  # Unicode checkmark
+        headers = ["#", "Property Name", "Address", "City", "ST", "TIV", "Property", "Liability"]
+        rows = []
+        total_tiv = 0
+        
+        for i, loc in enumerate(master_locations, 1):
+            tiv_val = loc["tiv"] or 0
+            total_tiv += tiv_val
+            rows.append([
+                str(i),
+                loc["name"],
+                loc["address"],
+                loc["city"],
+                loc["state"],
+                fmt_currency(tiv_val) if tiv_val else "",
+                CHECK if loc["on_property"] else "",
+                CHECK if loc["on_liability"] else "",
+            ])
         
         # Add totals row
-        totals = sov_data.get("totals", {})
         rows.append([
             "", "TOTAL", "", "", "",
-            str(totals.get("num_rooms", "")),
-            "",
-            fmt_currency(totals.get("building_value", 0)),
-            fmt_currency(totals.get("contents_value", 0)),
-            fmt_currency(totals.get("bi_value", 0)),
-            fmt_currency(totals.get("tiv", 0))
+            fmt_currency(total_tiv) if total_tiv else "",
+            "", ""
         ])
         
         L = WD_ALIGN_PARAGRAPH.LEFT
         C = WD_ALIGN_PARAGRAPH.CENTER
         R = WD_ALIGN_PARAGRAPH.RIGHT
         create_styled_table(doc, headers, rows,
-                          col_widths=[0.25, 1.0, 1.0, 0.65, 0.25, 0.4, 0.75, 0.85, 0.75, 0.75, 0.85],
-                          header_size=7, body_size=7,
-                          header_alignments={0: L, 1: L, 2: L, 3: L, 4: L, 5: C, 6: L, 7: R, 8: R, 9: R, 10: R},
-                          col_alignments={5: C, 7: R, 8: R, 9: R, 10: R})
+                          col_widths=[0.3, 1.5, 1.6, 0.9, 0.3, 1.0, 0.7, 0.7],
+                          header_size=8, body_size=8,
+                          header_alignments={0: L, 1: L, 2: L, 3: L, 4: L, 5: R, 6: C, 7: C},
+                          col_alignments={5: R, 6: C, 7: C})
         
         # Add note about SOV
-        add_formatted_paragraph(doc, "", size=6)
-        add_formatted_paragraph(doc, "See attached Statement of Values for complete property details.",
-                              size=9, italic=True, color=CHARCOAL)
-    elif locations:
-        has_entity = any(loc.get("corporate_entity") for loc in locations)
-        if has_entity:
-            headers = ["#", "Corporate Entity", "Address", "City", "ST", "ZIP", "Description"]
-            rows = [[
-                loc.get("number", ""),
-                loc.get("corporate_entity", ""),
-                loc.get("address", ""),
-                loc.get("city", ""),
-                loc.get("state", ""),
-                loc.get("zip", ""),
-                loc.get("description", "")
-            ] for loc in locations]
-            create_styled_table(doc, headers, rows,
-                              col_widths=[0.3, 1.5, 1.8, 1.0, 0.4, 0.6, 1.4],
-                              header_size=9, body_size=9)
-        else:
-            headers = ["#", "Address", "City", "ST", "ZIP", "Description"]
-            rows = [[
-                loc.get("number", ""),
-                loc.get("address", ""),
-                loc.get("city", ""),
-                loc.get("state", ""),
-                loc.get("zip", ""),
-                loc.get("description", "")
-            ] for loc in locations]
-            create_styled_table(doc, headers, rows,
-                              col_widths=[0.3, 2.5, 1.2, 0.5, 0.7, 2.3],
-                              header_size=9, body_size=9)
+        if sov_data and sov_data.get("locations"):
+            add_formatted_paragraph(doc, "", size=6)
+            add_formatted_paragraph(doc, "See attached Statement of Values for complete property details.",
+                                  size=9, italic=True, color=CHARCOAL)
     else:
         add_formatted_paragraph(doc, "Location schedule to be confirmed.", size=11)
 
@@ -1928,10 +1953,13 @@ def generate_proposal(data: dict, output_path: str) -> str:
     if "inland_marine" in coverages:
         generate_coverage_section(doc, data, "inland_marine", "Inland Marine Coverage")
     
-    # Part 3: Signature Pages
+    # Part 3: Coverage Recommendations (before signature pages)
+    generate_coverage_recommendations(doc)
+    
+    # Part 4: Signature Pages
     generate_confirmation_to_bind(doc, data)
     
-    # Part 4: Compliance Pages (ALWAYS REQUIRED)
+    # Part 5: Compliance Pages (ALWAYS REQUIRED)
     generate_electronic_consent(doc)
     generate_carrier_rating(doc, data)
     generate_general_statement(doc)
@@ -1940,7 +1968,6 @@ def generate_proposal(data: dict, output_path: str) -> str:
     generate_hub_advantage(doc)
     generate_tria_disclosure(doc)
     generate_california_licenses(doc)
-    generate_coverage_recommendations(doc)
     
     # Save
     doc.save(output_path)
