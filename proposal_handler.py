@@ -239,6 +239,25 @@ async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return WAITING_FOR_FILES
 
 
+def _normalize_coverages(data):
+    """Ensure coverages is always a dict, not a list."""
+    if data is None:
+        return data
+    covs = data.get("coverages", {})
+    if isinstance(covs, list):
+        normalized = {}
+        for item in covs:
+            if isinstance(item, dict):
+                cov_type = item.get("coverage_type", item.get("type", "unknown"))
+                normalized[cov_type] = item
+            elif isinstance(item, str):
+                normalized[item] = {}
+        data["coverages"] = normalized
+    elif not isinstance(covs, dict):
+        data["coverages"] = {}
+    return data
+
+
 def _merge_extraction_results(existing: dict, new_data: dict) -> dict:
     """Merge extraction results from multiple PDFs into a single data structure.
     
@@ -248,9 +267,13 @@ def _merge_extraction_results(existing: dict, new_data: dict) -> dict:
     Client info is merged (fill in blanks from new data).
     """
     if not existing:
-        return new_data
+        return _normalize_coverages(new_data)
     if not new_data or "error" in new_data:
         return existing
+    
+    # Normalize coverages in both inputs
+    _normalize_coverages(existing)
+    _normalize_coverages(new_data)
     
     merged = json.loads(json.dumps(existing))  # Deep copy
     
@@ -384,6 +407,9 @@ async def extract_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
                     logger.error(f"Extraction error for {filename}: {file_data['error']}")
                     await update.message.reply_text(f"⚠️ Error extracting {filename}: {file_data['error']}")
                 else:
+                    # Normalize coverages (GPT may return list instead of dict)
+                    _normalize_coverages(file_data)
+                    
                     # Log what was found in this file
                     covs_found = list(file_data.get('coverages', {}).keys())
                     logger.info(f"File '{filename}' coverages: {covs_found}")
@@ -462,6 +488,7 @@ async def extract_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
                         session.client_name
                     )
                     if "error" not in file_data:
+                        _normalize_coverages(file_data)
                         session.extracted_data = _merge_extraction_results(
                             session.extracted_data, file_data
                         )
@@ -475,6 +502,9 @@ async def extract_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
                 "Please check your documents and try again."
             )
             return WAITING_FOR_FILES
+        
+        # Normalize final merged data
+        _normalize_coverages(session.extracted_data)
         
         # Log final merged results
         coverages_found = list(session.extracted_data.get('coverages', {}).keys())
@@ -513,6 +543,7 @@ async def extract_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 def build_verification_summary(data: dict) -> str:
     """Build a human-readable verification summary of extracted data."""
+    _normalize_coverages(data)
     lines = []
     
     # Client Info
@@ -679,6 +710,9 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             f"Please try /extract again or upload different files."
         )
         return WAITING_FOR_FILES
+    
+    # Normalize coverages before generating
+    _normalize_coverages(session.extracted_data)
     
     # Log what we have
     coverages = session.extracted_data.get('coverages', {})
@@ -1205,6 +1239,9 @@ async def override_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not session.extracted_data or not session.extracted_data.get("coverages"):
         await update.message.reply_text("No extracted data yet. Upload files and run /extract first.")
         return REVIEWING_EXTRACTION
+    
+    # Normalize coverages in case GPT returned a list
+    _normalize_coverages(session.extracted_data)
     
     raw_text = update.message.text.replace("/override", "").strip()
     raw_text = raw_text.replace("\\$", "$")  # Strip Telegram escaped dollars
