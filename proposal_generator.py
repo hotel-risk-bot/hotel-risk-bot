@@ -682,7 +682,7 @@ def generate_premium_summary(doc, data):
         "terrorism": "Terrorism / TRIA",
         "crime": "Crime",
         "inland_marine": "Inland Marine",
-        "employee_benefits": "Employee Benefits"
+        "equipment_breakdown": "Equipment Breakdown"
     }
     
     headers = ["Coverage", "Carrier", "Expiring", "Proposed", "$ Change", "% Change"]
@@ -693,10 +693,94 @@ def generate_premium_summary(doc, data):
     # Collect all coverage keys that appear in either proposed or expiring
     all_keys = list(coverage_names.keys())
     
+    # Combine proposed umbrella layers into a single total for comparison
+    # when expiring has a single combined umbrella premium
+    proposed_umb_total = 0
+    proposed_umb_carriers = []
+    for umb_key in ["umbrella", "umbrella_layer_2", "umbrella_layer_3"]:
+        umb_cov = coverages.get(umb_key)
+        if umb_cov:
+            proposed_umb_total += umb_cov.get("total_premium", 0)
+            proposed_umb_carriers.append(umb_cov.get("carrier", ""))
+    
+    # Combine expiring umbrella layers into a single total for comparison
+    expiring_umb_total = 0
+    expiring_umb_carriers = []
+    for umb_key in ["umbrella", "umbrella_layer_2", "umbrella_layer_3"]:
+        umb_exp = expiring.get(umb_key, 0)
+        if umb_exp:
+            expiring_umb_total += umb_exp
+            umb_detail = expiring_details.get(umb_key, {})
+            if umb_detail and umb_detail.get("carrier"):
+                expiring_umb_carriers.append(umb_detail.get("carrier"))
+    
     for key in all_keys:
         display_name = coverage_names[key]
         cov = coverages.get(key)
         exp = expiring.get(key, 0)
+        
+        # For umbrella: show combined row instead of individual layers
+        if key == "umbrella":
+            # Use combined totals for umbrella comparison
+            exp = expiring_umb_total
+            if proposed_umb_total > 0:
+                proposed = proposed_umb_total
+                carrier_short = " / ".join(dict.fromkeys(proposed_umb_carriers))  # unique carriers
+                if len(carrier_short) > 35:
+                    carrier_short = carrier_short[:32] + "..."
+                admitted = True  # default
+                cov = coverages.get("umbrella")  # use primary for display
+                if cov:
+                    admitted = cov.get("carrier_admitted", True)
+                if not admitted:
+                    carrier_short = f"{carrier_short} (Non-Adm)"
+            elif cov:
+                carrier = cov.get("carrier", "")
+                carrier_short = carrier
+                if len(carrier) > 30:
+                    carrier_short = carrier.replace("Insurance Company", "Ins Co").replace("Specialty ", "Spec ")
+                admitted = cov.get("carrier_admitted", True)
+                if not admitted:
+                    carrier_short = f"{carrier_short} (Non-Adm)"
+                proposed = cov.get("total_premium", 0)
+            else:
+                exp_detail = expiring_details.get(key, {})
+                carrier_short = " / ".join(expiring_umb_carriers) if expiring_umb_carriers else (exp_detail.get("carrier", "\u2014") if exp_detail else "\u2014")
+                proposed = 0
+            
+            if not exp and not proposed:
+                continue
+            
+            if exp and exp > 0 and proposed > 0:
+                dollar_change = proposed - exp
+                pct_change = ((proposed - exp) / exp) * 100
+                pct_str = f"{pct_change:+.1f}%"
+                dollar_str = f"+${dollar_change:,.2f}" if dollar_change >= 0 else f"-${abs(dollar_change):,.2f}"
+            elif exp and exp > 0 and proposed == 0:
+                dollar_str = "Not Quoted"
+                pct_str = "\u2014"
+            elif proposed > 0 and (not exp or exp == 0):
+                dollar_str = "New"
+                pct_str = "New"
+            else:
+                dollar_str = "N/A"
+                pct_str = "N/A"
+            
+            rows.append([
+                display_name,
+                carrier_short,
+                f"${exp:,.2f}" if exp else "N/A",
+                f"${proposed:,.2f}" if proposed else "N/A",
+                dollar_str,
+                pct_str
+            ])
+            total_expiring += exp if exp else 0
+            total_proposed += proposed
+            continue
+        
+        # Skip individual umbrella layers in the main loop (handled above)
+        if key in ("umbrella_layer_2", "umbrella_layer_3"):
+            continue
         
         # Skip if neither proposed nor expiring
         if not cov and not exp:
@@ -1245,7 +1329,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     # Schedule of Classes (GL - location exposures)
     classes = cov.get("schedule_of_classes", [])
     if classes:
-        add_subsection_header(doc, "Schedule of Classes")
+        add_subsection_header(doc, "Exposures")
         # Check if we have address/brand data for the enhanced format
         has_address = any(c.get("address") or c.get("brand_dba") for c in classes if isinstance(c, dict))
         
@@ -1324,7 +1408,9 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     # Additional Coverages
     addl = cov.get("additional_coverages", [])
     if addl:
-        add_subsection_header(doc, "Additional Coverages")
+        # Use "Sublimits of Liability / Extensions" for property, "Additional Coverages" for others
+        addl_title = "Sublimits of Liability / Extensions" if coverage_key == "property" else "Additional Coverages"
+        add_subsection_header(doc, addl_title)
         has_ded = any(ac.get("deductible") for ac in addl if isinstance(ac, dict))
         L = WD_ALIGN_PARAGRAPH.LEFT
         if has_ded:

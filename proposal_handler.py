@@ -310,12 +310,23 @@ def _merge_extraction_results(existing: dict, new_data: dict) -> dict:
     merged["client_info"] = existing_ci
     
     # Merge coverages - add new coverage types, don't overwrite existing
+    # Special handling for umbrella: auto-promote duplicates to layer_2/layer_3
     existing_covs = merged.get("coverages", {})
     new_covs = new_data.get("coverages", {})
     for cov_key, cov_data in new_covs.items():
         if cov_key not in existing_covs:
             existing_covs[cov_key] = cov_data
             logger.info(f"Merged new coverage: {cov_key} from {cov_data.get('carrier', 'unknown')}")
+        elif cov_key == "umbrella":
+            # Auto-promote to next available umbrella layer
+            if "umbrella_layer_2" not in existing_covs:
+                existing_covs["umbrella_layer_2"] = cov_data
+                logger.info(f"Auto-promoted duplicate umbrella to umbrella_layer_2 from {cov_data.get('carrier', 'unknown')}")
+            elif "umbrella_layer_3" not in existing_covs:
+                existing_covs["umbrella_layer_3"] = cov_data
+                logger.info(f"Auto-promoted duplicate umbrella to umbrella_layer_3 from {cov_data.get('carrier', 'unknown')}")
+            else:
+                logger.info(f"All umbrella layers full, skipping duplicate umbrella from {cov_data.get('carrier', 'unknown')}")
         else:
             logger.info(f"Coverage {cov_key} already exists, keeping existing")
     merged["coverages"] = existing_covs
@@ -607,7 +618,7 @@ def build_verification_summary(data: dict) -> str:
         "flood": "FLOOD",
         "terrorism": "TERRORISM / TRIA",
         "crime": "CRIME",
-        "employee_benefits": "EMPLOYEE BENEFITS",
+
         "equipment_breakdown": "EQUIPMENT BREAKDOWN",
         "inland_marine": "INLAND MARINE",
         "umbrella_layer_2": "2ND EXCESS LAYER",
@@ -884,8 +895,8 @@ def _parse_expiring_block(raw_text: str) -> tuple:
         "auto": "commercial_auto", "commercial_auto": "commercial_auto",
         "flood": "flood", "epli": "epli", "cyber": "cyber",
         "crime": "crime", "crim": "crime",
-        "eb": "employee_benefits", "employee_benefits": "employee_benefits",
-        "equipment_breakdown": "equipment_breakdown",
+        "terr": "terrorism", "terrorism": "terrorism", "tria": "terrorism",
+        "eb": "equipment_breakdown", "equipment_breakdown": "equipment_breakdown",
         "equipment": "equipment_breakdown",
         "inland_marine": "inland_marine",
         "im": "inland_marine", "bop": "bop",
@@ -893,13 +904,18 @@ def _parse_expiring_block(raw_text: str) -> tuple:
     
     display_names = {
         "property": "Property", "general_liability": "General Liability",
-        "umbrella": "Umbrella", "workers_comp": "Workers Comp",
+        "umbrella": "Umbrella", "umbrella_layer_2": "2nd Excess Layer",
+        "umbrella_layer_3": "3rd Excess Layer",
+        "workers_comp": "Workers Comp",
         "commercial_auto": "Commercial Auto", "flood": "Flood",
         "epli": "EPLI", "cyber": "Cyber", "crime": "Crime",
-        "employee_benefits": "Employee Benefits",
+        "terrorism": "Terrorism/TRIA",
         "equipment_breakdown": "Equipment Breakdown",
         "inland_marine": "Inland Marine", "bop": "BOP",
     }
+    
+    # Track umbrella count for auto-promotion of duplicate UMB entries
+    umbrella_count = 0
     
     expiring_premiums = {}  # key -> premium amount
     expiring_details = {}   # key -> {carrier, premium, details: {}, notes}
@@ -931,7 +947,13 @@ def _parse_expiring_block(raw_text: str) -> tuple:
         if header_match:
             # Save previous entry
             if current_key and current_entry:
-                cov_key = coverage_map.get(current_key.lower())
+                cov_key = coverage_map.get(current_key.lower(), current_key.lower())
+                # Handle multiple umbrella entries - auto-promote to layer_2/layer_3
+                if cov_key == "umbrella" and cov_key in expiring_premiums:
+                    if "umbrella_layer_2" not in expiring_premiums:
+                        cov_key = "umbrella_layer_2"
+                    elif "umbrella_layer_3" not in expiring_premiums:
+                        cov_key = "umbrella_layer_3"
                 if cov_key:
                     expiring_details[cov_key] = current_entry
                     if current_entry.get("premium"):
@@ -978,7 +1000,13 @@ def _parse_expiring_block(raw_text: str) -> tuple:
     
     # Save the last entry
     if current_key and current_entry:
-        cov_key = coverage_map.get(current_key.lower())
+        cov_key = coverage_map.get(current_key.lower(), current_key.lower())
+        # Handle multiple umbrella entries - auto-promote to layer_2/layer_3
+        if cov_key == "umbrella" and cov_key in expiring_premiums:
+            if "umbrella_layer_2" not in expiring_premiums:
+                cov_key = "umbrella_layer_2"
+            elif "umbrella_layer_3" not in expiring_premiums:
+                cov_key = "umbrella_layer_3"
         if cov_key:
             expiring_details[cov_key] = current_entry
             if current_entry.get("premium"):
@@ -1037,7 +1065,7 @@ async def set_expiring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             "`GL \u2014 Southlake Specialty`\n"
             "`    Premium: $49,483`\n"
             "`    Total Sales: $4,000,000`\n\n"
-            "**Coverage abbreviations:** PROP, GL, UMB, WC, AUTO, FLOOD, EPLI, CYBER\n\n"
+            "**Coverage abbreviations:** PROP, GL, UMB, WC, AUTO, FLOOD, EPLI, CYBER, TERR, EB, CRIME\n\n"
             "Or use simple format: `property 60000 gl 50000`",
             parse_mode="Markdown"
         )
@@ -1059,12 +1087,18 @@ async def set_expiring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             "wc": "workers_comp", "workers": "workers_comp", "comp": "workers_comp",
             "auto": "commercial_auto",
             "flood": "flood", "epli": "epli", "cyber": "cyber",
+            "terr": "terrorism", "terrorism": "terrorism", "tria": "terrorism",
+            "eb": "equipment_breakdown", "equipment_breakdown": "equipment_breakdown",
+            "crime": "crime", "crim": "crime",
         }
         simple_display = {
             "property": "Property", "general_liability": "General Liability",
             "umbrella": "Umbrella", "workers_comp": "Workers Comp",
             "commercial_auto": "Commercial Auto", "flood": "Flood",
             "epli": "EPLI", "cyber": "Cyber",
+            "terrorism": "Terrorism/TRIA",
+            "equipment_breakdown": "Equipment Breakdown",
+            "crime": "Crime",
         }
         tokens = raw_text.replace(",", "").replace("$", "").split()
         expiring_premiums = {}
@@ -1119,8 +1153,14 @@ async def set_expiring(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             if entry.get("notes"):
                 display = {
                     "property": "Property", "general_liability": "GL",
-                    "umbrella": "Umbrella", "workers_comp": "WC",
+                    "umbrella": "Umbrella", "umbrella_layer_2": "2nd Excess",
+                    "umbrella_layer_3": "3rd Excess",
+                    "workers_comp": "WC",
                     "commercial_auto": "Auto", "flood": "Flood",
+                    "epli": "EPLI", "cyber": "Cyber", "crime": "Crime",
+                    "terrorism": "TERR",
+                    "equipment_breakdown": "EB",
+                    "inland_marine": "IM",
                 }.get(cov_key, cov_key)
                 response += f"  💬 {display}: {entry['notes']}\n"
     
@@ -1175,12 +1215,18 @@ async def receive_expiring_text(update: Update, context: ContextTypes.DEFAULT_TY
             "wc": "workers_comp", "workers": "workers_comp", "comp": "workers_comp",
             "auto": "commercial_auto",
             "flood": "flood", "epli": "epli", "cyber": "cyber",
+            "terr": "terrorism", "terrorism": "terrorism", "tria": "terrorism",
+            "eb": "equipment_breakdown", "equipment_breakdown": "equipment_breakdown",
+            "crime": "crime", "crim": "crime",
         }
         simple_display = {
             "property": "Property", "general_liability": "General Liability",
             "umbrella": "Umbrella", "workers_comp": "Workers Comp",
             "commercial_auto": "Commercial Auto", "flood": "Flood",
             "epli": "EPLI", "cyber": "Cyber",
+            "terrorism": "Terrorism/TRIA",
+            "equipment_breakdown": "Equipment Breakdown",
+            "crime": "Crime",
         }
         tokens = raw_text.replace(",", "").replace("$", "").split()
         expiring_premiums = {}
@@ -1233,8 +1279,14 @@ async def receive_expiring_text(update: Update, context: ContextTypes.DEFAULT_TY
             if entry.get("notes"):
                 display = {
                     "property": "Property", "general_liability": "GL",
-                    "umbrella": "Umbrella", "workers_comp": "WC",
+                    "umbrella": "Umbrella", "umbrella_layer_2": "2nd Excess",
+                    "umbrella_layer_3": "3rd Excess",
+                    "workers_comp": "WC",
                     "commercial_auto": "Auto", "flood": "Flood",
+                    "epli": "EPLI", "cyber": "Cyber", "crime": "Crime",
+                    "terrorism": "TERR",
+                    "equipment_breakdown": "EB",
+                    "inland_marine": "IM",
                 }.get(cov_key, cov_key)
                 response += f"  Notes {display}: {entry['notes']}\n"
     
@@ -1332,7 +1384,7 @@ async def override_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         lines.append("`/override GL 44500 UMB 18500 CYBER 5000`")
         lines.append("`/override GL 44500, UMB 18500, CYBER 5000`")
         lines.append("")
-        lines.append("**Coverage abbreviations:** PROP, GL, UMB, WC, AUTO, FLOOD, EPLI, CYBER, TERR")
+        lines.append("**Coverage abbreviations:** PROP, GL, UMB, UMB2, UMB3, WC, AUTO, FLOOD, EPLI, CYBER, TERR, CRIME, EB, IM")
         await safe_reply(update, "\n".join(lines), parse_mode="Markdown")
         return REVIEWING_EXTRACTION
     
@@ -1346,18 +1398,19 @@ async def override_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "flood": "flood", "epli": "epli", "cyber": "cyber",
         "terr": "terrorism", "terrorism": "terrorism", "tria": "terrorism",
         "crime": "crime", "crim": "crime",
-        "eb": "employee_benefits", "employee_benefits": "employee_benefits",
-        "equipment_breakdown": "equipment_breakdown",
+        "eb": "equipment_breakdown", "equipment_breakdown": "equipment_breakdown",
         "equipment": "equipment_breakdown",
-        "inland": "inland_marine",
+        "umb2": "umbrella_layer_2", "umbrella_layer_2": "umbrella_layer_2",
+        "umb3": "umbrella_layer_3", "umbrella_layer_3": "umbrella_layer_3",
+        "inland": "inland_marine", "im": "inland_marine",
     }
     display_names = {
         "property": "Property", "general_liability": "General Liability",
         "umbrella": "Umbrella", "workers_comp": "Workers Comp",
         "commercial_auto": "Commercial Auto", "flood": "Flood",
         "epli": "EPLI", "cyber": "Cyber", "terrorism": "Terrorism/TRIA",
-        "crime": "Crime", "employee_benefits": "Employee Benefits",
-        "equipment_breakdown": "Equipment Breakdown",
+        "crime": "Crime", "equipment_breakdown": "Equipment Breakdown",
+        "umbrella_layer_2": "2nd Excess Layer", "umbrella_layer_3": "3rd Excess Layer",
         "inland_marine": "Inland Marine",
     }
     
