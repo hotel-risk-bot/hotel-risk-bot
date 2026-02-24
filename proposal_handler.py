@@ -548,6 +548,7 @@ def build_verification_summary(data: dict) -> str:
         "flood": "FLOOD",
         "terrorism": "TERRORISM / TRIA",
         "crime": "CRIME",
+        "equipment_breakdown": "EQUIPMENT BREAKDOWN",
         "inland_marine": "INLAND MARINE"
     }
     
@@ -573,15 +574,21 @@ def build_verification_summary(data: dict) -> str:
             
             # Key limits
             limits = cov.get("limits", [])
-            if limits:
+            if limits and isinstance(limits, list):
                 for lim in limits[:3]:
-                    lines.append(f"  {lim.get('description', '')}: {lim.get('limit', '')}")
+                    if isinstance(lim, dict):
+                        lines.append(f"  {lim.get('description', '')}: {lim.get('limit', '')}")
+                    elif isinstance(lim, str):
+                        lines.append(f"  {lim}")
             
             # Deductibles
             deds = cov.get("deductibles", [])
-            if deds:
+            if deds and isinstance(deds, list):
                 for ded in deds[:2]:
-                    lines.append(f"  Deductible: {ded.get('description', '')} — {ded.get('amount', '')}")
+                    if isinstance(ded, dict):
+                        lines.append(f"  Deductible: {ded.get('description', '')} — {ded.get('amount', '')}")
+                    elif isinstance(ded, str):
+                        lines.append(f"  Deductible: {ded}")
             
             # Forms count
             forms = cov.get("forms_endorsements", [])
@@ -774,7 +781,10 @@ def _parse_expiring_block(raw_text: str) -> tuple:
         "workers_comp": "workers_comp", "comp": "workers_comp",
         "auto": "commercial_auto", "commercial_auto": "commercial_auto",
         "flood": "flood", "epli": "epli", "cyber": "cyber",
-        "crime": "crime", "inland_marine": "inland_marine",
+        "crime": "crime", "crim": "crime",
+        "eb": "equipment_breakdown", "equipment_breakdown": "equipment_breakdown",
+        "equipment": "equipment_breakdown",
+        "inland_marine": "inland_marine",
         "im": "inland_marine", "bop": "bop",
     }
     
@@ -783,6 +793,7 @@ def _parse_expiring_block(raw_text: str) -> tuple:
         "umbrella": "Umbrella", "workers_comp": "Workers Comp",
         "commercial_auto": "Commercial Auto", "flood": "Flood",
         "epli": "EPLI", "cyber": "Cyber", "crime": "Crime",
+        "equipment_breakdown": "Equipment Breakdown",
         "inland_marine": "Inland Marine", "bop": "BOP",
     }
     
@@ -1227,14 +1238,18 @@ async def override_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "auto": "commercial_auto",
         "flood": "flood", "epli": "epli", "cyber": "cyber",
         "terr": "terrorism", "terrorism": "terrorism", "tria": "terrorism",
-        "crime": "crime", "inland": "inland_marine",
+        "crime": "crime", "crim": "crime",
+        "eb": "equipment_breakdown", "equipment_breakdown": "equipment_breakdown",
+        "equipment": "equipment_breakdown",
+        "inland": "inland_marine",
     }
     display_names = {
         "property": "Property", "general_liability": "General Liability",
         "umbrella": "Umbrella", "workers_comp": "Workers Comp",
         "commercial_auto": "Commercial Auto", "flood": "Flood",
         "epli": "EPLI", "cyber": "Cyber", "terrorism": "Terrorism/TRIA",
-        "crime": "Crime", "inland_marine": "Inland Marine",
+        "crime": "Crime", "equipment_breakdown": "Equipment Breakdown",
+        "inland_marine": "Inland Marine",
     }
     
     # Strip commas used as separators between pairs, and dollar signs

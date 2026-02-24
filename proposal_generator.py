@@ -1191,7 +1191,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     if limits:
         add_subsection_header(doc, "Coverage Limits")
         headers = ["Description", "Limit"]
-        rows = [[lim.get("description", ""), lim.get("limit", "")] for lim in limits]
+        rows = [[lim.get("description", ""), lim.get("limit", "")] if isinstance(lim, dict) else [str(lim), ""] for lim in limits]
         # Left-align headers; center Limit values for umbrella/excess
         L = WD_ALIGN_PARAGRAPH.LEFT
         limit_body_align = {}
@@ -1207,7 +1207,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     if deductibles:
         add_subsection_header(doc, "Deductibles")
         headers = ["Peril", "Deductible"]
-        rows = [[ded.get("description", ""), ded.get("amount", "")] for ded in deductibles]
+        rows = [[ded.get("description", ""), ded.get("amount", "")] if isinstance(ded, dict) else [str(ded), ""] for ded in deductibles]
         L = WD_ALIGN_PARAGRAPH.LEFT
         create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
                            header_size=10, body_size=10,
@@ -1224,7 +1224,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
             h.get("code", ""),
             h.get("basis", ""),
             h.get("exposure", "")
-        ] for h in hazards]
+        ] if isinstance(h, dict) else [str(h), "", "", "", ""] for h in hazards]
         create_styled_table(doc, headers, rows,
                           col_widths=[1.5, 2.5, 0.8, 1.0, 1.2],
                           header_size=9, body_size=9)
@@ -1280,16 +1280,16 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     addl = cov.get("additional_coverages", [])
     if addl:
         add_subsection_header(doc, "Additional Coverages")
-        has_ded = any(ac.get("deductible") for ac in addl)
+        has_ded = any(ac.get("deductible") for ac in addl if isinstance(ac, dict))
         L = WD_ALIGN_PARAGRAPH.LEFT
         if has_ded:
             headers = ["Description", "Limit", "Deductible"]
-            rows = [[ac.get("description", ""), ac.get("limit", ""), ac.get("deductible", "")] for ac in addl]
+            rows = [[ac.get("description", ""), ac.get("limit", ""), ac.get("deductible", "")] if isinstance(ac, dict) else [str(ac), "", ""] for ac in addl]
             create_styled_table(doc, headers, rows, col_widths=[3.5, 2.0, 2.0],
                               header_alignments={0: L, 1: L, 2: L})
         else:
             headers = ["Description", "Limit"]
-            rows = [[ac.get("description", ""), ac.get("limit", "")] for ac in addl]
+            rows = [[ac.get("description", ""), ac.get("limit", "")] if isinstance(ac, dict) else [str(ac), ""] for ac in addl]
             create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
                               header_alignments={0: L, 1: L})
     
@@ -1323,7 +1323,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     if forms:
         add_subsection_header(doc, "Forms & Endorsements")
         headers = ["Form Number", "Description"]
-        rows = [[f.get("form_number", ""), f.get("description", "")] for f in forms]
+        rows = [[f.get("form_number", ""), f.get("description", "")] if isinstance(f, dict) else ["", str(f)] for f in forms]
         L = WD_ALIGN_PARAGRAPH.LEFT
         create_styled_table(doc, headers, rows, col_widths=[2.0, 5.5],
                            header_size=9, body_size=9,

@@ -796,32 +796,44 @@ def format_verification_message(data: dict) -> str:
 
         # Limits
         limits = cov.get("limits", [])
-        if limits:
+        if limits and isinstance(limits, list):
             lines.append("  Limits:")
             for lim in limits:
-                lines.append(f"    • {lim.get('description', '')}: {lim.get('limit', '')}")
+                if isinstance(lim, dict):
+                    lines.append(f"    • {lim.get('description', '')}: {lim.get('limit', '')}")
+                elif isinstance(lim, str):
+                    lines.append(f"    • {lim}")
 
         # Deductibles
         deductibles = cov.get("deductibles", [])
-        if deductibles:
+        if deductibles and isinstance(deductibles, list):
             lines.append("  Deductibles:")
             for ded in deductibles:
-                lines.append(f"    • {ded.get('description', '')}: {ded.get('amount', '')}")
+                if isinstance(ded, dict):
+                    lines.append(f"    • {ded.get('description', '')}: {ded.get('amount', '')}")
+                elif isinstance(ded, str):
+                    lines.append(f"    • {ded}")
 
         # Additional Coverages
         addl = cov.get("additional_coverages", [])
-        if addl:
+        if addl and isinstance(addl, list):
             lines.append("  Additional Coverages:")
             for ac in addl:
-                ded_str = f" (Ded: {ac['deductible']})" if ac.get("deductible") else ""
-                lines.append(f"    • {ac.get('description', '')}: {ac.get('limit', '')}{ded_str}")
+                if isinstance(ac, dict):
+                    ded_str = f" (Ded: {ac['deductible']})" if ac.get("deductible") else ""
+                    lines.append(f"    • {ac.get('description', '')}: {ac.get('limit', '')}{ded_str}")
+                elif isinstance(ac, str):
+                    lines.append(f"    • {ac}")
 
         # Forms count
         forms = cov.get("forms_endorsements", [])
-        if forms:
+        if forms and isinstance(forms, list):
             lines.append(f"  Forms & Endorsements: {len(forms)} extracted")
             for f in forms[:5]:
-                lines.append(f"    • {f.get('form_number', '')} — {f.get('description', '')}")
+                if isinstance(f, dict):
+                    lines.append(f"    • {f.get('form_number', '')} — {f.get('description', '')}")
+                elif isinstance(f, str):
+                    lines.append(f"    • {f}")
             if len(forms) > 5:
                 lines.append(f"    ... and {len(forms) - 5} more")
 
@@ -956,14 +968,29 @@ class ProposalExtractor:
 
             data = json.loads(result_text)
             data["client_name"] = client_name
+            
+            # Normalize coverages: GPT sometimes returns a list instead of dict
+            covs = data.get("coverages", {})
+            if isinstance(covs, list):
+                # Convert list of coverage dicts to keyed dict
+                normalized = {}
+                for item in covs:
+                    if isinstance(item, dict):
+                        cov_type = item.get("coverage_type", item.get("type", "unknown"))
+                        normalized[cov_type] = item
+                data["coverages"] = normalized
+                covs = normalized
+            
             logger.info(
                 f"GPT extraction successful. Coverages found: "
-                f"{list(data.get('coverages', {}).keys())}"
+                f"{list(covs.keys()) if isinstance(covs, dict) else covs}"
             )
 
             # Log coverage details
-            for key, cov in data.get("coverages", {}).items():
-                logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, premium={cov.get('premium', 0)}, total={cov.get('total_premium', 0)}")
+            if isinstance(covs, dict):
+                for key, cov in covs.items():
+                    if isinstance(cov, dict):
+                        logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, premium={cov.get('premium', 0)}, total={cov.get('total_premium', 0)}")
 
             return data
 
