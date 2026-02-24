@@ -1335,6 +1335,16 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     if cov.get("policy_period"):
         carrier_rows.append(["Policy Period", cov["policy_period"]])
     
+    # Add GL deductible if present
+    gl_ded = cov.get("gl_deductible", "")
+    if gl_ded and gl_ded not in ("$0", "None", "N/A", "", "0"):
+        carrier_rows.append(["Deductible", gl_ded])
+    
+    # Add defense basis if present
+    defense = cov.get("defense_basis", "")
+    if defense and defense not in ("N/A", ""):
+        carrier_rows.append(["Defense Basis", defense])
+    
     L = WD_ALIGN_PARAGRAPH.LEFT
     create_styled_table(doc, ["Item", "Details"], carrier_rows, col_widths=[2.5, 5.0],
                        header_size=10, body_size=10,
@@ -1437,52 +1447,81 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     classes = cov.get("schedule_of_classes", [])
     if classes:
         add_subsection_header(doc, "Exposures")
+        from docx.enum.text import WD_ALIGN_PARAGRAPH as WD_ALIGN
         # Check if we have address/brand data for the enhanced format
         has_address = any(c.get("address") or c.get("brand_dba") for c in classes if isinstance(c, dict))
+        # Check if we have class codes and rates (class-code-based format like AmTrust)
+        has_class_code = any(c.get("class_code") for c in classes if isinstance(c, dict))
+        has_rate = any(c.get("rate") for c in classes if isinstance(c, dict))
         
         if has_address:
-            # Enhanced format: Address | Brand/DBA | Classification | Exposure | Premium
-            headers = ["Address", "Brand / DBA", "Classification", "Exposure", "Premium"]
+            # Enhanced format with address/brand: Address | Brand/DBA | Code | Classification | Rate | Exposure
+            if has_class_code or has_rate:
+                headers = ["Address", "Brand / DBA", "Code", "Classification", "Rate", "Exposure"]
+                rows = []
+                for c in classes:
+                    if not isinstance(c, dict):
+                        continue
+                    addr = c.get("address", "")
+                    brand = c.get("brand_dba", "")
+                    if not addr and c.get("location"):
+                        addr = c.get("location", "")
+                    classification = c.get("classification", "")
+                    class_code = c.get("class_code", "")
+                    rate = c.get("rate", "")
+                    exposure_basis = c.get("exposure_basis", "")
+                    exposure = c.get("exposure", "")
+                    # Format exposure with basis
+                    if exposure_basis and exposure:
+                        exposure_str = f"{exposure} ({exposure_basis})"
+                    else:
+                        exposure_str = str(exposure) if exposure else ""
+                    rows.append([addr, brand, str(class_code), classification, str(rate), exposure_str])
+                create_styled_table(doc, headers, rows,
+                                  col_widths=[1.8, 1.2, 0.6, 1.5, 0.6, 1.3],
+                                  header_size=8, body_size=7,
+                                  col_alignments={4: WD_ALIGN.RIGHT, 5: WD_ALIGN.RIGHT})
+            else:
+                # Address-based without class codes: Address | Brand/DBA | Classification | Exposure | Premium
+                headers = ["Address", "Brand / DBA", "Classification", "Exposure", "Premium"]
+                rows = []
+                for c in classes:
+                    if not isinstance(c, dict):
+                        continue
+                    addr = c.get("address", "")
+                    brand = c.get("brand_dba", "")
+                    if not addr and c.get("location"):
+                        addr = c.get("location", "")
+                    classification = c.get("classification", "")
+                    exposure_basis = c.get("exposure_basis", "")
+                    exposure = c.get("exposure", "")
+                    premium = c.get("premium", "")
+                    if exposure_basis and exposure:
+                        exposure_str = f"{exposure} ({exposure_basis})"
+                    else:
+                        exposure_str = str(exposure) if exposure else ""
+                    rows.append([addr, brand, classification, exposure_str, str(premium) if premium else ""])
+                create_styled_table(doc, headers, rows,
+                                  col_widths=[2.0, 1.5, 1.5, 1.3, 1.0],
+                                  header_size=8, body_size=8,
+                                  col_alignments={3: WD_ALIGN.RIGHT, 4: WD_ALIGN.RIGHT})
+        else:
+            # Class-code-based format (no addresses): Code | Classification | Rate | Exposure | Basis
+            headers = ["Code", "Classification", "Rate", "Exposure", "Exposure Basis"]
             rows = []
             for c in classes:
                 if not isinstance(c, dict):
                     continue
-                addr = c.get("address", "")
-                brand = c.get("brand_dba", "")
-                # Fall back to location field if no address
-                if not addr and c.get("location"):
-                    addr = c.get("location", "")
+                class_code = c.get("class_code", c.get("location", ""))
                 classification = c.get("classification", "")
-                exposure_basis = c.get("exposure_basis", "")
+                rate = c.get("rate", "")
                 exposure = c.get("exposure", "")
-                premium = c.get("premium", "")
-                # Combine exposure basis and amount
-                if exposure_basis and exposure:
-                    exposure_str = f"{exposure} ({exposure_basis})"
-                else:
-                    exposure_str = str(exposure) if exposure else ""
-                rows.append([addr, brand, classification, exposure_str, str(premium) if premium else ""])
-            from docx.enum.text import WD_ALIGN_PARAGRAPH as WD_ALIGN
+                exposure_basis = c.get("exposure_basis", "")
+                rows.append([str(class_code), classification, str(rate), str(exposure), exposure_basis])
             create_styled_table(doc, headers, rows,
-                              col_widths=[2.0, 1.5, 1.5, 1.3, 1.0],
-                              header_size=8, body_size=8,
-                              col_alignments={3: WD_ALIGN.RIGHT, 4: WD_ALIGN.RIGHT})
-        else:
-            # Original format with location numbers
-            headers = ["Location", "Classification", "Class Code", "Exposure Basis", "Exposure", "Premium"]
-            rows = [[
-                c.get("location", ""),
-                c.get("classification", ""),
-                c.get("class_code", ""),
-                c.get("exposure_basis", ""),
-                c.get("exposure", ""),
-                c.get("premium", "")
-            ] for c in classes]
-            from docx.enum.text import WD_ALIGN_PARAGRAPH as WD_ALIGN
-            create_styled_table(doc, headers, rows,
-                              col_widths=[1.8, 1.8, 0.8, 1.0, 1.0, 1.0],
-                              header_size=9, body_size=9,
-                              col_alignments={4: WD_ALIGN.RIGHT, 5: WD_ALIGN.RIGHT})
+                              col_widths=[0.8, 2.5, 0.8, 1.5, 1.4],
+                              header_size=9, body_size=8,
+                              col_alignments={2: WD_ALIGN.RIGHT, 3: WD_ALIGN.RIGHT})
     
     # Rating Basis (WC)
     rating = cov.get("rating_basis", [])

@@ -449,6 +449,8 @@ The JSON structure should be:
       "taxes_fees": 0,
       "total_premium": 0,
       "tria_premium": 0,
+      "gl_deductible": "$X Per Occurrence (or $0 if none)",
+      "defense_basis": "In Addition to Limits or Within Limits",
       "limits": [
         {{"description": "Each Occurrence", "limit": "$X"}},
         {{"description": "General Aggregate", "limit": "$X"}},
@@ -459,7 +461,7 @@ The JSON structure should be:
       ],
       "aggregate_applies": "Per Location or Per Policy",
       "schedule_of_classes": [
-        {{"location": "Loc 1", "address": "Street Address", "brand_dba": "Hotel Brand or DBA Name", "classification": "Hotels/Motels", "class_code": "XXXXX", "exposure_basis": "Sales/Revenue/Area/Units", "exposure": "$X or number", "premium": "$X"}}
+        {{"location": "Loc 1", "address": "Street Address", "brand_dba": "Hotel Brand or DBA Name", "classification": "Hotels/Motels", "class_code": "XXXXX", "rate": "Rate per $100 or flat amount", "exposure_basis": "Sales/Revenue/Area/Units", "exposure": "$X or number", "premium": "$X"}}
       ],
       "additional_coverages": [
         {{"description": "Coverage name", "limit": "$X", "deductible": "$X"}}
@@ -634,7 +636,9 @@ IMPORTANT:
 - Include form dates (e.g., "06/07" in "CP 00 10 06/07")
 - For total_premium: This MUST be the all-in out-the-door number. Look for "Total Package Cost", "Total Cost of Policy", "Total Policy Cost", "Total Policy Premium", "Total Due", "Grand Total", or any final total line. It includes base premium + broker fees + surplus lines tax + stamping fee + fire marshal tax + inspection fees + FSLSO fees + EMPA surcharge + any other taxes/fees/surcharges. If no single total line exists, calculate total_premium = premium + taxes_fees. CRITICAL: total_premium must ALWAYS be >= premium. If the quote shows separate line items for taxes and fees, ADD them to the base premium to get total_premium
 - For GL policies that include BOTH General Liability AND Liquor Liability in a single package: The "premium" field should be the combined package premium (GL + Liquor), and "total_premium" should be the Total Package Cost (premium + broker fee + surplus lines tax + stamping fee). For example if GL premium is $408,733, Liquor is $10,287, Total Package Premium is $419,020, and Total Package Cost is $442,471, then premium=$419,020 and total_premium=$442,471
-- For GL schedule_of_classes: Extract the location-by-location exposure schedule showing each location's classification, exposure basis (sales/revenue/area/units), and exposure amount. Include vacant land, restaurants, liquor, sundry, and all non-hotel locations. For each entry, include the "address" (street address) and "brand_dba" (hotel brand name like Courtyard by Marriott, Hampton Inn, Days Inn, Best Western, etc.). If the quote only shows location numbers, map them to addresses/brands from the SOV or other documents. Include ALL exposure classes for each location (e.g., Hotel/Motel, Restaurant, Liquor Liability as separate rows for the same location)
+- For GL gl_deductible: Extract the per-occurrence deductible if one exists. Look for "Deductible Per Occurrence", "Deductible Liability", "$X,000 Deductible Per Occurrence Including Loss Adjustment Expense", or similar. Include the full description (e.g., "$5,000 Per Occurrence Including Loss Adjustment Expense"). If no GL deductible, set to "$0" or "None".
+- For GL defense_basis: Look for "Defense Basis" or whether defense costs are "In Addition to Limits" or "Within Limits of Liability".
+- For GL schedule_of_classes: Extract the exposure schedule. This may be location-based OR class-code-based. For class-code-based quotes (like AmTrust), extract each class code entry with: class_code (e.g., "45190"), classification/description, rate (e.g., "9.964" per $100), exposure amount (e.g., "$8,748,612"), and exposure_basis (e.g., "Gross Sales", "Per Acre", "Area", "Liquor Sales", "FLAT"). For location-based quotes, include address, brand_dba, classification, exposure, and premium. Include vacant land, restaurants, liquor, sundry, hired auto, loss control, and all non-hotel entries. Include ALL exposure classes for each location (e.g., Hotel/Motel, Restaurant, Liquor Liability as separate rows). CRITICAL: Always capture the actual dollar amount for exposure (e.g., $8,748,612 not just "Gross Sales"). The exposure_basis describes what the number represents (Gross Sales, Revenue, Area, etc.)
 - ALWAYS preserve cents in premium amounts (e.g., $60,513.35 not $60,513)
 - Mark excluded coverages explicitly
 - For Property: ALWAYS include Flood and Earthquake rows even if excluded
