@@ -699,6 +699,33 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
             logger.warning("GPT response was truncated (hit max_tokens). Attempting to parse partial JSON.")
 
         data = json.loads(result_text)
+        
+        # Normalize coverages: GPT sometimes returns a list instead of dict
+        covs = data.get("coverages", {})
+        if isinstance(covs, list):
+            normalized = {}
+            for item in covs:
+                if isinstance(item, dict):
+                    cov_type = item.get("coverage_type", item.get("type", "unknown"))
+                    normalized[cov_type] = item
+            data["coverages"] = normalized
+            logger.info(f"Normalized coverages from list ({len(covs)} items) to dict ({list(normalized.keys())})")
+        elif not isinstance(covs, dict):
+            data["coverages"] = {}
+        
+        # Also fix individual coverage values that are lists instead of dicts
+        covs = data.get("coverages", {})
+        if isinstance(covs, dict):
+            for key, val in list(covs.items()):
+                if isinstance(val, list):
+                    if len(val) >= 1 and isinstance(val[0], dict):
+                        covs[key] = val[0]
+                        logger.info(f"Unwrapped list for coverage '{key}'")
+                    else:
+                        covs[key] = {}
+                elif not isinstance(val, dict):
+                    covs[key] = {}
+        
         logger.info(f"GPT extraction successful. Coverages found: {list(data.get('coverages', {}).keys())}")
 
         # Validate and fix total_premium for each coverage
@@ -1016,6 +1043,21 @@ class ProposalExtractor:
                         normalized[cov_type] = item
                 data["coverages"] = normalized
                 covs = normalized
+            elif not isinstance(covs, dict):
+                data["coverages"] = {}
+                covs = data["coverages"]
+            
+            # Also fix individual coverage values that are lists instead of dicts
+            if isinstance(covs, dict):
+                for key, val in list(covs.items()):
+                    if isinstance(val, list):
+                        if len(val) >= 1 and isinstance(val[0], dict):
+                            covs[key] = val[0]
+                            logger.info(f"Unwrapped list for coverage '{key}'")
+                        else:
+                            covs[key] = {}
+                    elif not isinstance(val, dict):
+                        covs[key] = {}
             
             logger.info(
                 f"GPT extraction successful. Coverages found: "

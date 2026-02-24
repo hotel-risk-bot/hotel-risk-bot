@@ -240,7 +240,7 @@ async def receive_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 
 def _normalize_coverages(data):
-    """Ensure coverages is always a dict, not a list."""
+    """Ensure coverages is always a dict with dict values, not a list."""
     if data is None:
         return data
     covs = data.get("coverages", {})
@@ -255,6 +255,30 @@ def _normalize_coverages(data):
         data["coverages"] = normalized
     elif not isinstance(covs, dict):
         data["coverages"] = {}
+    
+    # Also fix individual coverage values that are lists instead of dicts
+    # GPT sometimes returns {"property": [{"carrier": "X", ...}]} instead of {"property": {"carrier": "X", ...}}
+    covs = data.get("coverages", {})
+    if isinstance(covs, dict):
+        for key, val in list(covs.items()):
+            if isinstance(val, list):
+                if len(val) == 1 and isinstance(val[0], dict):
+                    covs[key] = val[0]
+                    logger.info(f"Unwrapped single-item list for coverage '{key}'")
+                elif len(val) > 1:
+                    # Multiple items in list - take the first dict
+                    for item in val:
+                        if isinstance(item, dict):
+                            covs[key] = item
+                            logger.info(f"Unwrapped first dict from list for coverage '{key}'")
+                            break
+                    else:
+                        covs[key] = {}
+                else:
+                    covs[key] = {}
+            elif not isinstance(val, dict):
+                covs[key] = {}
+    
     return data
 
 
