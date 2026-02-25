@@ -1150,22 +1150,57 @@ def generate_information_summary(doc, data):
     if liab_loc_count > 0:
         rows.append(["Liability Locations", str(liab_loc_count)])
     
-    # Count location types from schedule_of_classes classifications
+    # Count location types from SOV/property locations and GL schedule_of_classes
+    # Use SOV descriptions and GL classifications for PHYSICAL locations only
+    # (skip GL exposure-only classes like Hired Auto, Loss Control, Package Stores)
+    hotel_count = 0
+    office_count = 0
+    lro_count = 0
+    vacant_count = 0
+    other_types = {}
+    seen_loc_addrs = set()  # track by normalized address to avoid double-counting
+    
+    # First: count from SOV locations (most reliable source for property types)
+    if sov_data and sov_data.get("locations"):
+        for loc in sov_data["locations"]:
+            addr = _normalize_addr(loc.get("address", ""))
+            if addr in seen_loc_addrs:
+                continue
+            seen_loc_addrs.add(addr)
+            # Determine type from description, hotel_flag, or occupancy
+            desc = (loc.get("description", "") or loc.get("hotel_flag", "") or
+                    loc.get("occupancy", "") or loc.get("dba", "") or "").lower()
+            if any(kw in desc for kw in ["hotel", "motel", "inn", "suite", "lodge", "resort", "hampton", "holiday", "best western", "marriott", "hilton", "ihg", "wyndham", "choice", "comfort", "quality", "candlewood", "towneplace", "springhill"]):
+                hotel_count += 1
+            elif "office" in desc or "corporate" in desc:
+                office_count += 1
+            elif "vacant" in desc or "land" in desc:
+                vacant_count += 1
+            elif "lessor" in desc or "lro" in desc:
+                lro_count += 1
+            else:
+                # Default: if it has a building value, it's likely a hotel
+                bldg = loc.get("building_value", 0) or 0
+                if bldg > 0:
+                    hotel_count += 1
+                else:
+                    vacant_count += 1
+    
+    # Second: supplement from GL schedule_of_classes (only PHYSICAL location entries)
+    # Skip non-location exposure classes
+    _skip_classes = {"hired auto", "non-owned auto", "loss control", "package store",
+                     "category vi", "liquor", "sundry", "flat"}
     if isinstance(gl_cov, dict):
-        hotel_count = 0
-        office_count = 0
-        lro_count = 0
-        vacant_count = 0
-        other_types = set()
-        seen_loc_types = set()  # track by address to avoid double-counting
         for entry in gl_cov.get("schedule_of_classes", []):
             if isinstance(entry, dict):
                 addr = _normalize_addr(entry.get("address", "") or entry.get("location", ""))
                 classification = (entry.get("classification", "") or "").lower()
-                loc_key = f"{addr}|{classification[:20]}"
-                if loc_key in seen_loc_types:
+                # Skip non-physical-location exposure classes
+                if any(skip in classification for skip in _skip_classes):
                     continue
-                seen_loc_types.add(loc_key)
+                if not addr or addr in seen_loc_addrs:
+                    continue
+                seen_loc_addrs.add(addr)
                 if any(kw in classification for kw in ["hotel", "motel", "inn", "suite", "lodge", "resort"]):
                     hotel_count += 1
                 elif "office" in classification or "building" in classification:
@@ -1175,22 +1210,77 @@ def generate_information_summary(doc, data):
                 elif "vacant" in classification:
                     vacant_count += 1
                 elif classification.strip():
-                    other_types.add(classification.split("-")[0].strip().title())
-        type_parts = []
-        if hotel_count: type_parts.append(f"{hotel_count} Hotel(s)")
-        if office_count: type_parts.append(f"{office_count} Office(s)")
-        if lro_count: type_parts.append(f"{lro_count} LRO(s)")
-        if vacant_count: type_parts.append(f"{vacant_count} Vacant Land")
-        for ot in sorted(other_types):
-            type_parts.append(f"1 {ot}")
-        if type_parts:
-            rows.append(["Location Types", ", ".join(type_parts)])
+                    type_name = classification.split("-")[0].strip().title()
+                    other_types[type_name] = other_types.get(type_name, 0) + 1
     
-    # Add TIV from SOV or property
+    type_parts = []
+    if hotel_count: type_parts.append(f"{hotel_count} Hotel(s)")
+    if office_count: type_parts.append(f"{office_count} Office(s)")
+    if lro_count: type_parts.append(f"{lro_count} LRO(s)")
+    if vacant_count: type_parts.append(f"{vacant_count} Vacant Land")
+    for ot in sorted(other_types):
+        type_parts.append(f"{other_types[ot]} {ot}")
+    if type_parts:
+        rows.append(["Location Types", ", ".join(type_parts)])
+    
+    # Add TIV from SOV or property quote
+    _tiv_added = False
     if sov_data and sov_data.get("totals", {}).get("tiv"):
         rows.append(["Total Insured Value (TIV)", fmt_currency(sov_data["totals"]["tiv"])])
-    elif coverages.get("property", {}).get("tiv"):
-        rows.append(["Total Insured Value (TIV)", coverages["property"]["tiv"]])
+        _tiv_added = True
+    elif sov_data and sov_data.get("locations"):
+        # Calculate TIV from individual SOV locations
+        _total_tiv = sum(loc.get("tiv", 0) or 0 for loc in sov_data["locations"])
+        if _total_tiv > 0:
+            rows.append(["Total Insured Value (TIV)", fmt_currency(_total_tiv)])
+            _tiv_added = True
+    if not _tiv_added:
+        prop_cov = coverages.get("property", {})
+        if isinstance(prop_cov, dict):
+            prop_tiv = prop_cov.get("tiv", "")
+            if prop_tiv:
+                rows.append(["Total Insured Value (TIV)", prop_tiv if isinstance(prop_tiv, str) else fmt_currency(prop_tiv)])
+                _tiv_added = True
+            elif prop_cov.get("limits"):
+                # Try to sum building + BPP + BI from property limits
+                _prop_total = 0
+                for lim in prop_cov["limits"]:
+                    if isinstance(lim, dict):
+                        lim_val = lim.get("limit", "")
+                        if isinstance(lim_val, str):
+                            import re as _re2
+                            cleaned = _re2.sub(r'[^\d.]', '', lim_val.replace(',', ''))
+                            if cleaned:
+                                try:
+                                    _prop_total += float(cleaned)
+                                except ValueError:
+                                    pass
+                if _prop_total > 0:
+                    rows.append(["Total Insured Value (TIV)", fmt_currency(_prop_total)])
+    
+    # Add Umbrella / Excess total limit
+    _umbrella_total = 0
+    for umb_key in ["umbrella", "umbrella_layer_2", "umbrella_layer_3"]:
+        umb_cov = coverages.get(umb_key, {})
+        if isinstance(umb_cov, dict) and umb_cov.get("carrier"):
+            for lim in umb_cov.get("limits", []):
+                if isinstance(lim, dict):
+                    desc = (lim.get("description", "") or "").lower()
+                    if "occurrence" in desc or "each occurrence" in desc:
+                        lim_val = lim.get("limit", "")
+                        if isinstance(lim_val, str):
+                            import re as _re3
+                            cleaned = _re3.sub(r'[^\d.]', '', lim_val.replace(',', ''))
+                            if cleaned:
+                                try:
+                                    _umbrella_total += float(cleaned)
+                                except ValueError:
+                                    pass
+                        elif isinstance(lim_val, (int, float)):
+                            _umbrella_total += lim_val
+                        break  # Only count each occurrence limit once per layer
+    if _umbrella_total > 0:
+        rows.append(["Total Umbrella / Excess Limit", fmt_currency(_umbrella_total)])
     
     create_styled_table(doc, headers, rows, col_widths=[2.5, 5.0],
                        header_size=10, body_size=10)
@@ -1335,52 +1425,7 @@ def generate_locations(doc, data):
                     break
     
     # --- Build master location list ---
-    # First: SOV locations (property locations)
-    if sov_data and sov_data.get("locations"):
-        for loc in sov_data["locations"]:
-            addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
-                       _normalize_addr(loc.get("city", "")) + "|" +
-                       loc.get("state", "").strip().upper())
-            name = loc.get("dba") or loc.get("hotel_flag") or loc.get("corporate_name", "")
-            if not name or not name.strip():
-                name = "Pending"
-            tiv = loc.get("tiv", 0)
-            master_locations.append({
-                "name": name,
-                "address": loc.get("address", ""),
-                "city": loc.get("city", ""),
-                "state": loc.get("state", ""),
-                "tiv": tiv,
-                "on_property": addr_key in property_addr_keys,
-                "on_liability": addr_key in liability_addr_keys,
-            })
-            seen_addr_keys.add(addr_key)
-    
-    # Second: extracted locations not already in SOV
-    for loc in locations:
-        addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
-                   _normalize_addr(loc.get("city", "")) + "|" +
-                   loc.get("state", "").strip().upper())
-        if addr_key not in seen_addr_keys and loc.get("address"):
-            name = loc.get("description", "") or loc.get("corporate_entity", "")
-            if not name or not name.strip():
-                name = "Pending"
-            master_locations.append({
-                "name": name,
-                "address": loc.get("address", ""),
-                "city": loc.get("city", ""),
-                "state": loc.get("state", ""),
-                "tiv": 0,
-                "on_property": addr_key in property_addr_keys,
-                "on_liability": addr_key in liability_addr_keys,
-            })
-            seen_addr_keys.add(addr_key)
-    
-    # Third: GL schedule_of_classes locations not already in master list
-    # This catches liability-only locations (e.g., LaPlace, vacant land) that aren't on SOV or extracted locations
-    import re
-    gl_seen_addrs = set()  # Deduplicate GL entries (multiple classes per location)
-    
+    # Helper: fuzzy address matching (must be defined before _is_on_liability)
     def _fuzzy_addr_match(addr1, addr2):
         """Check if two normalized addresses refer to the same location.
         Handles cases like '4288 HWY 51' vs '4285 HWY 51' by comparing
@@ -1403,6 +1448,74 @@ def generate_locations(doc, data):
             if street1 == street2 and abs(house1 - house2) <= 20:
                 return True
         return False
+    
+    # Helper: check if an addr_key matches any key in liability_addr_keys using fuzzy matching
+    def _is_on_liability(addr_key):
+        """Check if addr_key is in liability_addr_keys, with fuzzy address matching."""
+        if addr_key in liability_addr_keys:
+            return True
+        # Fuzzy match: compare the street portion of the addr_key against all liability keys
+        parts = addr_key.split("|")
+        if len(parts) != 3:
+            return False
+        addr_norm = parts[0]
+        state_norm = parts[2]
+        for lk in liability_addr_keys:
+            lk_parts = lk.split("|")
+            if len(lk_parts) != 3:
+                continue
+            # Must match state (or one is empty)
+            if state_norm and lk_parts[2] and state_norm != lk_parts[2]:
+                continue
+            if _fuzzy_addr_match(addr_norm, lk_parts[0]):
+                return True
+        return False
+    
+    # First: SOV locations (property locations)
+    if sov_data and sov_data.get("locations"):
+        for loc in sov_data["locations"]:
+            addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
+                       _normalize_addr(loc.get("city", "")) + "|" +
+                       loc.get("state", "").strip().upper())
+            name = loc.get("dba") or loc.get("hotel_flag") or loc.get("corporate_name", "")
+            if not name or not name.strip():
+                name = "Pending"
+            tiv = loc.get("tiv", 0)
+            master_locations.append({
+                "name": name,
+                "address": loc.get("address", ""),
+                "city": loc.get("city", ""),
+                "state": loc.get("state", ""),
+                "tiv": tiv,
+                "on_property": addr_key in property_addr_keys,
+                "on_liability": _is_on_liability(addr_key),
+            })
+            seen_addr_keys.add(addr_key)
+    
+    # Second: extracted locations not already in SOV
+    for loc in locations:
+        addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
+                   _normalize_addr(loc.get("city", "")) + "|" +
+                   loc.get("state", "").strip().upper())
+        if addr_key not in seen_addr_keys and loc.get("address"):
+            name = loc.get("description", "") or loc.get("corporate_entity", "")
+            if not name or not name.strip():
+                name = "Pending"
+            master_locations.append({
+                "name": name,
+                "address": loc.get("address", ""),
+                "city": loc.get("city", ""),
+                "state": loc.get("state", ""),
+                "tiv": 0,
+                "on_property": addr_key in property_addr_keys,
+                "on_liability": _is_on_liability(addr_key),
+            })
+            seen_addr_keys.add(addr_key)
+    
+    # Third: GL schedule_of_classes locations not already in master list
+    # This catches liability-only locations (e.g., LaPlace, vacant land) that aren't on SOV or extracted locations
+    import re
+    gl_seen_addrs = set()  # Deduplicate GL entries (multiple classes per location)
     
     for entry in gl_classes:
         if not isinstance(entry, dict):
@@ -1599,6 +1712,15 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     coverages = data.get("coverages", {})
     cov = coverages.get(coverage_key)
     if not cov:
+        return
+    
+    # Skip phantom coverage sections with no meaningful data
+    carrier = cov.get("carrier", "") or ""
+    premium = cov.get("premium", 0) or 0
+    total_premium = cov.get("total_premium", 0) or 0
+    limits = cov.get("coverage_limits", []) or []
+    if not carrier.strip() and not premium and not total_premium and not limits:
+        logger.info(f"Skipping phantom coverage section: {coverage_key} (no carrier, premium, or limits)")
         return
     
     add_page_break(doc)
@@ -1904,6 +2026,70 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         create_styled_table(doc, headers, rows, col_widths=[2.0, 5.5],
                            header_size=9, body_size=9,
                            header_alignments={0: L, 1: L})
+    
+    # Covered Locations (GL only) - backup list of liability locations from GL quote
+    if coverage_key == "general_liability":
+        import re as _re_gl
+        gl_loc_list = []
+        gl_loc_seen = set()
+        # Source 1: schedule_of_classes addresses
+        for entry in cov.get("schedule_of_classes", []):
+            if isinstance(entry, dict):
+                addr = entry.get("address", "") or entry.get("location", "")
+                if addr and addr.strip():
+                    addr_norm = _normalize_addr(addr)
+                    if addr_norm not in gl_loc_seen:
+                        gl_loc_seen.add(addr_norm)
+                        brand = entry.get("brand_dba", "") or ""
+                        classification = entry.get("classification", "") or ""
+                        gl_loc_list.append({
+                            "address": addr.strip(),
+                            "brand": brand.strip(),
+                            "classification": classification.strip(),
+                        })
+        # Source 2: CG2144 designated premises forms
+        for form in cov.get("forms_endorsements", []):
+            if not isinstance(form, dict):
+                continue
+            desc = (form.get("description", "") or "").upper()
+            if not any(kw in desc for kw in ["DESIGNATED PREMISES", "CG 21 44", "CG2144", "LIMITATION OF COVERAGE"]):
+                continue
+            addr_pattern = _re_gl.findall(r'\d+\)\s*(.+?)(?=\d+\)|$)', desc)
+            if not addr_pattern:
+                addr_pattern = [a.strip() for a in _re_gl.split(r'[;\n]', desc) if _re_gl.search(r'\d+\s+\w+', a.strip())]
+            for raw_addr in addr_pattern:
+                raw_addr = raw_addr.strip().rstrip(',')
+                if not raw_addr or len(raw_addr) < 5:
+                    continue
+                addr_norm = _normalize_addr(raw_addr)
+                if addr_norm not in gl_loc_seen:
+                    gl_loc_seen.add(addr_norm)
+                    gl_loc_list.append({
+                        "address": raw_addr.strip(),
+                        "brand": "",
+                        "classification": "",
+                    })
+        
+        if gl_loc_list:
+            add_subsection_header(doc, "Covered Locations")
+            add_formatted_paragraph(doc, 
+                "The following locations are covered under this General Liability policy "
+                "as identified on the carrier quote:",
+                size=9, italic=True, color=CHARCOAL)
+            headers = ["#", "Address", "Brand / DBA", "Classification"]
+            rows = []
+            for i, loc in enumerate(gl_loc_list, 1):
+                rows.append([
+                    str(i),
+                    loc["address"],
+                    loc["brand"],
+                    loc["classification"],
+                ])
+            L = WD_ALIGN_PARAGRAPH.LEFT
+            create_styled_table(doc, headers, rows,
+                              col_widths=[0.4, 3.5, 1.8, 1.8],
+                              header_size=9, body_size=8,
+                              header_alignments={0: L, 1: L, 2: L, 3: L})
 
 
 def generate_confirmation_to_bind(doc, data):
