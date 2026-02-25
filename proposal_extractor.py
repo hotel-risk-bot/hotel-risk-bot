@@ -426,6 +426,7 @@ The JSON structure should be:
       "taxes_fees": 0,
       "total_premium": 0,
       "tria_premium": 0,
+      "tiv": "$X Total Insured Value from quote or SOV (e.g., $56,390,000)",
       "limits": [
         {{"description": "Building", "limit": "$X"}},
         {{"description": "Business Personal Property", "limit": "$X"}},
@@ -474,6 +475,10 @@ The JSON structure should be:
       ],
       "additional_coverages": [
         {{"description": "Coverage name", "limit": "$X", "deductible": "$X"}}
+      ],
+      "designated_premises": [
+        "Full address 1 from CG2144/NXLL110 designated premises form",
+        "Full address 2"
       ],
       "forms_endorsements": [
         {{"form_number": "CG 00 01 04/13", "description": "Commercial General Liability Coverage Form"}}
@@ -650,9 +655,10 @@ IMPORTANT:
 - For GL gl_deductible: Extract the per-occurrence deductible if one exists. Look for "Deductible Per Occurrence", "Deductible Liability", "$X,000 Deductible Per Occurrence Including Loss Adjustment Expense", or similar. Include the full description (e.g., "$5,000 Per Occurrence Including Loss Adjustment Expense"). If no GL deductible, set to "$0" or "None".
 - For GL defense_basis: Look for "Defense Basis" or whether defense costs are "In Addition to Limits" or "Within Limits of Liability".
 - For GL schedule_of_classes: Extract the exposure schedule. This may be location-based OR class-code-based. For class-code-based quotes (like AmTrust), extract each class code entry with: class_code (e.g., "45190"), classification/description, rate (e.g., "9.964" per $100), exposure amount (e.g., "$8,748,612"), and exposure_basis (e.g., "Gross Sales", "Per Acre", "Area", "Liquor Sales", "FLAT"). For location-based quotes, include address, brand_dba, classification, exposure, and premium. Include vacant land, restaurants, liquor, sundry, hired auto, loss control, and all non-hotel entries. Include ALL exposure classes for each location (e.g., Hotel/Motel, Restaurant, Liquor Liability as separate rows). CRITICAL: Always capture the actual dollar amount for exposure (e.g., $8,748,612 not just "Gross Sales"). The exposure_basis describes what the number represents (Gross Sales, Revenue, Area, etc.)
-- GL DESIGNATED PREMISES LOCATIONS: If the GL quote includes a form like CG 21 44 (Limitation of Coverage to Designated Premises or Project), extract EVERY location listed in that form as a separate schedule_of_classes entry with its full address. These are ALL the locations covered under the GL policy. If the rating schedule only shows class codes without addresses, supplement the schedule_of_classes with entries for each address from the CG 21 44 form. EVERY address listed in the designated premises form MUST appear in schedule_of_classes with at minimum the address field populated.
+- GL DESIGNATED PREMISES LOCATIONS: If the GL quote includes a form like CG 21 44, CG2144, NXLL110, or any "Limitation of Coverage to Designated Premises" form, extract EVERY location listed in that form. These are ALL the locations covered under the GL policy. Do TWO things: (1) Add each address as a separate schedule_of_classes entry with its full address. (2) Also populate the "designated_premises" array with each full address string exactly as written (e.g., "4285 Highway 51, LaPlace, LA 70068"). The designated_premises array is the AUTHORITATIVE list of GL covered locations. CRITICAL: The CG2144/NXLL110 form typically lists addresses in a numbered format like "1) 4285 Highway 51, LaPlace, LA 70068" followed by "2) 4281 Highway 51..." etc. Extract ALL numbered addresses, not just the first few. There may be 8 or more addresses. Also look for addresses that may appear with labels like "Office:" or "Hotels:" before the numbered list. Extract those too. If the form text is split across multiple pages, combine all addresses from all pages.
 - ALWAYS preserve cents in premium amounts (e.g., $60,513.35 not $60,513)
 - Mark excluded coverages explicitly
+- For Property tiv: Extract the Total Insured Value (TIV) from the property quote or SOV. Look for "Total Insured Value", "TIV", "Total Values", or the sum total on the Schedule of Values. This should be the total of Building + Contents/BPP + Business Income/Rents across all locations. For example if the SOV shows Building Total $42,800,000 + Contents Total $7,700,000 + BI/Rents Total $5,550,000 = TIV $56,390,000. Use the actual SOV/quote total, NOT the per-location coverage limits.
 - For Property: ALWAYS include Flood and Earthquake rows even if excluded
 - For Property additional_coverages (sublimits/extensions): This section is MANDATORY. Extract ALL sublimits of liability, also called extensions of coverage or additional coverages. Common property sublimits include: Flood, Earthquake, Equipment Breakdown, Ordinance or Law, Spoilage, Business Income Extended Period, Sign Coverage, Accounts Receivable, Valuable Papers, Fine Arts, Newly Acquired Property, Transit, Debris Removal, Pollutant Cleanup, Utility Services, Green Building, Sewer/Drain Backup, Water Damage, Mold/Fungi, and any other sublimit or extension listed in the quote. Include the limit and deductible for each.
 - For Property forms_endorsements: This section is MANDATORY. Extract EVERY policy form and endorsement listed in the property quote. Include the exact form number (e.g., CP 00 10 06/07) and description. These are typically listed on a forms schedule or endorsement schedule page. Do NOT skip this section even if the list is long.
