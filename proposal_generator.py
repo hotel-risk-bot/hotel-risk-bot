@@ -918,6 +918,9 @@ def generate_payment_options(doc, data):
             add_formatted_paragraph(doc, "Payment terms to be confirmed upon binding.", size=11)
     else:
         add_formatted_paragraph(doc, "Payment terms to be confirmed upon binding.", size=11)
+    
+    # Earned premium / cancellation disclaimer - small font, bold, red
+    _add_earned_premium_disclaimer(doc)
 
 
 def generate_subjectivities(doc, data):
@@ -955,28 +958,62 @@ def generate_subjectivities(doc, data):
         add_formatted_paragraph(doc, "No subjectivities noted. Please confirm with carrier.", size=11)
 
 
+def _proper_case(name):
+    """Convert a name to proper title case, handling special cases.
+    ALL CAPS and all lowercase get converted; mixed case is preserved."""
+    if not name or not name.strip():
+        return name
+    s = name.strip()
+    # If ALL CAPS or all lowercase, convert to title case
+    if s.isupper() or s.islower():
+        s = s.title()
+    # Fix common abbreviations that should stay uppercase
+    for abbr in ["LLC", "LP", "LLP", "INC", "DBA", "II", "III", "IV"]:
+        s = s.replace(abbr.title(), abbr)
+    return s
+
+
 def generate_named_insureds(doc, data):
     """Section 6: Named Insureds"""
     add_page_break(doc)
     add_section_header(doc, "Named Insureds")
     
-    # Deduplicate named insureds case-insensitively
+    # Deduplicate named insureds case-insensitively and apply proper case
     raw_named = data.get("named_insureds", [])
     seen = set()
     named = []
     for ni in raw_named:
-        key = ni.strip().upper()
-        if key not in seen:
+        if isinstance(ni, dict):
+            ni_name = ni.get("name", "")
+            ni_dba = ni.get("dba", "")
+        else:
+            ni_name = str(ni)
+            ni_dba = ""
+        key = ni_name.strip().upper()
+        if key and key not in seen:
             seen.add(key)
-            named.append(ni)
+            display = _proper_case(ni_name)
+            if ni_dba:
+                display += f" DBA {_proper_case(ni_dba)}"
+            named.append(display)
+    
+    # Also check if DBA is available from client_info and append to first named insured
+    ci = data.get("client_info", {})
+    ci_dba = ci.get("dba", "")
+    if named and ci_dba and "DBA" not in named[0].upper():
+        named[0] = f"{named[0]} DBA {_proper_case(ci_dba)}"
+    
     if named:
         headers = ["#", "Named Insured"]
         rows = [[str(i), ni] for i, ni in enumerate(named, 1)]
         create_styled_table(doc, headers, rows, col_widths=[0.5, 7.0],
                            header_size=10, body_size=10)
     else:
+        ni_text = _proper_case(ci.get("named_insured", "TBD"))
+        if ci_dba:
+            ni_text += f" DBA {_proper_case(ci_dba)}"
         headers = ["#", "Named Insured"]
-        rows = [["1", data.get("client_info", {}).get("named_insured", "TBD")]]
+        rows = [["1", ni_text]]
         create_styled_table(doc, headers, rows, col_widths=[0.5, 7.0],
                            header_size=10, body_size=10)
     
@@ -1042,7 +1079,47 @@ def generate_information_summary(doc, data):
     if ci.get("sales_exposure_basis"):
         rows.append(["Proposed Sales/Exposure Basis", ci["sales_exposure_basis"]])
     if ci.get("dba"):
-        rows.insert(1, ["DBA", ci["dba"]])
+        rows.insert(1, ["DBA", _proper_case(ci["dba"])])
+    
+    # Calculate total sales from GL schedule_of_classes exposures
+    coverages = data.get("coverages", {})
+    gl_cov = coverages.get("general_liability", {})
+    if isinstance(gl_cov, dict):
+        gl_classes = gl_cov.get("schedule_of_classes", [])
+        total_sales = 0
+        import re as _re
+        for entry in gl_classes:
+            if isinstance(entry, dict):
+                exposure = entry.get("exposure", "")
+                if isinstance(exposure, (int, float)):
+                    total_sales += exposure
+                elif isinstance(exposure, str):
+                    # Parse dollar amounts like "$8,748,612" or "8748612"
+                    cleaned = _re.sub(r'[^\d.]', '', exposure.replace(',', ''))
+                    if cleaned:
+                        try:
+                            total_sales += float(cleaned)
+                        except ValueError:
+                            pass
+        if total_sales > 0:
+            rows.append(["Total Sales / Exposure", fmt_currency(total_sales)])
+        # Also add total_sales from GL coverage if extracted
+        elif gl_cov.get("total_sales"):
+            rows.append(["Total Sales / Exposure", gl_cov["total_sales"]])
+    
+    # Add number of locations
+    loc_count = len(data.get("locations", []))
+    sov_data = data.get("sov_data")
+    if sov_data and sov_data.get("locations"):
+        loc_count = max(loc_count, len(sov_data["locations"]))
+    if loc_count > 0:
+        rows.append(["Number of Locations", str(loc_count)])
+    
+    # Add TIV from SOV or property
+    if sov_data and sov_data.get("totals", {}).get("tiv"):
+        rows.append(["Total Insured Value (TIV)", fmt_currency(sov_data["totals"]["tiv"])])
+    elif coverages.get("property", {}).get("tiv"):
+        rows.append(["Total Insured Value (TIV)", coverages["property"]["tiv"]])
     
     create_styled_table(doc, headers, rows, col_widths=[2.5, 5.0],
                        header_size=10, body_size=10)
@@ -1188,7 +1265,32 @@ def generate_locations(doc, data):
     
     # Third: GL schedule_of_classes locations not already in master list
     # This catches liability-only locations (e.g., LaPlace, vacant land) that aren't on SOV or extracted locations
+    import re
     gl_seen_addrs = set()  # Deduplicate GL entries (multiple classes per location)
+    
+    def _fuzzy_addr_match(addr1, addr2):
+        """Check if two normalized addresses refer to the same location.
+        Handles cases like '4288 HWY 51' vs '4285 HWY 51' by comparing
+        the street name portion after stripping house numbers."""
+        if not addr1 or not addr2:
+            return False
+        if addr1 == addr2:
+            return True
+        if addr1 in addr2 or addr2 in addr1:
+            return True
+        # Extract street name without house number for fuzzy match
+        num1 = re.match(r'^(\d+)\s+(.+)', addr1)
+        num2 = re.match(r'^(\d+)\s+(.+)', addr2)
+        if num1 and num2:
+            street1 = num1.group(2)
+            street2 = num2.group(2)
+            house1 = int(num1.group(1))
+            house2 = int(num2.group(1))
+            # Same street name and house numbers within 20 of each other
+            if street1 == street2 and abs(house1 - house2) <= 20:
+                return True
+        return False
+    
     for entry in gl_classes:
         if not isinstance(entry, dict):
             continue
@@ -1201,17 +1303,18 @@ def generate_locations(doc, data):
             continue
         gl_seen_addrs.add(addr_norm)
         
-        # Check if this address is already in the master list
+        # Check if this address is already in the master list using fuzzy matching
         already_in = False
         for ml in master_locations:
             ml_addr_norm = _normalize_addr(ml.get("address", ""))
-            if addr_norm == ml_addr_norm or addr_norm in ml_addr_norm or ml_addr_norm in addr_norm:
+            if _fuzzy_addr_match(addr_norm, ml_addr_norm):
+                # Mark existing location as on_liability if not already
+                ml["on_liability"] = True
                 already_in = True
                 break
         
         if not already_in:
             # Try to parse city/state from the address string (e.g., "4285 Highway 51, LaPlace, LA 70068")
-            import re
             parts = [p.strip() for p in addr.split(",")]
             street = parts[0] if parts else addr
             city = ""
@@ -1219,7 +1322,6 @@ def generate_locations(doc, data):
             if len(parts) >= 3:
                 street = parts[0]
                 city = parts[1]
-                # State might be "LA 70068" or just "LA"
                 st_match = re.match(r'([A-Z]{2})\s*\d*', parts[2].strip())
                 if st_match:
                     state = st_match.group(1)
@@ -1235,10 +1337,21 @@ def generate_locations(doc, data):
             if not brand or not brand.strip():
                 brand = "Pending"
             
+            # Check fuzzy match against seen_addr_keys too
             addr_key = (_normalize_addr(street) + "|" +
                        _normalize_addr(city) + "|" +
                        state.strip().upper())
-            if addr_key not in seen_addr_keys:
+            key_already_seen = False
+            for existing_key in seen_addr_keys:
+                existing_parts = existing_key.split("|")
+                new_parts = addr_key.split("|")
+                if len(existing_parts) == 3 and len(new_parts) == 3:
+                    if _fuzzy_addr_match(existing_parts[0], new_parts[0]) and \
+                       existing_parts[1] == new_parts[1] and existing_parts[2] == new_parts[2]:
+                        key_already_seen = True
+                        break
+            
+            if not key_already_seen:
                 master_locations.append({
                     "name": brand,
                     "address": street,
@@ -1246,7 +1359,7 @@ def generate_locations(doc, data):
                     "state": state,
                     "tiv": 0,
                     "on_property": addr_key in property_addr_keys,
-                    "on_liability": True,  # It's from GL, so always on liability
+                    "on_liability": True,
                 })
                 seen_addr_keys.add(addr_key)
     
@@ -1629,14 +1742,18 @@ def generate_confirmation_to_bind(doc, data):
         "I authorize HUB International to bind the coverages as outlined in this proposal on behalf of the named insured(s).",
         "I understand that subjectivities, if any, must be satisfied within the timeframes specified or coverage may be subject to cancellation.",
         "I acknowledge that surplus lines placements, if any, are not covered by state guaranty funds.",
-        "I have been offered Terrorism Risk Insurance Act (TRIA) coverage and have made my election as indicated in this proposal."
+        "I have been offered Terrorism Risk Insurance Act (TRIA) coverage and have made my election as indicated in this proposal.",
+        "I understand that additional policies are available and recommended which include Equipment Breakdown (power surges, electrical arcing, mechanical failure), Employment Practices Liability (excluded by the liability carrier), Pollution (claims such as mold and legionella), Cyber, Flood, Earthquake, Deductible Buy Downs, Sexual Abuse & Molestation. If you would like to get these options quoted please request in writing to the producer or account executive."
     ]
     
     for i, stmt in enumerate(statements, 1):
         add_formatted_paragraph(doc, f"{i}. {stmt}", size=10, space_after=4)
     
+    # Earned premium / cancellation disclaimer - small font, bold, red
+    _add_earned_premium_disclaimer(doc)
+    
     # Signature block
-    add_formatted_paragraph(doc, "", space_before=20)
+    add_formatted_paragraph(doc, "", space_before=12)
     sig_table = doc.add_table(rows=5, cols=2)
     sig_table.alignment = WD_TABLE_ALIGNMENT.LEFT
     
@@ -1672,6 +1789,39 @@ def generate_confirmation_to_bind(doc, data):
             f'</w:pBdr>'
         )
         pPr.append(pBdr)
+
+
+# --- Earned Premium Disclaimer (shared between Payment Options and Confirmation to Bind) ---
+_EARNED_PREMIUM_DISCLAIMER = (
+    "All insurance policies, including but not limited to property, general liability, "
+    "umbrella/excess liability, and ancillary coverages, may be subject to minimum earned premiums "
+    "as determined by the issuing carrier. Property policies frequently carry hurricane or named storm "
+    "minimum earned premiums, which may require a significant portion of the annual premium to be fully "
+    "earned regardless of the policy\u2019s cancellation or replacement date. Liability and umbrella/excess "
+    "policies may also carry minimum earned premium provisions that limit or eliminate premium refunds "
+    "upon cancellation.\n\n"
+    "Additionally, most policies \u2014 both admitted and non-admitted (surplus lines) \u2014 are subject to "
+    "short rate cancellation penalties if cancelled mid-term at the insured\u2019s request. Policy fees, "
+    "inspection fees, and membership or association fees are typically fully earned at inception and "
+    "non-refundable regardless of cancellation.\n\n"
+    "These provisions vary by carrier, program, and policy form. Clients should carefully consider the "
+    "financial implications of any mid-term policy changes, cancellations, or carrier transitions, as "
+    "premium refunds may be limited or unavailable. HUB recommends reviewing all earned premium and "
+    "cancellation provisions with your service team prior to binding or making any policy changes."
+)
+
+def _add_earned_premium_disclaimer(doc):
+    """Add the earned premium disclaimer in small bold red font."""
+    RED = RGBColor(0xCC, 0x00, 0x00)
+    for para_text in _EARNED_PREMIUM_DISCLAIMER.split("\n\n"):
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(4)
+        p.paragraph_format.space_after = Pt(2)
+        run = p.add_run(para_text.strip())
+        run.font.size = Pt(7)
+        run.font.bold = True
+        run.font.color.rgb = RED
+        run.font.name = "Calibri"
 
 
 def generate_electronic_consent(doc):

@@ -603,7 +603,9 @@ The JSON structure should be:
       "subjectivities": []
     }}
   }},
-  "named_insureds": ["List of all named insureds from the Named Insured or First Named Insured fields"],
+  "named_insureds": [
+    {{"name": "Full legal entity name", "dba": "DBA/trade name if shown"}}
+  ],
   "additional_named_insureds": [
     {{"name": "Entity name", "dba": "DBA if shown"}}
   ],
@@ -644,7 +646,8 @@ IMPORTANT:
 - For Property: ALWAYS include Flood and Earthquake rows even if excluded
 - For Property additional_coverages (sublimits/extensions): This section is MANDATORY. Extract ALL sublimits of liability, also called extensions of coverage or additional coverages. Common property sublimits include: Flood, Earthquake, Equipment Breakdown, Ordinance or Law, Spoilage, Business Income Extended Period, Sign Coverage, Accounts Receivable, Valuable Papers, Fine Arts, Newly Acquired Property, Transit, Debris Removal, Pollutant Cleanup, Utility Services, Green Building, Sewer/Drain Backup, Water Damage, Mold/Fungi, and any other sublimit or extension listed in the quote. Include the limit and deductible for each.
 - For Property forms_endorsements: This section is MANDATORY. Extract EVERY policy form and endorsement listed in the property quote. Include the exact form number (e.g., CP 00 10 06/07) and description. These are typically listed on a forms schedule or endorsement schedule page. Do NOT skip this section even if the list is long.
-- For additional_named_insureds: Search ALL pages for "Additional Named Insured", "Additional Named Insureds Schedule", "Named Insured Schedule", or similar headings. These are often on a separate page listing multiple entities (e.g., LLCs, management companies, DBAs). Extract every entity listed.
+- For named_insureds: Extract each named insured as an object with "name" and "dba" fields. Do NOT repeat the same entity twice (case-insensitive). If a named insured has a DBA or trade name listed (e.g., "Q Hotels Management LLC DBA Best Western"), split into name="Q Hotels Management LLC" and dba="Best Western". Only include DBAs that are explicitly stated in the documents — do NOT infer or fabricate DBA names.
+- For additional_named_insureds: Search ALL pages for "Additional Named Insured", "Additional Named Insureds Schedule", "Named Insured Schedule", or similar headings. These are often on a separate page listing multiple entities (e.g., LLCs, management companies, DBAs). Extract every entity listed. Do NOT duplicate entities already in named_insureds.
 - For additional_insureds: Search for "Additional Insured", "Additional Insured Schedule", or endorsement pages listing additional insureds (franchisors, mortgagees, managers). Extract all of them.
 - UMBRELLA/EXCESS LAYERS: When multiple umbrella/excess liability quotes are provided (e.g., separate PDFs for different layers), extract EACH layer as a separate coverage entry. Use "umbrella" for the primary excess layer, "umbrella_layer_2" for the second excess layer ($XM xs $XM), and "umbrella_layer_3" for the third excess layer ($XM xs $XM). Each layer has its own carrier, premium, limits, forms, and subjectivities. The tower_structure field should show that layer's position. Look for "Controlling Underlying" or "Schedule of Underlying" to determine the layer position. If a quote says it sits excess of another carrier's layer, it is a higher layer.
 
