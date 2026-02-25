@@ -1707,13 +1707,11 @@ def generate_locations(doc, data):
                         break
             
             if not key_already_seen:
-                # Try to get TIV from SOV if this location is also on property
-                _tiv = 0
+                # Cross-reference SOV for property name only (NOT TIV — TIV is property-only)
                 if sov_data and sov_data.get("locations"):
                     for sov_loc in sov_data["locations"]:
                         if _fuzzy_addr_match(_normalize_addr(street), _normalize_addr(sov_loc.get("address", ""))):
-                            _tiv = sov_loc.get("tiv", 0) or 0
-                            # Also get name from SOV if brand is generic
+                            # Get name from SOV if brand is generic
                             if brand in ("Pending", "") or brand == entry.get("classification", ""):
                                 _cn = (sov_loc.get("corporate_name", "") or "").strip()
                                 _db = (sov_loc.get("dba", "") or sov_loc.get("hotel_flag", "") or "").strip()
@@ -1729,7 +1727,7 @@ def generate_locations(doc, data):
                     "address": street,
                     "city": city,
                     "state": state,
-                    "tiv": _tiv,
+                    "tiv": 0,  # TIV only comes from property SOV, never from GL
                     "on_property": _is_on_property(addr_key),
                     "on_liability": True,
                 })
