@@ -341,11 +341,22 @@ def _merge_extraction_results(existing: dict, new_data: dict) -> dict:
             existing_addrs.add(addr)
     merged["locations"] = existing_locs
     
-    # Merge named insureds - add unique ones
-    existing_named = set(merged.get("named_insureds", []))
+    # Merge named insureds - add unique ones (handle both str and dict entries)
+    existing_named = merged.get("named_insureds", [])
+    if not isinstance(existing_named, list):
+        existing_named = [existing_named] if existing_named else []
+    # Build a set of normalized names for dedup
+    def _ni_name(ni):
+        if isinstance(ni, dict):
+            return ni.get("name", "").strip().upper()
+        return str(ni).strip().upper()
+    seen_names = {_ni_name(ni) for ni in existing_named}
     for ni in new_data.get("named_insureds", []):
-        existing_named.add(ni)
-    merged["named_insureds"] = list(existing_named)
+        name_key = _ni_name(ni)
+        if name_key and name_key not in seen_names:
+            existing_named.append(ni)
+            seen_names.add(name_key)
+    merged["named_insureds"] = existing_named
     
     # Merge additional interests
     existing_ai = merged.get("additional_interests", [])
