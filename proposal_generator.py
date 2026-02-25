@@ -101,6 +101,17 @@ AM_BEST_RATINGS = {
 }
 
 
+def _clean_carrier_name(name):
+    """Strip (Non-Adm), (Non-Admitted), (Surplus Lines) etc. from carrier names."""
+    if not name:
+        return name
+    import re
+    name = re.sub(r'\s*\(Non-Adm(?:itted)?\)', '', name, flags=re.IGNORECASE).strip()
+    name = re.sub(r'\s*\(Surplus Lines?\)', '', name, flags=re.IGNORECASE).strip()
+    name = re.sub(r'\s*\(E&S\)', '', name, flags=re.IGNORECASE).strip()
+    return name
+
+
 def lookup_am_best(carrier_name):
     """Look up AM Best rating for a carrier. Returns rating or None."""
     if not carrier_name:
@@ -701,7 +712,7 @@ def generate_premium_summary(doc, data):
         umb_cov = coverages.get(umb_key)
         if umb_cov:
             proposed_umb_total += umb_cov.get("total_premium", 0)
-            proposed_umb_carriers.append(umb_cov.get("carrier", ""))
+            proposed_umb_carriers.append(_clean_carrier_name(umb_cov.get("carrier", "")))
     
     # Combine expiring umbrella layers into a single total for comparison
     expiring_umb_total = 0
@@ -732,20 +743,15 @@ def generate_premium_summary(doc, data):
                 cov = coverages.get("umbrella")  # use primary for display
                 if cov:
                     admitted = cov.get("carrier_admitted", True)
-                if not admitted:
-                    carrier_short = f"{carrier_short} (Non-Adm)"
             elif cov:
-                carrier = cov.get("carrier", "")
+                carrier = _clean_carrier_name(cov.get("carrier", ""))
                 carrier_short = carrier
                 if len(carrier) > 30:
                     carrier_short = carrier.replace("Insurance Company", "Ins Co").replace("Specialty ", "Spec ")
-                admitted = cov.get("carrier_admitted", True)
-                if not admitted:
-                    carrier_short = f"{carrier_short} (Non-Adm)"
                 proposed = cov.get("total_premium", 0)
             else:
                 exp_detail = expiring_details.get(key, {})
-                carrier_short = " / ".join(expiring_umb_carriers) if expiring_umb_carriers else (exp_detail.get("carrier", "\u2014") if exp_detail else "\u2014")
+                carrier_short = " / ".join(expiring_umb_carriers) if expiring_umb_carriers else (_clean_carrier_name(exp_detail.get("carrier", "\u2014")) if exp_detail else "\u2014")
                 proposed = 0
             
             if not exp and not proposed:
@@ -787,18 +793,15 @@ def generate_premium_summary(doc, data):
             continue
         
         if cov:
-            carrier = cov.get("carrier", "")
+            carrier = _clean_carrier_name(cov.get("carrier", ""))
             carrier_short = carrier
             if len(carrier) > 30:
                 carrier_short = carrier.replace("Insurance Company", "Ins Co").replace("Specialty ", "Spec ")
-            admitted = cov.get("carrier_admitted", True)
-            if not admitted:
-                carrier_short = f"{carrier_short} (Non-Adm)"
             proposed = cov.get("total_premium", 0)
         else:
             # Expiring-only row: get carrier from expiring_details if available
             exp_detail = expiring_details.get(key, {})
-            carrier_short = exp_detail.get("carrier", "—") if exp_detail else "—"
+            carrier_short = _clean_carrier_name(exp_detail.get("carrier", "\u2014")) if exp_detail else "\u2014"
             proposed = 0
         
         if exp and exp > 0 and proposed > 0:
@@ -906,13 +909,22 @@ def generate_payment_options(doc, data):
             terms = re.sub(r'[^.]*commission[^.]*\.?', '', terms, flags=re.IGNORECASE).strip()
             terms = re.sub(r'[^.]*broker fee[^.]*\.?', '', terms, flags=re.IGNORECASE).strip()
             if terms or po.get("mep"):
-                filtered_opts.append({"carrier": carrier, "terms": terms, "mep": po.get("mep", "")})
+                filtered_opts.append({"carrier": carrier, "coverage_type": po.get("coverage_type", ""), "terms": terms, "mep": po.get("mep", "")})
         
         if filtered_opts:
             headers = ["Carrier", "Payment Terms", "Minimum Earned Premium"]
-            rows = [[po.get("carrier", ""), po.get("terms", ""), po.get("mep", "")] for po in filtered_opts]
-            create_styled_table(doc, headers, rows, col_widths=[2.2, 3.3, 2.0],
-                               header_size=10, body_size=10,
+            rows = []
+            for po in filtered_opts:
+                carrier_name = po.get("carrier", "")
+                cov_type = po.get("coverage_type", "")
+                # Append coverage type after carrier name (e.g., "Kinsale — Property")
+                if cov_type:
+                    carrier_display = f"{carrier_name} — {cov_type}"
+                else:
+                    carrier_display = carrier_name
+                rows.append([carrier_display, po.get("terms", ""), po.get("mep", "")])
+            create_styled_table(doc, headers, rows, col_widths=[2.5, 3.0, 2.0],
+                               header_size=10, body_size=9,
                                col_alignments={2: WD_ALIGN_PARAGRAPH.CENTER})
         else:
             add_formatted_paragraph(doc, "Payment terms to be confirmed upon binding.", size=11)
@@ -948,7 +960,7 @@ def generate_subjectivities(doc, data):
         if cov and cov.get("subjectivities"):
             has_subjectivities = True
             # Add carrier info with the coverage name
-            carrier = cov.get("carrier", "")
+            carrier = _clean_carrier_name(cov.get("carrier", ""))
             header_text = f"{display_name} — {carrier}" if carrier else display_name
             add_subsection_header(doc, header_text)
             for subj in cov["subjectivities"]:
@@ -1107,13 +1119,66 @@ def generate_information_summary(doc, data):
         elif gl_cov.get("total_sales"):
             rows.append(["Total Sales / Exposure", gl_cov["total_sales"]])
     
-    # Add number of locations
-    loc_count = len(data.get("locations", []))
+    # Add number of locations with property/liability breakdown
     sov_data = data.get("sov_data")
-    if sov_data and sov_data.get("locations"):
-        loc_count = max(loc_count, len(sov_data["locations"]))
-    if loc_count > 0:
-        rows.append(["Number of Locations", str(loc_count)])
+    sov_locs = sov_data.get("locations", []) if sov_data else []
+    prop_loc_count = len(sov_locs) if sov_locs else 0
+    if not prop_loc_count and coverages.get("property"):
+        prop_loc_count = int(coverages["property"].get("num_locations", 0) or 0)
+    
+    # Count liability locations from schedule_of_classes
+    gl_loc_addrs = set()
+    if isinstance(gl_cov, dict):
+        for entry in gl_cov.get("schedule_of_classes", []):
+            if isinstance(entry, dict):
+                addr = entry.get("address", "") or entry.get("location", "")
+                if addr and addr.strip():
+                    gl_loc_addrs.add(_normalize_addr(addr))
+    liab_loc_count = len(gl_loc_addrs) if gl_loc_addrs else int(gl_cov.get("num_locations", 0) or 0) if isinstance(gl_cov, dict) else 0
+    
+    total_loc_count = max(prop_loc_count, liab_loc_count, len(data.get("locations", [])))
+    if total_loc_count > 0:
+        rows.append(["Total Number of Locations", str(total_loc_count)])
+    if prop_loc_count > 0:
+        rows.append(["Property Locations", str(prop_loc_count)])
+    if liab_loc_count > 0:
+        rows.append(["Liability Locations", str(liab_loc_count)])
+    
+    # Count location types from schedule_of_classes classifications
+    if isinstance(gl_cov, dict):
+        hotel_count = 0
+        office_count = 0
+        lro_count = 0
+        vacant_count = 0
+        other_types = set()
+        seen_loc_types = set()  # track by address to avoid double-counting
+        for entry in gl_cov.get("schedule_of_classes", []):
+            if isinstance(entry, dict):
+                addr = _normalize_addr(entry.get("address", "") or entry.get("location", ""))
+                classification = (entry.get("classification", "") or "").lower()
+                loc_key = f"{addr}|{classification[:20]}"
+                if loc_key in seen_loc_types:
+                    continue
+                seen_loc_types.add(loc_key)
+                if any(kw in classification for kw in ["hotel", "motel", "inn", "suite", "lodge", "resort"]):
+                    hotel_count += 1
+                elif "office" in classification or "building" in classification:
+                    office_count += 1
+                elif "lessor" in classification or "lro" in classification:
+                    lro_count += 1
+                elif "vacant" in classification:
+                    vacant_count += 1
+                elif classification.strip():
+                    other_types.add(classification.split("-")[0].strip().title())
+        type_parts = []
+        if hotel_count: type_parts.append(f"{hotel_count} Hotel(s)")
+        if office_count: type_parts.append(f"{office_count} Office(s)")
+        if lro_count: type_parts.append(f"{lro_count} LRO(s)")
+        if vacant_count: type_parts.append(f"{vacant_count} Vacant Land")
+        for ot in sorted(other_types):
+            type_parts.append(f"1 {ot}")
+        if type_parts:
+            rows.append(["Location Types", ", ".join(type_parts)])
     
     # Add TIV from SOV or property
     if sov_data and sov_data.get("totals", {}).get("tiv"):
@@ -1363,6 +1428,79 @@ def generate_locations(doc, data):
                 })
                 seen_addr_keys.add(addr_key)
     
+    # Fourth: Extract locations from GL forms_endorsements (e.g., CG 21 44 designated premises)
+    # These forms often list ALL covered locations with full addresses
+    gl_forms = gl_cov.get("forms_endorsements", []) if isinstance(gl_cov, dict) else []
+    for form in gl_forms:
+        if not isinstance(form, dict):
+            continue
+        desc = (form.get("description", "") or "").upper()
+        # Look for designated premises forms that contain address lists
+        if not any(kw in desc for kw in ["DESIGNATED PREMISES", "CG 21 44", "CG2144", "LIMITATION OF COVERAGE"]):
+            continue
+        # Try to extract addresses from the description text
+        # Format: "1) 4285 Highway 51, LaPlace, LA 70068" or similar numbered lists
+        addr_pattern = re.findall(r'\d+\)\s*(.+?)(?=\d+\)|$)', desc)
+        if not addr_pattern:
+            # Try semicolon or newline separated
+            addr_pattern = [a.strip() for a in re.split(r'[;\n]', desc) if re.search(r'\d+\s+\w+', a.strip())]
+        for raw_addr in addr_pattern:
+            raw_addr = raw_addr.strip().rstrip(',')
+            if not raw_addr or len(raw_addr) < 5:
+                continue
+            addr_norm = _normalize_addr(raw_addr)
+            # Check if already in master list
+            already_exists = False
+            for ml in master_locations:
+                if _fuzzy_addr_match(addr_norm, _normalize_addr(ml.get("address", ""))):
+                    ml["on_liability"] = True
+                    already_exists = True
+                    break
+            if not already_exists:
+                parts = [p.strip() for p in raw_addr.split(",")]
+                street = parts[0] if parts else raw_addr
+                city = ""
+                state = ""
+                if len(parts) >= 3:
+                    city = parts[1]
+                    st_m = re.match(r'([A-Z]{2})\s*\d*', parts[2].strip().upper())
+                    if st_m: state = st_m.group(1)
+                elif len(parts) == 2:
+                    st_m = re.match(r'([A-Z]{2})\s*\d*', parts[1].strip().upper())
+                    if st_m:
+                        state = st_m.group(1)
+                    else:
+                        city = parts[1]
+                # Try to find name from SOV data
+                loc_name = "Pending"
+                if sov_data and sov_data.get("locations"):
+                    for sov_loc in sov_data["locations"]:
+                        if _fuzzy_addr_match(_normalize_addr(street), _normalize_addr(sov_loc.get("address", ""))):
+                            loc_name = sov_loc.get("dba") or sov_loc.get("hotel_flag") or sov_loc.get("corporate_name", "Pending")
+                            if not city and sov_loc.get("city"): city = sov_loc["city"]
+                            if not state and sov_loc.get("state"): state = sov_loc["state"]
+                            break
+                addr_key = (_normalize_addr(street) + "|" + _normalize_addr(city) + "|" + state.strip().upper())
+                key_already_seen = False
+                for existing_key in seen_addr_keys:
+                    ep = existing_key.split("|")
+                    np = addr_key.split("|")
+                    if len(ep) == 3 and len(np) == 3:
+                        if _fuzzy_addr_match(ep[0], np[0]) and ep[2] == np[2]:
+                            key_already_seen = True
+                            break
+                if not key_already_seen:
+                    master_locations.append({
+                        "name": loc_name,
+                        "address": street,
+                        "city": city,
+                        "state": state,
+                        "tiv": 0,
+                        "on_property": False,
+                        "on_liability": True,
+                    })
+                    seen_addr_keys.add(addr_key)
+    
     if master_locations:
         CHECK = "\u2713"  # Unicode checkmark
         headers = ["#", "Property Name", "Address", "City", "ST", "TIV", "Property", "Liability"]
@@ -1419,7 +1557,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     add_section_header(doc, display_name)
     
     # Coverage Summary table
-    carrier = cov.get("carrier", "N/A")
+    carrier = _clean_carrier_name(cov.get("carrier", "N/A"))
     admitted = "Admitted" if cov.get("carrier_admitted", True) else "Non-Admitted"
     am_best = cov.get("am_best_rating", "N/A")
     # Fallback to lookup table if not provided in quote
@@ -1897,8 +2035,8 @@ def generate_carrier_rating(doc, data):
     for key, display_name in coverage_names.items():
         cov = coverages.get(key)
         if cov:
-            carrier = cov.get("carrier", "")
-            if carrier and carrier not in carriers_seen:
+            carrier = _clean_carrier_name(cov.get("carrier", ""))
+            if carrier and carrier not in seen_carriers:
                 rating = cov.get("am_best_rating", "N/A")
                 if not rating or rating == "N/A":
                     looked_up = lookup_am_best(carrier)
