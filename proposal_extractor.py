@@ -71,7 +71,9 @@ QUOTE_PAGE_KEYWORDS = [
     "PREMIUM BREAKDOWN",
     "SCHEDULE OF FORMS",
     "SUBJECTIVITIES", "SUBJECTIVES",
-    "BINDING REQUIREMENTS",
+    "CONDITIONS & SUBJECTIVES", "CONDITIONS AND SUBJECTIVES",
+    "BINDING CONDITIONS", "BINDING REQUIREMENTS",
+    "BINDING SUBJECTIVITIES",
     "CLASS CODE", "CLASSIFICATION",
     "OPTIONAL COVERAGES",
     "ADDITIONAL COVERAGES",
@@ -647,6 +649,7 @@ IMPORTANT:
 - For Property: ALWAYS include Flood and Earthquake rows even if excluded
 - For Property additional_coverages (sublimits/extensions): This section is MANDATORY. Extract ALL sublimits of liability, also called extensions of coverage or additional coverages. Common property sublimits include: Flood, Earthquake, Equipment Breakdown, Ordinance or Law, Spoilage, Business Income Extended Period, Sign Coverage, Accounts Receivable, Valuable Papers, Fine Arts, Newly Acquired Property, Transit, Debris Removal, Pollutant Cleanup, Utility Services, Green Building, Sewer/Drain Backup, Water Damage, Mold/Fungi, and any other sublimit or extension listed in the quote. Include the limit and deductible for each.
 - For Property forms_endorsements: This section is MANDATORY. Extract EVERY policy form and endorsement listed in the property quote. Include the exact form number (e.g., CP 00 10 06/07) and description. These are typically listed on a forms schedule or endorsement schedule page. Do NOT skip this section even if the list is long.
+- For ALL coverage types subjectivities: This section is CRITICAL. Extract ALL conditions, subjectives, binding requirements, and binding conditions listed in the quote. These are often on a page titled "CONDITIONS & SUBJECTIVES", "BINDING REQUIREMENTS", "BINDING SUBJECTIVITIES", or "BINDING CONDITIONS". Each bullet point or numbered item should be a separate string in the subjectivities array. Include items like: loss control report requirements, certificates of insurance requirements, named insured confirmation, application requirements, ACORD application deadlines, terrorism form requirements, payment of state taxes, inspection/audit contact requirements, and any other conditions the carrier requires before or after binding. Do NOT skip or summarize — extract each condition verbatim as written in the quote.
 - For named_insureds: Extract each named insured as an object with "name" and "dba" fields. Do NOT repeat the same entity twice (case-insensitive). If a named insured has a DBA or trade name EXPLICITLY listed in the quote (e.g., "Q Hotels Management LLC DBA Best Western"), split into name="Q Hotels Management LLC" and dba="Best Western". CRITICAL RULES: (1) Only include DBAs that are EXPLICITLY written as "DBA", "d/b/a", or "doing business as" in the documents. (2) Do NOT infer DBAs from hotel brand names, location names, or SOV entries. (3) Do NOT fabricate entity names like "Cajun Lodging LLC" unless that exact name appears in the quote documents. (4) If a named insured appears as "Q HOTEL MANAGEMENT, LLC" in ALL CAPS, extract it exactly as written — the generator will handle proper case formatting. (5) Do NOT create separate named insured entries for each hotel brand — those are locations, not named insureds.
 - For additional_named_insureds: Search ALL pages for "Additional Named Insured", "Additional Named Insureds Schedule", "Named Insured Schedule", or similar headings. These are often on a separate page listing multiple entities (e.g., LLCs, management companies, DBAs). Extract every entity listed. Do NOT duplicate entities already in named_insureds.
 - For additional_insureds: Search for "Additional Insured", "Additional Insured Schedule", or endorsement pages listing additional insureds (franchisors, mortgagees, managers). Extract all of them.
@@ -909,6 +912,19 @@ def format_verification_message(data: dict) -> str:
                     lines.append(f"    • {f}")
             if len(forms) > 5:
                 lines.append(f"    ... and {len(forms) - 5} more")
+
+        # Subjectivities / Conditions
+        subjs = cov.get("subjectivities", [])
+        if subjs and isinstance(subjs, list):
+            lines.append(f"  Conditions & Subjectivities: {len(subjs)} items")
+            for s in subjs[:5]:
+                s_text = s if isinstance(s, str) else str(s)
+                # Truncate long items for display
+                if len(s_text) > 100:
+                    s_text = s_text[:97] + "..."
+                lines.append(f"    ☐ {s_text}")
+            if len(subjs) > 5:
+                lines.append(f"    ... and {len(subjs) - 5} more")
 
     # Locations
     locations = data.get("locations", [])

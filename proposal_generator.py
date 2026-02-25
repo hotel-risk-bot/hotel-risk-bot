@@ -951,7 +951,13 @@ def generate_subjectivities(doc, data):
         "umbrella_layer_2": "2nd Excess Layer",
         "umbrella_layer_3": "3rd Excess Layer",
         "workers_comp": "Workers Compensation",
-        "commercial_auto": "Commercial Auto"
+        "commercial_auto": "Commercial Auto",
+        "terrorism": "Terrorism / TRIA",
+        "cyber": "Cyber Liability",
+        "epli": "Employment Practices Liability",
+        "crime": "Crime",
+        "flood": "Flood",
+        "inland_marine": "Inland Marine"
     }
     
     has_subjectivities = False
@@ -1278,13 +1284,55 @@ def generate_locations(doc, data):
                         break
                 if not matched:
                     liability_addr_keys.add(_normalize_addr(addr) + "||")
-    # If GL exists but no schedule_of_classes addresses, assume all locations are on liability
-    if "general_liability" in coverages and not liability_addr_keys:
-        for loc in (sov_data.get("locations", []) if sov_data else []) + locations:
-            addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
-                       _normalize_addr(loc.get("city", "")) + "|" +
-                       loc.get("state", "").strip().upper())
+    # NOTE: We do NOT default all locations to liability when GL exists.
+    # Liability checkmarks are ONLY for locations explicitly listed on the GL carrier quote
+    # (from schedule_of_classes addresses and CG2144 designated premises forms).
+    # Quotes are primary — SOVs only supplement with additional info.
+    
+    # --- Pre-scan CG2144 forms to add designated premises to liability_addr_keys ---
+    import re
+    gl_forms = gl_cov.get("forms_endorsements", []) if isinstance(gl_cov, dict) else []
+    _cg2144_addrs = []  # Save parsed addresses for the fourth pass later
+    for form in gl_forms:
+        if not isinstance(form, dict):
+            continue
+        desc = (form.get("description", "") or "").upper()
+        if not any(kw in desc for kw in ["DESIGNATED PREMISES", "CG 21 44", "CG2144", "LIMITATION OF COVERAGE"]):
+            continue
+        addr_pattern = re.findall(r'\d+\)\s*(.+?)(?=\d+\)|$)', desc)
+        if not addr_pattern:
+            addr_pattern = [a.strip() for a in re.split(r'[;\n]', desc) if re.search(r'\d+\s+\w+', a.strip())]
+        for raw_addr in addr_pattern:
+            raw_addr = raw_addr.strip().rstrip(',')
+            if not raw_addr or len(raw_addr) < 5:
+                continue
+            _cg2144_addrs.append(raw_addr)
+            # Parse city/state from address
+            parts = [p.strip() for p in raw_addr.split(",")]
+            street = parts[0] if parts else raw_addr
+            city = ""
+            state = ""
+            if len(parts) >= 3:
+                city = parts[1]
+                st_m = re.match(r'([A-Z]{2})\s*\d*', parts[2].strip().upper())
+                if st_m: state = st_m.group(1)
+            elif len(parts) == 2:
+                st_m = re.match(r'([A-Z]{2})\s*\d*', parts[1].strip().upper())
+                if st_m:
+                    state = st_m.group(1)
+                else:
+                    city = parts[1]
+            addr_key = (_normalize_addr(street) + "|" + _normalize_addr(city) + "|" + state.strip().upper())
             liability_addr_keys.add(addr_key)
+            # Also try matching against SOV/locations for better key resolution
+            for loc in (sov_data.get("locations", []) if sov_data else []) + locations:
+                if _normalize_addr(street) in _normalize_addr(loc.get("address", "")) or \
+                   _normalize_addr(loc.get("address", "")) in _normalize_addr(street):
+                    resolved_key = (_normalize_addr(loc.get("address", "")) + "|" +
+                                   _normalize_addr(loc.get("city", "")) + "|" +
+                                   loc.get("state", "").strip().upper())
+                    liability_addr_keys.add(resolved_key)
+                    break
     
     # --- Build master location list ---
     # First: SOV locations (property locations)
@@ -2029,7 +2077,13 @@ def generate_carrier_rating(doc, data):
         "umbrella_layer_2": "2nd Excess Layer",
         "umbrella_layer_3": "3rd Excess Layer",
         "workers_comp": "Workers Compensation",
-        "commercial_auto": "Commercial Auto"
+        "commercial_auto": "Commercial Auto",
+        "terrorism": "Terrorism / TRIA",
+        "cyber": "Cyber Liability",
+        "epli": "Employment Practices Liability",
+        "crime": "Crime",
+        "flood": "Flood",
+        "inland_marine": "Inland Marine"
     }
     
     for key, display_name in coverage_names.items():
