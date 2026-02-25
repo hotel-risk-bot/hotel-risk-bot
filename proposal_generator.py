@@ -2036,7 +2036,7 @@ def generate_carrier_rating(doc, data):
         cov = coverages.get(key)
         if cov:
             carrier = _clean_carrier_name(cov.get("carrier", ""))
-            if carrier and carrier not in seen_carriers:
+            if carrier and carrier not in carriers_seen:
                 rating = cov.get("am_best_rating", "N/A")
                 if not rating or rating == "N/A":
                     looked_up = lookup_am_best(carrier)
