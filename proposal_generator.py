@@ -76,6 +76,11 @@ AM_BEST_RATINGS = {
     "great american insurance": "A+ (XV)",
     "argo group": "A- (VIII)",
     "hudson insurance": "A+ (XV)",
+    # Crime carriers
+    "federal insurance company": "A++ (XV)",
+    "federal insurance": "A++ (XV)",
+    "chubb": "A++ (XV)",
+    "vigilant insurance": "A++ (XV)",
     # WC carriers
     "employers insurance": "A (VIII)",
     "employers compensation insurance": "A (VIII)",
@@ -677,7 +682,9 @@ def generate_premium_summary(doc, data):
     logger.info(f"Premium Summary - coverages keys: {list(coverages.keys())}")
     logger.info(f"Premium Summary - expiring keys: {list(expiring.keys())} values: {expiring}")
     logger.info(f"Premium Summary - expiring_details keys: {list(expiring_details.keys())}")
-    logger.info(f"Premium Summary - coverage_names keys: {list(coverage_names.keys())}" if 'coverage_names' in dir() else "coverage_names not yet defined")
+    
+    # Determine if we have expiring data (enables comparison mode)
+    has_expiring = bool(expiring and any(v for v in expiring.values() if v))
     
     coverage_names = {
         "property": "Property",
@@ -696,10 +703,14 @@ def generate_premium_summary(doc, data):
         "equipment_breakdown": "Equipment Breakdown"
     }
     
-    headers = ["Coverage", "Carrier", "Expiring", "Proposed", "$ Change", "% Change"]
+    if has_expiring:
+        headers = ["Coverage", "Carrier", "Expiring", "Proposed", "$ Change", "% Change"]
+    else:
+        headers = ["Coverage", "Carrier", "Premium", "Taxes & Fees", "Total"]
     rows = []
     total_expiring = 0
     total_proposed = 0
+    total_taxes_fees = 0
     
     # Collect all coverage keys that appear in either proposed or expiring
     all_keys = list(coverage_names.keys())
@@ -730,20 +741,67 @@ def generate_premium_summary(doc, data):
         cov = coverages.get(key)
         exp = expiring.get(key, 0)
         
-        # For umbrella: show combined row instead of individual layers
-        if key == "umbrella":
-            # Use combined totals for umbrella comparison
-            exp = expiring_umb_total
-            if proposed_umb_total > 0:
-                proposed = proposed_umb_total
-                carrier_short = " / ".join(dict.fromkeys(proposed_umb_carriers))  # unique carriers
-                if len(carrier_short) > 35:
-                    carrier_short = carrier_short[:32] + "..."
-                admitted = True  # default
-                cov = coverages.get("umbrella")  # use primary for display
-                if cov:
-                    admitted = cov.get("carrier_admitted", True)
-            elif cov:
+        if has_expiring:
+            # === COMPARISON MODE (with expiring premiums) ===
+            # For umbrella: show combined row instead of individual layers
+            if key == "umbrella":
+                exp = expiring_umb_total
+                if proposed_umb_total > 0:
+                    proposed = proposed_umb_total
+                    carrier_short = " / ".join(dict.fromkeys(proposed_umb_carriers))
+                    if len(carrier_short) > 35:
+                        carrier_short = carrier_short[:32] + "..."
+                    cov = coverages.get("umbrella")
+                elif cov:
+                    carrier = _clean_carrier_name(cov.get("carrier", ""))
+                    carrier_short = carrier
+                    if len(carrier) > 30:
+                        carrier_short = carrier.replace("Insurance Company", "Ins Co").replace("Specialty ", "Spec ")
+                    proposed = cov.get("total_premium", 0)
+                else:
+                    exp_detail = expiring_details.get(key, {})
+                    carrier_short = " / ".join(expiring_umb_carriers) if expiring_umb_carriers else (_clean_carrier_name(exp_detail.get("carrier", "\u2014")) if exp_detail else "\u2014")
+                    proposed = 0
+                
+                if not exp and not proposed:
+                    continue
+                
+                if exp and exp > 0 and proposed > 0:
+                    dollar_change = proposed - exp
+                    pct_change = ((proposed - exp) / exp) * 100
+                    pct_str = f"{pct_change:+.1f}%"
+                    dollar_str = f"+${dollar_change:,.2f}" if dollar_change >= 0 else f"-${abs(dollar_change):,.2f}"
+                elif exp and exp > 0 and proposed == 0:
+                    dollar_str = "Not Quoted"
+                    pct_str = "\u2014"
+                elif proposed > 0 and (not exp or exp == 0):
+                    dollar_str = "New"
+                    pct_str = "New"
+                else:
+                    dollar_str = "N/A"
+                    pct_str = "N/A"
+                
+                rows.append([
+                    display_name,
+                    carrier_short,
+                    f"${exp:,.2f}" if exp else "N/A",
+                    f"${proposed:,.2f}" if proposed else "N/A",
+                    dollar_str,
+                    pct_str
+                ])
+                total_expiring += exp if exp else 0
+                total_proposed += proposed
+                continue
+            
+            # Skip individual umbrella layers in comparison mode (handled above)
+            if key in ("umbrella_layer_2", "umbrella_layer_3"):
+                continue
+            
+            # Skip if neither proposed nor expiring
+            if not cov and not exp:
+                continue
+            
+            if cov:
                 carrier = _clean_carrier_name(cov.get("carrier", ""))
                 carrier_short = carrier
                 if len(carrier) > 30:
@@ -751,17 +809,17 @@ def generate_premium_summary(doc, data):
                 proposed = cov.get("total_premium", 0)
             else:
                 exp_detail = expiring_details.get(key, {})
-                carrier_short = " / ".join(expiring_umb_carriers) if expiring_umb_carriers else (_clean_carrier_name(exp_detail.get("carrier", "\u2014")) if exp_detail else "\u2014")
+                carrier_short = _clean_carrier_name(exp_detail.get("carrier", "\u2014")) if exp_detail else "\u2014"
                 proposed = 0
-            
-            if not exp and not proposed:
-                continue
             
             if exp and exp > 0 and proposed > 0:
                 dollar_change = proposed - exp
                 pct_change = ((proposed - exp) / exp) * 100
                 pct_str = f"{pct_change:+.1f}%"
-                dollar_str = f"+${dollar_change:,.2f}" if dollar_change >= 0 else f"-${abs(dollar_change):,.2f}"
+                if dollar_change >= 0:
+                    dollar_str = f"+${dollar_change:,.2f}"
+                else:
+                    dollar_str = f"-${abs(dollar_change):,.2f}"
             elif exp and exp > 0 and proposed == 0:
                 dollar_str = "Not Quoted"
                 pct_str = "\u2014"
@@ -780,108 +838,123 @@ def generate_premium_summary(doc, data):
                 dollar_str,
                 pct_str
             ])
+            
             total_expiring += exp if exp else 0
             total_proposed += proposed
-            continue
         
-        # Skip individual umbrella layers in the main loop (handled above)
-        if key in ("umbrella_layer_2", "umbrella_layer_3"):
-            continue
-        
-        # Skip if neither proposed nor expiring
-        if not cov and not exp:
-            continue
-        
-        if cov:
+        else:
+            # === SIMPLE MODE (no expiring premiums) ===
+            # Show each coverage line individually (no umbrella combining)
+            if not cov:
+                continue
+            
             carrier = _clean_carrier_name(cov.get("carrier", ""))
             carrier_short = carrier
             if len(carrier) > 30:
                 carrier_short = carrier.replace("Insurance Company", "Ins Co").replace("Specialty ", "Spec ")
-            proposed = cov.get("total_premium", 0)
-        else:
-            # Expiring-only row: get carrier from expiring_details if available
-            exp_detail = expiring_details.get(key, {})
-            carrier_short = _clean_carrier_name(exp_detail.get("carrier", "\u2014")) if exp_detail else "\u2014"
-            proposed = 0
-        
-        if exp and exp > 0 and proposed > 0:
-            dollar_change = proposed - exp
-            pct_change = ((proposed - exp) / exp) * 100
-            pct_str = f"{pct_change:+.1f}%"
-            if dollar_change >= 0:
-                dollar_str = f"+${dollar_change:,.2f}"
-            else:
-                dollar_str = f"-${abs(dollar_change):,.2f}"
-        elif exp and exp > 0 and proposed == 0:
-            # Expiring only, no proposed
-            dollar_str = "Not Quoted"
-            pct_str = "—"
-        elif proposed > 0 and (not exp or exp == 0):
-            dollar_str = "New"
-            pct_str = "New"
-        else:
-            dollar_str = "N/A"
-            pct_str = "N/A"
-        
-        rows.append([
-            display_name,
-            carrier_short,
-            f"${exp:,.2f}" if exp else "N/A",
-            f"${proposed:,.2f}" if proposed else "N/A",
-            dollar_str,
-            pct_str
-        ])
-        
-        total_expiring += exp if exp else 0
-        total_proposed += proposed
+            premium = cov.get("premium", 0) or 0
+            total_prem = cov.get("total_premium", 0) or 0
+            taxes_fees = total_prem - premium if total_prem > premium else 0
+            
+            rows.append([
+                display_name,
+                carrier_short,
+                fmt_currency(premium) if premium else "\u2014",
+                fmt_currency(taxes_fees) if taxes_fees else "\u2014",
+                fmt_currency(total_prem) if total_prem else "\u2014",
+            ])
+            total_proposed += total_prem
+            total_taxes_fees += taxes_fees
     
     # Total row
-    total_dollar = total_proposed - total_expiring
-    if total_expiring > 0:
-        total_pct = ((total_proposed - total_expiring) / total_expiring) * 100
-        total_pct_str = f"{total_pct:+.1f}%"
-        if total_dollar >= 0:
-            total_dollar_str = f"+${total_dollar:,.2f}"
+    if has_expiring:
+        total_dollar = total_proposed - total_expiring
+        if total_expiring > 0:
+            total_pct = ((total_proposed - total_expiring) / total_expiring) * 100
+            total_pct_str = f"{total_pct:+.1f}%"
+            if total_dollar >= 0:
+                total_dollar_str = f"+${total_dollar:,.2f}"
+            else:
+                total_dollar_str = f"-${abs(total_dollar):,.2f}"
         else:
-            total_dollar_str = f"-${abs(total_dollar):,.2f}"
+            total_pct_str = "N/A"
+            total_dollar_str = "N/A"
+        
+        rows.append([
+            "TOTAL",
+            "",
+            f"${total_expiring:,.2f}" if total_expiring else "N/A",
+            f"${total_proposed:,.2f}" if total_proposed else "N/A",
+            total_dollar_str,
+            total_pct_str
+        ])
+        
+        table = create_styled_table(doc, headers, rows,
+                                   col_widths=[1.2, 2.0, 1.0, 1.0, 1.0, 0.8],
+                                   header_size=10, body_size=10,
+                                   col_alignments=[None, None, WD_ALIGN_PARAGRAPH.RIGHT,
+                                                   WD_ALIGN_PARAGRAPH.RIGHT, WD_ALIGN_PARAGRAPH.RIGHT,
+                                                   WD_ALIGN_PARAGRAPH.RIGHT])
     else:
-        total_pct_str = "N/A"
-        total_dollar_str = "N/A"
-    
-    rows.append([
-        "TOTAL",
-        "",
-        f"${total_expiring:,.2f}" if total_expiring else "N/A",
-        f"${total_proposed:,.2f}" if total_proposed else "N/A",
-        total_dollar_str,
-        total_pct_str
-    ])
-    
-    table = create_styled_table(doc, headers, rows,
-                               col_widths=[1.2, 2.0, 1.0, 1.0, 1.0, 0.8],
-                               header_size=10, body_size=10,
-                               col_alignments=[None, None, WD_ALIGN_PARAGRAPH.RIGHT,
-                                               WD_ALIGN_PARAGRAPH.RIGHT, WD_ALIGN_PARAGRAPH.RIGHT,
-                                               WD_ALIGN_PARAGRAPH.RIGHT])
+        # Simple mode total row
+        total_base = total_proposed - total_taxes_fees
+        rows.append([
+            "TOTAL",
+            "",
+            fmt_currency(total_base) if total_base else "\u2014",
+            fmt_currency(total_taxes_fees) if total_taxes_fees else "\u2014",
+            fmt_currency(total_proposed) if total_proposed else "\u2014",
+        ])
+        
+        table = create_styled_table(doc, headers, rows,
+                                   col_widths=[1.5, 2.2, 1.2, 1.2, 1.2],
+                                   header_size=10, body_size=10,
+                                   col_alignments=[None, None, WD_ALIGN_PARAGRAPH.RIGHT,
+                                                   WD_ALIGN_PARAGRAPH.RIGHT, WD_ALIGN_PARAGRAPH.RIGHT])
     
     # Bold and shade the total row
     last_row = table.rows[-1]
     for col_idx, cell in enumerate(last_row.cells):
         set_cell_shading(cell, ELECTRIC_BLUE_HEX)
         for p in cell.paragraphs:
-            # Right-align numeric columns (indices 2-5)
             if col_idx >= 2:
                 p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
             for run in p.runs:
                 run.font.bold = True
                 run.font.color.rgb = WHITE
     
-    # Savings/increase callout
-    if total_expiring > 0 and total_dollar != 0:
-        direction = "savings" if total_dollar < 0 else "increase"
-        add_formatted_paragraph(doc, "", space_before=8)
-        callout_text = f"Total premium {direction}: ${abs(total_dollar):,.2f} ({abs(total_pct):.1f}%)"
-        add_callout_box(doc, callout_text)
+    # Color-code change columns for comparison mode (green=savings, red=increase)
+    if has_expiring:
+        GREEN = RGBColor(0x00, 0x80, 0x00)
+        RED = RGBColor(0xCC, 0x00, 0x00)
+        for row_idx in range(1, len(table.rows) - 1):  # skip header and total
+            row = table.rows[row_idx]
+            # $ Change column (index 4)
+            for p in row.cells[4].paragraphs:
+                for run in p.runs:
+                    text = run.text.strip()
+                    if text.startswith("-"):
+                        run.font.color.rgb = GREEN  # savings
+                    elif text.startswith("+"):
+                        run.font.color.rgb = RED  # increase
+            # % Change column (index 5)
+            for p in row.cells[5].paragraphs:
+                for run in p.runs:
+                    text = run.text.strip()
+                    if text.startswith("-"):
+                        run.font.color.rgb = GREEN
+                    elif text.startswith("+"):
+                        run.font.color.rgb = RED
+    
+    # Savings/increase callout (comparison mode only)
+    if has_expiring and total_expiring > 0:
+        total_dollar = total_proposed - total_expiring
+        total_pct = ((total_proposed - total_expiring) / total_expiring) * 100
+        if total_dollar != 0:
+            direction = "savings" if total_dollar < 0 else "increase"
+            add_formatted_paragraph(doc, "", space_before=8)
+            callout_text = f"Total premium {direction}: ${abs(total_dollar):,.2f} ({abs(total_pct):.1f}%)"
+            add_callout_box(doc, callout_text)
     
     add_formatted_paragraph(doc, "", space_before=6)
     add_callout_box(doc,
@@ -1816,13 +1889,23 @@ def generate_locations(doc, data):
     
     if master_locations:
         CHECK = "\u2713"  # Unicode checkmark
+        DASH = "\u2014"   # Em-dash for missing coverage (rendered in RED)
         headers = ["#", "Property Name", "Address", "City", "ST", "TIV", "Property", "Liability"]
         rows = []
         total_tiv = 0
+        # Track which rows have missing coverages for RED formatting
+        missing_property_rows = []  # row indices (0-based in rows list)
+        missing_liability_rows = []
         
         for i, loc in enumerate(master_locations, 1):
             tiv_val = loc["tiv"] or 0
             total_tiv += tiv_val
+            prop_cell = CHECK if loc["on_property"] else DASH
+            liab_cell = CHECK if loc["on_liability"] else DASH
+            if not loc["on_property"]:
+                missing_property_rows.append(len(rows))  # current row index
+            if not loc["on_liability"]:
+                missing_liability_rows.append(len(rows))
             rows.append([
                 str(i),
                 loc["name"],
@@ -1830,8 +1913,8 @@ def generate_locations(doc, data):
                 loc["city"],
                 loc["state"],
                 fmt_currency(tiv_val) if tiv_val else "",
-                CHECK if loc["on_property"] else "",
-                CHECK if loc["on_liability"] else "",
+                prop_cell,
+                liab_cell,
             ])
         
         # Add totals row
@@ -1844,11 +1927,45 @@ def generate_locations(doc, data):
         L = WD_ALIGN_PARAGRAPH.LEFT
         C = WD_ALIGN_PARAGRAPH.CENTER
         R = WD_ALIGN_PARAGRAPH.RIGHT
-        create_styled_table(doc, headers, rows,
+        table = create_styled_table(doc, headers, rows,
                           col_widths=[0.3, 1.5, 1.6, 0.9, 0.3, 1.0, 0.7, 0.7],
                           header_size=8, body_size=8,
                           header_alignments={0: L, 1: L, 2: L, 3: L, 4: L, 5: R, 6: C, 7: C},
                           col_alignments={5: R, 6: C, 7: C})
+        
+        # Apply RED color to missing coverage cells (em-dashes)
+        RED = RGBColor(0xCC, 0x00, 0x00)
+        for row_idx in missing_property_rows:
+            cell = table.rows[row_idx + 1].cells[6]  # +1 for header row
+            for p in cell.paragraphs:
+                for run in p.runs:
+                    run.font.color.rgb = RED
+                    run.font.bold = True
+        for row_idx in missing_liability_rows:
+            cell = table.rows[row_idx + 1].cells[7]  # +1 for header row
+            for p in cell.paragraphs:
+                for run in p.runs:
+                    run.font.color.rgb = RED
+                    run.font.bold = True
+        
+        # Legend
+        add_formatted_paragraph(doc, "", size=4)
+        legend_p = doc.add_paragraph()
+        legend_p.paragraph_format.space_before = Pt(2)
+        legend_p.paragraph_format.space_after = Pt(2)
+        run_check = legend_p.add_run("\u2713")
+        run_check.font.size = Pt(8)
+        run_check.font.color.rgb = RGBColor(0x00, 0x80, 0x00)  # Green
+        run_text = legend_p.add_run(" = Covered     ")
+        run_text.font.size = Pt(8)
+        run_text.font.color.rgb = CHARCOAL
+        run_dash = legend_p.add_run(DASH)
+        run_dash.font.size = Pt(8)
+        run_dash.font.color.rgb = RED
+        run_dash.font.bold = True
+        run_text2 = legend_p.add_run(" = Not Currently Quoted")
+        run_text2.font.size = Pt(8)
+        run_text2.font.color.rgb = CHARCOAL
         
         # Add note about SOV
         if sov_data and sov_data.get("locations"):
@@ -1931,34 +2048,69 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         # Use SOV spreadsheet data for detailed Schedule of Values
         add_subsection_header(doc, "Schedule of Values")
         sov_locs = sov_data["locations"]
-        headers = ["#", "Location", "Building", "Contents", "BI/Rents", "TIV"]
+        # Check if any location has "other_value" data (Sign, Pool, Other)
+        has_other = any(loc.get("other_value", 0) for loc in sov_locs)
+        if has_other:
+            headers = ["#", "Location", "Building", "Contents", "Other", "BI/Rents", "TIV"]
+        else:
+            headers = ["#", "Location", "Building", "Contents", "BI/Rents", "TIV"]
         rows = []
+        total_other = 0
         for i, loc in enumerate(sov_locs, 1):
             name = loc.get("dba") or loc.get("hotel_flag") or loc.get("corporate_name", "")
             addr = f"{loc.get('address', '')}, {loc.get('city', '')}, {loc.get('state', '')}"
             loc_label = f"{name}\n{addr}" if name else addr
-            rows.append([
-                str(i),
-                loc_label,
-                fmt_currency(loc.get("building_value", 0)),
-                fmt_currency(loc.get("contents_value", 0)),
-                fmt_currency(loc.get("bi_value", 0)),
-                fmt_currency(loc.get("tiv", 0))
-            ])
+            other_val = loc.get("other_value", 0) or 0
+            total_other += other_val
+            if has_other:
+                rows.append([
+                    str(i),
+                    loc_label,
+                    fmt_currency(loc.get("building_value", 0)),
+                    fmt_currency(loc.get("contents_value", 0)),
+                    fmt_currency(other_val) if other_val else "\u2014",
+                    fmt_currency(loc.get("bi_value", 0)),
+                    fmt_currency(loc.get("tiv", 0))
+                ])
+            else:
+                rows.append([
+                    str(i),
+                    loc_label,
+                    fmt_currency(loc.get("building_value", 0)),
+                    fmt_currency(loc.get("contents_value", 0)),
+                    fmt_currency(loc.get("bi_value", 0)),
+                    fmt_currency(loc.get("tiv", 0))
+                ])
         # Add totals row
         totals = sov_data.get("totals", {})
-        rows.append([
-            "", "TOTAL",
-            fmt_currency(totals.get("building_value", 0)),
-            fmt_currency(totals.get("contents_value", 0)),
-            fmt_currency(totals.get("bi_value", 0)),
-            fmt_currency(totals.get("tiv", 0))
-        ])
-        create_styled_table(doc, headers, rows,
-                          col_widths=[0.3, 2.2, 1.2, 1.0, 1.0, 1.3],
-                          header_size=9, body_size=8,
-                          col_alignments={2: WD_ALIGN_PARAGRAPH.CENTER, 3: WD_ALIGN_PARAGRAPH.CENTER,
-                                         4: WD_ALIGN_PARAGRAPH.CENTER, 5: WD_ALIGN_PARAGRAPH.CENTER})
+        if has_other:
+            rows.append([
+                "", "TOTAL",
+                fmt_currency(totals.get("building_value", 0)),
+                fmt_currency(totals.get("contents_value", 0)),
+                fmt_currency(total_other) if total_other else "",
+                fmt_currency(totals.get("bi_value", 0)),
+                fmt_currency(totals.get("tiv", 0))
+            ])
+            create_styled_table(doc, headers, rows,
+                              col_widths=[0.3, 2.0, 1.1, 0.9, 0.8, 0.9, 1.1],
+                              header_size=9, body_size=8,
+                              col_alignments={2: WD_ALIGN_PARAGRAPH.CENTER, 3: WD_ALIGN_PARAGRAPH.CENTER,
+                                             4: WD_ALIGN_PARAGRAPH.CENTER, 5: WD_ALIGN_PARAGRAPH.CENTER,
+                                             6: WD_ALIGN_PARAGRAPH.CENTER})
+        else:
+            rows.append([
+                "", "TOTAL",
+                fmt_currency(totals.get("building_value", 0)),
+                fmt_currency(totals.get("contents_value", 0)),
+                fmt_currency(totals.get("bi_value", 0)),
+                fmt_currency(totals.get("tiv", 0))
+            ])
+            create_styled_table(doc, headers, rows,
+                              col_widths=[0.3, 2.2, 1.2, 1.0, 1.0, 1.3],
+                              header_size=9, body_size=8,
+                              col_alignments={2: WD_ALIGN_PARAGRAPH.CENTER, 3: WD_ALIGN_PARAGRAPH.CENTER,
+                                             4: WD_ALIGN_PARAGRAPH.CENTER, 5: WD_ALIGN_PARAGRAPH.CENTER})
     elif sov_from_quote:
         add_subsection_header(doc, "Schedule of Values")
         headers = ["Location", "Building", "Contents", "BI/Rents", "TIV"]
@@ -1973,9 +2125,31 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                           col_widths=[2.0, 1.4, 1.2, 1.2, 1.2],
                           header_size=9, body_size=9)
     
-    # Limits
+    # Crime Insuring Clauses (3-column: Clause, Limit, Retention)
+    insuring_clauses = cov.get("insuring_clauses", [])
+    if coverage_key == "crime" and insuring_clauses:
+        add_subsection_header(doc, "Insuring Clauses")
+        headers = ["Insuring Clause", "Limit", "Retention"]
+        rows = []
+        for clause in insuring_clauses:
+            if isinstance(clause, dict):
+                rows.append([
+                    clause.get("description", ""),
+                    clause.get("limit", ""),
+                    clause.get("retention", clause.get("deductible", ""))
+                ])
+            else:
+                rows.append([str(clause), "", ""])
+        L = WD_ALIGN_PARAGRAPH.LEFT
+        R = WD_ALIGN_PARAGRAPH.RIGHT
+        create_styled_table(doc, headers, rows, col_widths=[4.0, 1.5, 1.5],
+                           header_size=10, body_size=9,
+                           header_alignments={0: L, 1: R, 2: R},
+                           col_alignments={1: R, 2: R})
+    
+    # Limits (non-crime coverages, or crime without insuring_clauses)
     limits = cov.get("limits", [])
-    if limits:
+    if limits and not (coverage_key == "crime" and insuring_clauses):
         add_subsection_header(doc, "Coverage Limits")
         headers = ["Description", "Limit"]
         rows = [[lim.get("description", ""), lim.get("limit", "")] if isinstance(lim, dict) else [str(lim), ""] for lim in limits]
@@ -2178,6 +2352,48 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         create_styled_table(doc, headers, rows, col_widths=[2.0, 5.5],
                            header_size=9, body_size=9,
                            header_alignments={0: L, 1: L})
+    
+    # GL Sales / Exposure Summary (always include when GL has schedule_of_classes)
+    if coverage_key == "general_liability":
+        gl_classes_for_exposure = cov.get("schedule_of_classes", [])
+        if gl_classes_for_exposure:
+            add_subsection_header(doc, "Sales / Exposure")
+            add_formatted_paragraph(doc,
+                "The following exposures are as presented on the carrier quote. "
+                "Final earned premium will be determined at audit based on actual exposures.",
+                size=9, italic=True, color=CHARCOAL, space_after=4)
+            exp_headers = ["Code", "Classification", "Exposure Basis", "Gross Sales"]
+            exp_rows = []
+            total_sales = 0
+            for c in gl_classes_for_exposure:
+                if not isinstance(c, dict):
+                    continue
+                code = c.get("class_code", c.get("code", ""))
+                classification = c.get("classification", "")
+                basis = c.get("exposure_basis", "")
+                exposure = c.get("exposure", 0)
+                # Try to parse exposure as number for totaling
+                try:
+                    exp_num = float(str(exposure).replace(",", "").replace("$", ""))
+                except (ValueError, TypeError):
+                    exp_num = 0
+                total_sales += exp_num
+                exp_str = fmt_currency(exp_num) if exp_num else str(exposure)
+                exp_rows.append([str(code), classification, basis, exp_str])
+            # Add total row
+            exp_rows.append(["", "TOTAL", "", fmt_currency(total_sales)])
+            exp_table = create_styled_table(doc, exp_headers, exp_rows,
+                              col_widths=[0.8, 3.0, 1.5, 1.7],
+                              header_size=9, body_size=9,
+                              col_alignments={3: WD_ALIGN_PARAGRAPH.RIGHT})
+            # Bold the total row
+            last_row = exp_table.rows[-1]
+            for cell in last_row.cells:
+                set_cell_shading(cell, ELECTRIC_BLUE_HEX)
+                for p in cell.paragraphs:
+                    for run in p.runs:
+                        run.font.bold = True
+                        run.font.color.rgb = WHITE
     
     # Covered Locations (GL only) - backup list of liability locations from GL quote
     if coverage_key == "general_liability":
