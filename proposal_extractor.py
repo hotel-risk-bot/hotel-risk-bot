@@ -137,13 +137,30 @@ def _score_page(page_text: str) -> float:
     if rates:
         score += min(len(rates) * 0.3, 3.0)
 
-    # Negative signals: boilerplate forms
-    for keyword in BOILERPLATE_KEYWORDS:
-        if keyword.upper() in text_upper:
-            score -= 3.0
+    # Detect if this is a forms SCHEDULE/LIST page (lists form numbers + descriptions)
+    # These pages are HIGH VALUE — they list the forms attached to the policy
+    # Do NOT penalize them with boilerplate keywords
+    is_forms_schedule = any(kw in text_upper for kw in [
+        "FORMS SCHEDULE", "ENDORSEMENT SCHEDULE", "FORMS AND ENDORSEMENTS",
+        "SCHEDULE OF FORMS", "FORMS & EXCLUSIONS APPLICABLE",
+        "FORMS APPLICABLE", "ENDORSEMENTS APPLICABLE",
+        "POLICY FORMS AND ENDORSEMENTS",
+    ])
+    # Also detect if page has many form numbers (e.g., CP 00 10, CG 00 01, etc.)
+    form_numbers = re.findall(r'[A-Z]{2,4}\s*\d{2,4}\s+\d{2,4}', page_text)
+    if len(form_numbers) >= 5:
+        is_forms_schedule = True
+        score += 5.0  # Boost pages with many form numbers
+
+    # Negative signals: boilerplate forms (but NOT forms schedule pages)
+    if not is_forms_schedule:
+        for keyword in BOILERPLATE_KEYWORDS:
+            if keyword.upper() in text_upper:
+                score -= 3.0
 
     # Negative: very long pages with mostly prose (forms text)
-    if len(page_text) > 3000 and score < 2:
+    # But NOT forms schedule pages which are tabular
+    if not is_forms_schedule and len(page_text) > 3000 and score < 2:
         # Check if it's mostly prose (few numbers, lots of text)
         num_count = len(re.findall(r'\d+', page_text))
         word_count = len(page_text.split())
@@ -153,7 +170,7 @@ def _score_page(page_text: str) -> float:
     return score
 
 
-def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 80000) -> str:
+def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 120000) -> str:
     """
     Smart PDF text extraction that prioritizes quote summary pages
     over forms/endorsements boilerplate.
@@ -246,7 +263,7 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 80000) -> str:
         return _extract_with_pdfplumber(pdf_path, max_chars)
 
 
-def _extract_with_pdfplumber(pdf_path: str, max_chars: int = 80000) -> str:
+def _extract_with_pdfplumber(pdf_path: str, max_chars: int = 120000) -> str:
     """Fallback PDF extraction using pdfplumber (pure Python, no system deps)."""
     if not HAS_PDFPLUMBER:
         logger.warning("pdfplumber not available, falling back to basic pdftotext")
@@ -697,7 +714,7 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
     combined_text = "\n".join(all_text)
 
     # Final safety truncation (should rarely be needed with smart extraction)
-    max_chars = 80000
+    max_chars = 120000
     if len(combined_text) > max_chars:
         logger.warning(f"Combined text truncated from {len(combined_text)} to {max_chars} chars")
         combined_text = combined_text[:max_chars]
@@ -1038,7 +1055,7 @@ class ProposalExtractor:
         combined_text = "\n".join(all_text_parts)
 
         # Safety truncation
-        max_chars = 80000
+        max_chars = 120000
         if len(combined_text) > max_chars:
             logger.warning(
                 f"Document text truncated from {len(combined_text)} to {max_chars} chars"
