@@ -1290,14 +1290,14 @@ def generate_information_summary(doc, data):
 
 
 def _normalize_addr(s):
-    """Normalize address for dedup: uppercase, strip, replace common variants.
+    """Normalize street address for dedup: uppercase, strip, replace common variants.
     Handles U.S. 51 / US 51 / US-51 / Highway 51 / Hwy 51 all mapping to the same form.
-    Also strips trailing zip codes for matching."""
+    Also strips trailing zip codes."""
     import re as _re_norm
     s = s.strip().upper()
     # Remove periods and commas first
     s = s.replace(".", "").replace(",", "")
-    # Normalize route designators: "U.S. 51" / "US 51" / "US-51" / "US HWY 51" → "HWY 51"
+    # Normalize route designators: "U.S. 51" / "US 51" / "US-51" / "US HWY 51" -> "HWY 51"
     s = _re_norm.sub(r'\bUS\s*-?\s*(\d)', r'HWY \1', s)
     s = _re_norm.sub(r'\bU\s*S\s*-?\s*(\d)', r'HWY \1', s)
     replacements = {
@@ -1317,13 +1317,23 @@ def _normalize_addr(s):
     return s
 
 
+def _normalize_city(s):
+    """Normalize city name for dedup: uppercase, remove spaces/punctuation.
+    Handles 'La Place' vs 'LaPlace' vs 'LA PLACE' all mapping to 'LAPLACE'."""
+    s = s.strip().upper()
+    s = s.replace(".", "").replace(",", "").replace("-", "").replace("'", "")
+    # Remove ALL spaces so 'LA PLACE' == 'LAPLACE' == 'LA  PLACE'
+    s = s.replace(" ", "")
+    return s
+
+
 def _dedup_locations(raw_locations):
     """Deduplicate locations by normalized address."""
     seen_addrs = set()
     locations = []
     for loc in raw_locations:
         addr_key = (_normalize_addr(loc.get("address", "")) + "|" + 
-                    _normalize_addr(loc.get("city", "")) + "|" +
+                    _normalize_city(loc.get("city", "")) + "|" +
                     loc.get("state", "").strip().upper())
         if addr_key not in seen_addrs:
             seen_addrs.add(addr_key)
@@ -1351,16 +1361,32 @@ def generate_locations(doc, data):
     if sov_data and sov_data.get("locations"):
         for loc in sov_data["locations"]:
             addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
-                       _normalize_addr(loc.get("city", "")) + "|" +
+                       _normalize_city(loc.get("city", "")) + "|" +
                        loc.get("state", "").strip().upper())
             property_addr_keys.add(addr_key)
     elif "property" in coverages:
-        # If no SOV but property coverage exists, all extracted locations are on property
-        for loc in locations:
-            addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
-                       _normalize_addr(loc.get("city", "")) + "|" +
-                       loc.get("state", "").strip().upper())
-            property_addr_keys.add(addr_key)
+        # If no SOV, try to use property quote's schedule_of_values for property addresses
+        prop_cov = coverages.get("property", {})
+        prop_sov = prop_cov.get("schedule_of_values", []) if isinstance(prop_cov, dict) else []
+        if prop_sov:
+            for s in prop_sov:
+                if isinstance(s, dict):
+                    addr = s.get("address", "") or s.get("location", "")
+                    if addr:
+                        parts = [p.strip() for p in addr.split(",")]
+                        street = parts[0] if parts else addr
+                        city = parts[1] if len(parts) >= 2 else ""
+                        state = ""
+                        if len(parts) >= 3:
+                            st_m = re.match(r'([A-Z]{2})', parts[2].strip().upper())
+                            if st_m: state = st_m.group(1)
+                        addr_key = (_normalize_addr(street) + "|" +
+                                   _normalize_city(city) + "|" +
+                                   state.strip().upper())
+                        property_addr_keys.add(addr_key)
+        # If still no property addresses, DON'T default to all locations
+        # Only locations explicitly on the property quote get the checkmark
+        # This prevents GL-only locations from getting property checkmarks
     
     # --- Determine which addresses are on the LIABILITY policy ---
     liability_addr_keys = set()
@@ -1376,7 +1402,7 @@ def generate_locations(doc, data):
                     if _normalize_addr(addr) in _normalize_addr(loc.get("address", "")) or \
                        _normalize_addr(loc.get("address", "")) in _normalize_addr(addr):
                         addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
-                                   _normalize_addr(loc.get("city", "")) + "|" +
+                                   _normalize_city(loc.get("city", "")) + "|" +
                                    loc.get("state", "").strip().upper())
                         liability_addr_keys.add(addr_key)
                         matched = True
@@ -1413,14 +1439,14 @@ def generate_locations(doc, data):
                 state = st_m.group(1)
             else:
                 city = parts[1]
-        addr_key = (_normalize_addr(street) + "|" + _normalize_addr(city) + "|" + state.strip().upper())
+        addr_key = (_normalize_addr(street) + "|" + _normalize_city(city) + "|" + state.strip().upper())
         liability_addr_keys.add(addr_key)
         # Also try matching against SOV/locations for better key resolution
         for loc in (sov_data.get("locations", []) if sov_data else []) + locations:
             if _normalize_addr(street) in _normalize_addr(loc.get("address", "")) or \
                _normalize_addr(loc.get("address", "")) in _normalize_addr(street):
                 resolved_key = (_normalize_addr(loc.get("address", "")) + "|" +
-                               _normalize_addr(loc.get("city", "")) + "|" +
+                               _normalize_city(loc.get("city", "")) + "|" +
                                loc.get("state", "").strip().upper())
                 liability_addr_keys.add(resolved_key)
                 break
@@ -1457,14 +1483,14 @@ def generate_locations(doc, data):
                     state = st_m.group(1)
                 else:
                     city = parts[1]
-            addr_key = (_normalize_addr(street) + "|" + _normalize_addr(city) + "|" + state.strip().upper())
+            addr_key = (_normalize_addr(street) + "|" + _normalize_city(city) + "|" + state.strip().upper())
             liability_addr_keys.add(addr_key)
             # Also try matching against SOV/locations for better key resolution
             for loc in (sov_data.get("locations", []) if sov_data else []) + locations:
                 if _normalize_addr(street) in _normalize_addr(loc.get("address", "")) or \
                    _normalize_addr(loc.get("address", "")) in _normalize_addr(street):
                     resolved_key = (_normalize_addr(loc.get("address", "")) + "|" +
-                                   _normalize_addr(loc.get("city", "")) + "|" +
+                                   _normalize_city(loc.get("city", "")) + "|" +
                                    loc.get("state", "").strip().upper())
                     liability_addr_keys.add(resolved_key)
                     break
@@ -1516,6 +1542,30 @@ def generate_locations(doc, data):
                 return True
         return False
     
+    # Helper: check if an addr_key matches any key in property_addr_keys
+    # Uses STRICT matching (exact normalized address) — no fuzzy tolerance
+    # Property checkmarks must be precise: only SOV/property quote locations
+    def _is_on_property(addr_key):
+        """Check if addr_key is in property_addr_keys. Strict match only."""
+        if addr_key in property_addr_keys:
+            return True
+        # Also try matching just the street portion (ignoring city differences)
+        parts = addr_key.split("|")
+        if len(parts) != 3:
+            return False
+        addr_norm = parts[0]
+        state_norm = parts[2]
+        for pk in property_addr_keys:
+            pk_parts = pk.split("|")
+            if len(pk_parts) != 3:
+                continue
+            if state_norm and pk_parts[2] and state_norm != pk_parts[2]:
+                continue
+            # STRICT: normalized addresses must be identical (no house number tolerance)
+            if addr_norm == pk_parts[0]:
+                return True
+        return False
+    
     # First: SOV locations (property locations)
     # SKIP vacant land — it belongs on property SOV but NOT on the Schedule of Locations
     if sov_data and sov_data.get("locations"):
@@ -1526,13 +1576,13 @@ def generate_locations(doc, data):
             if "vacant" in desc or ("land" in desc and "hotel" not in desc and "inn" not in desc):
                 # Still track the addr_key so we don't re-add it later
                 addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
-                           _normalize_addr(loc.get("city", "")) + "|" +
+                           _normalize_city(loc.get("city", "")) + "|" +
                            loc.get("state", "").strip().upper())
                 seen_addr_keys.add(addr_key)
                 continue
             
             addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
-                       _normalize_addr(loc.get("city", "")) + "|" +
+                       _normalize_city(loc.get("city", "")) + "|" +
                        loc.get("state", "").strip().upper())
             # Build "Corporate Name - DBA" format for property name
             corporate_name = (loc.get("corporate_name", "") or "").strip()
@@ -1552,7 +1602,7 @@ def generate_locations(doc, data):
                 "city": loc.get("city", ""),
                 "state": loc.get("state", ""),
                 "tiv": tiv,
-                "on_property": addr_key in property_addr_keys,
+                "on_property": _is_on_property(addr_key),
                 "on_liability": _is_on_liability(addr_key),
             })
             seen_addr_keys.add(addr_key)
@@ -1563,12 +1613,12 @@ def generate_locations(doc, data):
         if "vacant" in desc_check or ("land" in desc_check and "hotel" not in desc_check):
             # Track but skip
             addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
-                       _normalize_addr(loc.get("city", "")) + "|" +
+                       _normalize_city(loc.get("city", "")) + "|" +
                        loc.get("state", "").strip().upper())
             seen_addr_keys.add(addr_key)
             continue
         addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
-                   _normalize_addr(loc.get("city", "")) + "|" +
+                   _normalize_city(loc.get("city", "")) + "|" +
                    loc.get("state", "").strip().upper())
         if addr_key not in seen_addr_keys and loc.get("address"):
             name = loc.get("description", "") or loc.get("corporate_entity", "")
@@ -1580,7 +1630,7 @@ def generate_locations(doc, data):
                 "city": loc.get("city", ""),
                 "state": loc.get("state", ""),
                 "tiv": 0,
-                "on_property": addr_key in property_addr_keys,
+                "on_property": _is_on_property(addr_key),
                 "on_liability": _is_on_liability(addr_key),
             })
             seen_addr_keys.add(addr_key)
@@ -1642,7 +1692,7 @@ def generate_locations(doc, data):
             
             # Check fuzzy match against seen_addr_keys too
             addr_key = (_normalize_addr(street) + "|" +
-                       _normalize_addr(city) + "|" +
+                       _normalize_city(city) + "|" +
                        state.strip().upper())
             key_already_seen = False
             for existing_key in seen_addr_keys:
@@ -1657,13 +1707,30 @@ def generate_locations(doc, data):
                         break
             
             if not key_already_seen:
+                # Try to get TIV from SOV if this location is also on property
+                _tiv = 0
+                if sov_data and sov_data.get("locations"):
+                    for sov_loc in sov_data["locations"]:
+                        if _fuzzy_addr_match(_normalize_addr(street), _normalize_addr(sov_loc.get("address", ""))):
+                            _tiv = sov_loc.get("tiv", 0) or 0
+                            # Also get name from SOV if brand is generic
+                            if brand in ("Pending", "") or brand == entry.get("classification", ""):
+                                _cn = (sov_loc.get("corporate_name", "") or "").strip()
+                                _db = (sov_loc.get("dba", "") or sov_loc.get("hotel_flag", "") or "").strip()
+                                if _cn and _db:
+                                    brand = f"{_cn} - {_db}"
+                                elif _db:
+                                    brand = _db
+                                elif _cn:
+                                    brand = _cn
+                            break
                 master_locations.append({
                     "name": brand,
                     "address": street,
                     "city": city,
                     "state": state,
-                    "tiv": 0,
-                    "on_property": addr_key in property_addr_keys,
+                    "tiv": _tiv,
+                    "on_property": _is_on_property(addr_key),
                     "on_liability": True,
                 })
                 seen_addr_keys.add(addr_key)
@@ -1728,7 +1795,7 @@ def generate_locations(doc, data):
                             if not city and sov_loc.get("city"): city = sov_loc["city"]
                             if not state and sov_loc.get("state"): state = sov_loc["state"]
                             break
-                addr_key = (_normalize_addr(street) + "|" + _normalize_addr(city) + "|" + state.strip().upper())
+                addr_key = (_normalize_addr(street) + "|" + _normalize_city(city) + "|" + state.strip().upper())
                 key_already_seen = False
                 for existing_key in seen_addr_keys:
                     ep = existing_key.split("|")
@@ -1744,7 +1811,7 @@ def generate_locations(doc, data):
                         "city": city,
                         "state": state,
                         "tiv": 0,
-                        "on_property": False,
+                        "on_property": _is_on_property(addr_key),
                         "on_liability": True,
                     })
                     seen_addr_keys.add(addr_key)
@@ -2169,26 +2236,59 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                         "classification": "",
                     })
         
+        # Cross-reference GL locations with SOV to pull Corporate Name - DBA
+        sov_data = data.get("sov_data")
+        if sov_data and sov_data.get("locations"):
+            for gl_loc in gl_loc_list:
+                if gl_loc["brand"]:  # Already has a brand, skip
+                    continue
+                gl_addr_norm = _normalize_addr(gl_loc["address"])
+                for sov_loc in sov_data["locations"]:
+                    sov_addr_norm = _normalize_addr(sov_loc.get("address", ""))
+                    # Fuzzy match: check if street addresses match
+                    if not gl_addr_norm or not sov_addr_norm:
+                        continue
+                    # Extract house numbers and street names for comparison
+                    gl_num_m = _re_gl.match(r'^(\d+)\s+(.+)', gl_addr_norm)
+                    sov_num_m = _re_gl.match(r'^(\d+)\s+(.+)', sov_addr_norm)
+                    matched = False
+                    if gl_num_m and sov_num_m:
+                        if gl_num_m.group(1) == sov_num_m.group(1) and gl_num_m.group(2) == sov_num_m.group(2):
+                            matched = True
+                    elif gl_addr_norm == sov_addr_norm:
+                        matched = True
+                    elif gl_addr_norm in sov_addr_norm or sov_addr_norm in gl_addr_norm:
+                        matched = True
+                    if matched:
+                        corp = (sov_loc.get("corporate_name", "") or "").strip()
+                        dba = (sov_loc.get("dba", "") or sov_loc.get("hotel_flag", "") or "").strip()
+                        if corp and dba:
+                            gl_loc["brand"] = f"{corp} - {dba}"
+                        elif dba:
+                            gl_loc["brand"] = dba
+                        elif corp:
+                            gl_loc["brand"] = corp
+                        break
+        
         if gl_loc_list:
             add_subsection_header(doc, "Covered Locations")
             add_formatted_paragraph(doc, 
                 "The following locations are covered under this General Liability policy "
                 "as identified on the carrier quote:",
                 size=9, italic=True, color=CHARCOAL)
-            headers = ["#", "Address", "Brand / DBA", "Classification"]
+            headers = ["#", "Address", "Corporate Name / DBA"]
             rows = []
             for i, loc in enumerate(gl_loc_list, 1):
                 rows.append([
                     str(i),
                     loc["address"],
                     loc["brand"],
-                    loc["classification"],
                 ])
             L = WD_ALIGN_PARAGRAPH.LEFT
             create_styled_table(doc, headers, rows,
-                              col_widths=[0.4, 3.5, 1.8, 1.8],
+                              col_widths=[0.4, 3.5, 3.6],
                               header_size=9, body_size=8,
-                              header_alignments={0: L, 1: L, 2: L, 3: L})
+                              header_alignments={0: L, 1: L, 2: L})
 
 
 def generate_confirmation_to_bind(doc, data):
