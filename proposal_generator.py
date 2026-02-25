@@ -1290,8 +1290,16 @@ def generate_information_summary(doc, data):
 
 
 def _normalize_addr(s):
-    """Normalize address for dedup: uppercase, strip, replace common variants."""
+    """Normalize address for dedup: uppercase, strip, replace common variants.
+    Handles U.S. 51 / US 51 / US-51 / Highway 51 / Hwy 51 all mapping to the same form.
+    Also strips trailing zip codes for matching."""
+    import re as _re_norm
     s = s.strip().upper()
+    # Remove periods and commas first
+    s = s.replace(".", "").replace(",", "")
+    # Normalize route designators: "U.S. 51" / "US 51" / "US-51" / "US HWY 51" → "HWY 51"
+    s = _re_norm.sub(r'\bUS\s*-?\s*(\d)', r'HWY \1', s)
+    s = _re_norm.sub(r'\bU\s*S\s*-?\s*(\d)', r'HWY \1', s)
     replacements = {
         " STREET": " ST", " AVENUE": " AVE", " BOULEVARD": " BLVD",
         " DRIVE": " DR", " ROAD": " RD", " LANE": " LN",
@@ -1300,10 +1308,11 @@ def _normalize_addr(s):
         " NORTH": " N", " SOUTH": " S", " EAST": " E", " WEST": " W",
         " NORTHWEST": " NW", " NORTHEAST": " NE", " SOUTHWEST": " SW",
         " SOUTHEAST": " SE",
-        ".": "", ",": "",
     }
     for old, new in replacements.items():
         s = s.replace(old, new)
+    # Strip trailing zip codes (5-digit or 5+4)
+    s = _re_norm.sub(r'\s+\d{5}(-\d{4})?\s*$', '', s)
     s = " ".join(s.split())
     return s
 
@@ -1379,17 +1388,53 @@ def generate_locations(doc, data):
     # (from schedule_of_classes addresses and CG2144 designated premises forms).
     # Quotes are primary — SOVs only supplement with additional info.
     
-    # --- Pre-scan CG2144 forms to add designated premises to liability_addr_keys ---
+    # --- Pre-scan designated premises to add to liability_addr_keys ---
     import re
-    gl_forms = gl_cov.get("forms_endorsements", []) if isinstance(gl_cov, dict) else []
+    
+    # PRIMARY SOURCE: designated_premises array (extracted by GPT from CG2144/NXLL110)
     _cg2144_addrs = []  # Save parsed addresses for the fourth pass later
+    designated_premises = gl_cov.get("designated_premises", []) if isinstance(gl_cov, dict) else []
+    for raw_addr in designated_premises:
+        if not isinstance(raw_addr, str) or not raw_addr.strip() or len(raw_addr.strip()) < 5:
+            continue
+        raw_addr = raw_addr.strip()
+        _cg2144_addrs.append(raw_addr)
+        parts = [p.strip() for p in raw_addr.split(",")]
+        street = parts[0] if parts else raw_addr
+        city = ""
+        state = ""
+        if len(parts) >= 3:
+            city = parts[1]
+            st_m = re.match(r'([A-Z]{2})\s*\d*', parts[2].strip().upper())
+            if st_m: state = st_m.group(1)
+        elif len(parts) == 2:
+            st_m = re.match(r'([A-Z]{2})\s*\d*', parts[1].strip().upper())
+            if st_m:
+                state = st_m.group(1)
+            else:
+                city = parts[1]
+        addr_key = (_normalize_addr(street) + "|" + _normalize_addr(city) + "|" + state.strip().upper())
+        liability_addr_keys.add(addr_key)
+        # Also try matching against SOV/locations for better key resolution
+        for loc in (sov_data.get("locations", []) if sov_data else []) + locations:
+            if _normalize_addr(street) in _normalize_addr(loc.get("address", "")) or \
+               _normalize_addr(loc.get("address", "")) in _normalize_addr(street):
+                resolved_key = (_normalize_addr(loc.get("address", "")) + "|" +
+                               _normalize_addr(loc.get("city", "")) + "|" +
+                               loc.get("state", "").strip().upper())
+                liability_addr_keys.add(resolved_key)
+                break
+    
+    # FALLBACK: Parse CG2144/NXLL110 form descriptions for addresses
+    gl_forms = gl_cov.get("forms_endorsements", []) if isinstance(gl_cov, dict) else []
     for form in gl_forms:
         if not isinstance(form, dict):
             continue
         desc = (form.get("description", "") or "").upper()
-        if not any(kw in desc for kw in ["DESIGNATED PREMISES", "CG 21 44", "CG2144", "LIMITATION OF COVERAGE"]):
+        if not any(kw in desc for kw in ["DESIGNATED PREMISES", "CG 21 44", "CG2144", "NXLL110", "NXLL 110", "LIMITATION OF COVERAGE"]):
             continue
-        addr_pattern = re.findall(r'\d+\)\s*(.+?)(?=\d+\)|$)', desc)
+        # Parse numbered addresses: "1) 4285 Highway 51, LaPlace, LA 70068"
+        addr_pattern = re.findall(r'\d+\)\s*(.+?)(?=\s*\d+\)|$)', desc, re.DOTALL)
         if not addr_pattern:
             addr_pattern = [a.strip() for a in re.split(r'[;\n]', desc) if re.search(r'\d+\s+\w+', a.strip())]
         for raw_addr in addr_pattern:
@@ -1472,13 +1517,33 @@ def generate_locations(doc, data):
         return False
     
     # First: SOV locations (property locations)
+    # SKIP vacant land — it belongs on property SOV but NOT on the Schedule of Locations
     if sov_data and sov_data.get("locations"):
         for loc in sov_data["locations"]:
+            # Filter out vacant land from Schedule of Locations
+            desc = (loc.get("description", "") or loc.get("hotel_flag", "") or
+                    loc.get("occupancy", "") or loc.get("dba", "") or "").lower()
+            if "vacant" in desc or ("land" in desc and "hotel" not in desc and "inn" not in desc):
+                # Still track the addr_key so we don't re-add it later
+                addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
+                           _normalize_addr(loc.get("city", "")) + "|" +
+                           loc.get("state", "").strip().upper())
+                seen_addr_keys.add(addr_key)
+                continue
+            
             addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
                        _normalize_addr(loc.get("city", "")) + "|" +
                        loc.get("state", "").strip().upper())
-            name = loc.get("dba") or loc.get("hotel_flag") or loc.get("corporate_name", "")
-            if not name or not name.strip():
+            # Build "Corporate Name - DBA" format for property name
+            corporate_name = (loc.get("corporate_name", "") or "").strip()
+            dba = (loc.get("dba", "") or loc.get("hotel_flag", "") or "").strip()
+            if corporate_name and dba:
+                name = f"{corporate_name} - {dba}"
+            elif dba:
+                name = dba
+            elif corporate_name:
+                name = corporate_name
+            else:
                 name = "Pending"
             tiv = loc.get("tiv", 0)
             master_locations.append({
@@ -1492,8 +1557,16 @@ def generate_locations(doc, data):
             })
             seen_addr_keys.add(addr_key)
     
-    # Second: extracted locations not already in SOV
+    # Second: extracted locations not already in SOV (skip vacant land)
     for loc in locations:
+        desc_check = (loc.get("description", "") or loc.get("corporate_entity", "") or "").lower()
+        if "vacant" in desc_check or ("land" in desc_check and "hotel" not in desc_check):
+            # Track but skip
+            addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
+                       _normalize_addr(loc.get("city", "")) + "|" +
+                       loc.get("state", "").strip().upper())
+            seen_addr_keys.add(addr_key)
+            continue
         addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
                    _normalize_addr(loc.get("city", "")) + "|" +
                    loc.get("state", "").strip().upper())
@@ -1522,6 +1595,10 @@ def generate_locations(doc, data):
             continue
         addr = entry.get("address", "")
         if not addr:
+            continue
+        # Skip vacant land entries from GL schedule
+        classification = (entry.get("classification", "") or "").lower()
+        if "vacant" in classification or ("land" in classification and "hotel" not in classification):
             continue
         # Parse address - may contain "Street, City, ST ZIP" or just street
         addr_norm = _normalize_addr(addr)
@@ -1572,8 +1649,10 @@ def generate_locations(doc, data):
                 existing_parts = existing_key.split("|")
                 new_parts = addr_key.split("|")
                 if len(existing_parts) == 3 and len(new_parts) == 3:
-                    if _fuzzy_addr_match(existing_parts[0], new_parts[0]) and \
-                       existing_parts[1] == new_parts[1] and existing_parts[2] == new_parts[2]:
+                    # Relax city matching: if street addresses match, consider same location
+                    # (city names can differ: "LA PLACE" vs "LAPLACE")
+                    state_match = (not existing_parts[2] or not new_parts[2] or existing_parts[2] == new_parts[2])
+                    if _fuzzy_addr_match(existing_parts[0], new_parts[0]) and state_match:
                         key_already_seen = True
                         break
             
@@ -1597,11 +1676,11 @@ def generate_locations(doc, data):
             continue
         desc = (form.get("description", "") or "").upper()
         # Look for designated premises forms that contain address lists
-        if not any(kw in desc for kw in ["DESIGNATED PREMISES", "CG 21 44", "CG2144", "LIMITATION OF COVERAGE"]):
+        if not any(kw in desc for kw in ["DESIGNATED PREMISES", "CG 21 44", "CG2144", "NXLL110", "NXLL 110", "LIMITATION OF COVERAGE"]):
             continue
         # Try to extract addresses from the description text
         # Format: "1) 4285 Highway 51, LaPlace, LA 70068" or similar numbered lists
-        addr_pattern = re.findall(r'\d+\)\s*(.+?)(?=\d+\)|$)', desc)
+        addr_pattern = re.findall(r'\d+\)\s*(.+?)(?=\s*\d+\)|$)', desc, re.DOTALL)
         if not addr_pattern:
             # Try semicolon or newline separated
             addr_pattern = [a.strip() for a in re.split(r'[;\n]', desc) if re.search(r'\d+\s+\w+', a.strip())]
@@ -1637,7 +1716,15 @@ def generate_locations(doc, data):
                 if sov_data and sov_data.get("locations"):
                     for sov_loc in sov_data["locations"]:
                         if _fuzzy_addr_match(_normalize_addr(street), _normalize_addr(sov_loc.get("address", ""))):
-                            loc_name = sov_loc.get("dba") or sov_loc.get("hotel_flag") or sov_loc.get("corporate_name", "Pending")
+                            # Use Corporate Name - DBA format
+                            _cn = (sov_loc.get("corporate_name", "") or "").strip()
+                            _db = (sov_loc.get("dba", "") or sov_loc.get("hotel_flag", "") or "").strip()
+                            if _cn and _db:
+                                loc_name = f"{_cn} - {_db}"
+                            elif _db:
+                                loc_name = _db
+                            elif _cn:
+                                loc_name = _cn
                             if not city and sov_loc.get("city"): city = sov_loc["city"]
                             if not state and sov_loc.get("state"): state = sov_loc["state"]
                             break
@@ -2032,7 +2119,19 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         import re as _re_gl
         gl_loc_list = []
         gl_loc_seen = set()
-        # Source 1: schedule_of_classes addresses
+        # Source 1: designated_premises array (PRIMARY - extracted by GPT)
+        for dp_addr in cov.get("designated_premises", []):
+            if not isinstance(dp_addr, str) or not dp_addr.strip() or len(dp_addr.strip()) < 5:
+                continue
+            addr_norm = _normalize_addr(dp_addr)
+            if addr_norm not in gl_loc_seen:
+                gl_loc_seen.add(addr_norm)
+                gl_loc_list.append({
+                    "address": dp_addr.strip(),
+                    "brand": "",
+                    "classification": "",
+                })
+        # Source 2: schedule_of_classes addresses
         for entry in cov.get("schedule_of_classes", []):
             if isinstance(entry, dict):
                 addr = entry.get("address", "") or entry.get("location", "")
@@ -2047,14 +2146,14 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                             "brand": brand.strip(),
                             "classification": classification.strip(),
                         })
-        # Source 2: CG2144 designated premises forms
+        # Source 3: CG2144/NXLL110 designated premises forms (fallback)
         for form in cov.get("forms_endorsements", []):
             if not isinstance(form, dict):
                 continue
             desc = (form.get("description", "") or "").upper()
-            if not any(kw in desc for kw in ["DESIGNATED PREMISES", "CG 21 44", "CG2144", "LIMITATION OF COVERAGE"]):
+            if not any(kw in desc for kw in ["DESIGNATED PREMISES", "CG 21 44", "CG2144", "NXLL110", "NXLL 110", "LIMITATION OF COVERAGE"]):
                 continue
-            addr_pattern = _re_gl.findall(r'\d+\)\s*(.+?)(?=\d+\)|$)', desc)
+            addr_pattern = _re_gl.findall(r'\d+\)\s*(.+?)(?=\s*\d+\)|$)', desc, _re_gl.DOTALL)
             if not addr_pattern:
                 addr_pattern = [a.strip() for a in _re_gl.split(r'[;\n]', desc) if _re_gl.search(r'\d+\s+\w+', a.strip())]
             for raw_addr in addr_pattern:
