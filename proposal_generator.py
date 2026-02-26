@@ -59,6 +59,14 @@ AM_BEST_RATINGS = {
     "james river insurance": "A- (VIII)",
     "canopius": "A- (VII)",
     # GL carriers
+    "amtrust": "A- (VIII)",
+    "amtrust e&s": "A- (VIII)",
+    "amtrust financial": "A- (VIII)",
+    "associated industries": "A- (VIII)",
+    "associated industries insurance": "A- (VIII)",
+    "technology insurance company": "A- (VIII)",
+    "security national insurance": "A- (VIII)",
+    "wesco insurance": "A- (VIII)",
     "southlake specialty insurance": "A- (VIII)",
     "southlake specialty": "A- (VIII)",
     "futuristic underwriters": "A- (VIII)",
@@ -69,6 +77,8 @@ AM_BEST_RATINGS = {
     "essentia insurance": "A- (VII)",
     "mount vernon fire insurance": "A++ (XV)",
     # Umbrella/Excess carriers
+    "palms insurance": "A- (VII)",
+    "palms insurance company": "A- (VII)",
     "starstone": "A- (VII)",
     "starstone national insurance": "A- (VII)",
     "ironshore specialty insurance": "A (XV)",
@@ -419,6 +429,34 @@ def add_page_header(doc):
     for row in htable.rows:
         for cell in row.cells:
             remove_cell_borders(cell)
+    
+    # Add page footer with automatic page numbers
+    footer = section.footer
+    footer.is_linked_to_previous = False
+    fp = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+    fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    fp.paragraph_format.space_before = Pt(4)
+    fp.paragraph_format.space_after = Pt(0)
+    # "Page " prefix
+    run_prefix = fp.add_run("Page ")
+    run_prefix.font.size = Pt(8)
+    run_prefix.font.color.rgb = ARCTIC_GRAY
+    run_prefix.font.name = "Calibri"
+    # Auto page number field
+    fldChar1 = parse_xml(f'<w:fldChar {nsdecls("w")} w:fldCharType="begin"/>')
+    run_num = fp.add_run()
+    run_num._r.append(fldChar1)
+    instrText = parse_xml(f'<w:instrText {nsdecls("w")} xml:space="preserve"> PAGE </w:instrText>')
+    run_num2 = fp.add_run()
+    run_num2._r.append(instrText)
+    fldChar2 = parse_xml(f'<w:fldChar {nsdecls("w")} w:fldCharType="end"/>')
+    run_num3 = fp.add_run()
+    run_num3._r.append(fldChar2)
+    # Style the page number runs
+    for r in [run_num, run_num2, run_num3]:
+        r.font.size = Pt(8)
+        r.font.color.rgb = ARCTIC_GRAY
+        r.font.name = "Calibri"
 
 
 def add_callout_box(doc, text, size=10):
@@ -481,12 +519,17 @@ def generate_cover_page(doc, data):
     effective_date = ci.get("effective_date", "")
     proposal_date = datetime.date.today().strftime("%B %d, %Y")
     
-    # Ensure cover page section has NO header
+    # Ensure cover page section has NO header or footer
     cover_section = doc.sections[0]
     cover_header = cover_section.header
     cover_header.is_linked_to_previous = False
     # Clear any existing header content
     for p in cover_header.paragraphs:
+        p.clear()
+    # Clear footer on cover page
+    cover_footer = cover_section.footer
+    cover_footer.is_linked_to_previous = False
+    for p in cover_footer.paragraphs:
         p.clear()
     
     # Logo centered
@@ -1073,6 +1116,33 @@ def generate_named_insureds(doc, data):
     raw_named = data.get("named_insureds", [])
     seen = set()
     named = []
+    
+    # Hotel brand names that should NOT appear in named insured entries
+    # (GPT sometimes concatenates brand names from quotes into named insured DBA fields)
+    _brand_keywords = {"marriott", "hilton", "ihg", "wyndham", "best western", "choice",
+                       "hampton inn", "hampton", "holiday inn", "holiday inn express",
+                       "candlewood", "towneplace", "staybridge", "springhill",
+                       "comfort inn", "comfort suites", "quality inn", "sleep inn",
+                       "la quinta", "days inn", "super 8", "ramada", "baymont",
+                       "microtel", "wingate", "hawthorn", "home2", "tru by hilton",
+                       "embassy suites", "doubletree", "hyatt", "radisson", "crowne plaza"}
+    
+    def _sanitize_named_insured(name_str):
+        """Remove hotel brand names that GPT may have concatenated into named insured."""
+        if not name_str:
+            return name_str
+        # If the name contains multiple brand keywords, it's likely a GPT hallucination
+        name_lower = name_str.lower()
+        brand_count = sum(1 for b in _brand_keywords if b in name_lower)
+        if brand_count >= 2:
+            # Strip everything after the first DBA + entity name
+            import re
+            # Try to find "LLC DBA <brand>" and keep just the LLC part
+            m = re.match(r'^(.+?\b(?:LLC|LP|LLP|Inc|Corp)\b)\s*(?:DBA\s+.+)?$', name_str, re.IGNORECASE)
+            if m:
+                return m.group(1).strip()
+        return name_str
+    
     for ni in raw_named:
         if isinstance(ni, dict):
             ni_name = ni.get("name", "")
@@ -1080,6 +1150,10 @@ def generate_named_insureds(doc, data):
         else:
             ni_name = str(ni)
             ni_dba = ""
+        # Sanitize: remove hallucinated brand concatenations
+        ni_name = _sanitize_named_insured(ni_name)
+        if ni_dba:
+            ni_dba = _sanitize_named_insured(ni_dba)
         key = ni_name.strip().upper()
         if key and key not in seen:
             seen.add(key)
@@ -1215,7 +1289,24 @@ def generate_information_summary(doc, data):
                     gl_loc_addrs.add(_normalize_addr(addr))
     liab_loc_count = len(gl_loc_addrs) if gl_loc_addrs else int(gl_cov.get("num_locations", 0) or 0) if isinstance(gl_cov, dict) else 0
     
-    total_loc_count = max(prop_loc_count, liab_loc_count, len(data.get("locations", [])))
+    # Calculate UNIQUE location count by merging property and liability addresses
+    all_unique_addrs = set()
+    # Add property addresses
+    if sov_data and sov_data.get("locations"):
+        for loc in sov_data["locations"]:
+            addr = _normalize_addr(loc.get("address", ""))
+            if addr:
+                all_unique_addrs.add(addr)
+    # Add liability addresses
+    for addr in gl_loc_addrs:
+        if addr:
+            all_unique_addrs.add(addr)
+    # Add raw locations (deduped)
+    for loc in data.get("locations", []):
+        addr = _normalize_addr(loc.get("address", ""))
+        if addr:
+            all_unique_addrs.add(addr)
+    total_loc_count = len(all_unique_addrs) if all_unique_addrs else max(prop_loc_count, liab_loc_count)
     if total_loc_count > 0:
         rows.append(["Total Number of Locations", str(total_loc_count)])
     if prop_loc_count > 0:

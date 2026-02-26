@@ -88,6 +88,15 @@ QUOTE_PAGE_KEYWORDS = [
     "TOWER STRUCTURE",
     "RATING BASIS",
     "PAYROLL",
+    "INSURING CLAUSE",
+    "INSURING AGREEMENT",
+    "EMPLOYEE THEFT",
+    "FORGERY OR ALTERATION",
+    "SOCIAL ENGINEERING",
+    "COMPUTER AND FUNDS TRANSFER",
+    "FIDELITY",
+    "CRIME COVERAGE",
+    "FOREFRONT",
 ]
 
 # Keywords that indicate boilerplate forms/endorsements (low priority)
@@ -418,6 +427,13 @@ CRITICAL RULES:
 8. Extract ALL deductibles
 9. Extract ALL limits
 10. Note carrier name and whether admitted or non-admitted
+11. Property additional_coverages (sublimits) is MANDATORY - if you see ANY sublimits, extensions, or coverage limits in the property quote, extract ALL of them. Common ones: Flood, Earthquake, Equipment Breakdown, Ordinance or Law, Spoilage, Business Income Extended Period, Sign Coverage, Accounts Receivable, Valuable Papers, Newly Acquired Property, Transit, Debris Removal, Pollutant Cleanup, Sewer/Drain Backup, Water Damage, Mold/Fungi, Green Building
+12. Property forms_endorsements is MANDATORY - extract EVERY form number from the forms schedule page
+13. GL forms_endorsements is MANDATORY - extract EVERY form number from the GL forms schedule
+14. GL designated_premises is MANDATORY when CG2144/NXLL110 form exists - extract ALL addresses
+15. GL schedule_of_classes MUST include ALL class codes with actual dollar exposure amounts
+16. Named insureds MUST be exact legal entity names from the quote - do NOT concatenate hotel brand names into entity names
+17. For carrier names: Use the ISSUING carrier name (e.g., "Associated Industries Insurance Company" or "Technology Insurance Company" for AmTrust policies, "Palms Insurance Company" for Palms). Do NOT use the wholesale broker name as the carrier.
 
 Return your extraction as a JSON object with the following structure. Only include sections that are present in the documents."""
 
@@ -616,6 +632,30 @@ The JSON structure should be:
       "forms_endorsements": [],
       "subjectivities": []
     }},
+    "crime": {{
+      "carrier": "Carrier name (e.g., Federal Insurance Company for Chubb)",
+      "carrier_admitted": true or false,
+      "am_best_rating": "Rating",
+      "premium": 0,
+      "taxes_fees": 0,
+      "total_premium": 0,
+      "insuring_clauses": [
+        {{"clause": "Employee Theft", "limit": "$X", "retention": "$X"}},
+        {{"clause": "Forgery or Alteration", "limit": "$X", "retention": "$X"}},
+        {{"clause": "Inside the Premises - Theft of Money & Securities", "limit": "$X", "retention": "$X"}},
+        {{"clause": "Inside the Premises - Robbery/Safe Burglary of Other Property", "limit": "$X", "retention": "$X"}},
+        {{"clause": "Outside the Premises", "limit": "$X", "retention": "$X"}},
+        {{"clause": "Computer and Funds Transfer Fraud", "limit": "$X", "retention": "$X"}},
+        {{"clause": "Money Orders and Counterfeit Money", "limit": "$X", "retention": "$X"}},
+        {{"clause": "Social Engineering Fraud", "limit": "$X", "retention": "$X"}}
+      ],
+      "limits": [
+        {{"description": "Per Loss Limit", "limit": "$X"}},
+        {{"description": "Aggregate Limit", "limit": "$X"}}
+      ],
+      "forms_endorsements": [],
+      "subjectivities": []
+    }},
     "cyber": {{
       "carrier": "Carrier name",
       "carrier_admitted": true or false,
@@ -683,6 +723,7 @@ IMPORTANT:
 - For named_insureds: Extract each named insured as an object with "name" and "dba" fields. Do NOT repeat the same entity twice (case-insensitive). If a named insured has a DBA or trade name EXPLICITLY listed in the quote (e.g., "Q Hotels Management LLC DBA Best Western"), split into name="Q Hotels Management LLC" and dba="Best Western". CRITICAL RULES: (1) Only include DBAs that are EXPLICITLY written as "DBA", "d/b/a", or "doing business as" in the documents. (2) Do NOT infer DBAs from hotel brand names, location names, or SOV entries. (3) Do NOT fabricate entity names like "Cajun Lodging LLC" unless that exact name appears in the quote documents. (4) If a named insured appears as "Q HOTEL MANAGEMENT, LLC" in ALL CAPS, extract it exactly as written — the generator will handle proper case formatting. (5) Do NOT create separate named insured entries for each hotel brand — those are locations, not named insureds.
 - For additional_named_insureds: Search ALL pages for "Additional Named Insured", "Additional Named Insureds Schedule", "Named Insured Schedule", or similar headings. These are often on a separate page listing multiple entities (e.g., LLCs, management companies, DBAs). Extract every entity listed. Do NOT duplicate entities already in named_insureds.
 - For additional_insureds: Search for "Additional Insured", "Additional Insured Schedule", or endorsement pages listing additional insureds (franchisors, mortgagees, managers). Extract all of them.
+- CRIME COVERAGE: For crime/fidelity bond policies (e.g., Chubb ForeFront Portfolio, Travelers Crime), extract ALL insuring clauses with their individual limits and retentions. Common insuring clauses include: Employee Theft, Forgery or Alteration, Inside the Premises (Theft of Money & Securities), Inside the Premises (Robbery/Safe Burglary), Outside the Premises, Computer and Funds Transfer Fraud, Money Orders and Counterfeit Money, Social Engineering Fraud. Also extract all endorsements from the forms schedule. If the policy is claims-made, note the retroactive date.
 - UMBRELLA/EXCESS LAYERS: When multiple umbrella/excess liability quotes are provided (e.g., separate PDFs for different layers), extract EACH layer as a separate coverage entry. Use "umbrella" for the primary excess layer, "umbrella_layer_2" for the second excess layer ($XM xs $XM), and "umbrella_layer_3" for the third excess layer ($XM xs $XM). Each layer has its own carrier, premium, limits, forms, and subjectivities. The tower_structure field should show that layer's position. Look for "Controlling Underlying" or "Schedule of Underlying" to determine the layer position. If a quote says it sits excess of another carrier's layer, it is a higher layer.
 
 DOCUMENT TEXT:
@@ -731,7 +772,7 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
-            max_tokens=16000
+            max_tokens=32000
         )
 
         result_text = response.choices[0].message.content
@@ -770,6 +811,57 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
                     covs[key] = {}
         
         logger.info(f"GPT extraction successful. Coverages found: {list(data.get('coverages', {}).keys())}")
+
+        # POST-PROCESSING: Validate and fix common extraction issues
+        
+        # Fix 1: Clean up named insureds - remove entries with multiple hotel brand names
+        _brand_names = {"marriott", "hilton", "ihg", "wyndham", "best western", "choice",
+                       "hampton inn", "hampton", "holiday inn", "holiday inn express",
+                       "candlewood", "towneplace", "staybridge", "springhill",
+                       "comfort inn", "comfort suites", "quality inn", "sleep inn"}
+        raw_named = data.get("named_insureds", [])
+        cleaned_named = []
+        for ni in raw_named:
+            ni_name = ni.get("name", "") if isinstance(ni, dict) else str(ni)
+            ni_lower = ni_name.lower()
+            brand_count = sum(1 for b in _brand_names if b in ni_lower)
+            if brand_count >= 3:
+                # This is likely a hallucinated concatenation — try to extract just the entity
+                import re as _re_fix
+                m = _re_fix.match(r'^(.+?\b(?:LLC|LP|LLP|Inc|Corp)\b)', ni_name, _re_fix.IGNORECASE)
+                if m:
+                    if isinstance(ni, dict):
+                        ni["name"] = m.group(1).strip()
+                        ni["dba"] = ""  # Clear the hallucinated DBA
+                    else:
+                        ni = {"name": m.group(1).strip(), "dba": ""}
+                    logger.warning(f"Fixed hallucinated named insured: '{ni_name}' -> '{ni.get('name', ni) if isinstance(ni, dict) else ni}'")
+            cleaned_named.append(ni)
+        data["named_insureds"] = cleaned_named
+        
+        # Fix 2: Ensure GL carrier name is correct (AmTrust entities often misidentified)
+        gl_cov = data.get("coverages", {}).get("general_liability", {})
+        if gl_cov:
+            carrier = gl_cov.get("carrier", "")
+            carrier_lower = carrier.lower()
+            # If carrier contains "associated industries" but forms show AmTrust, fix it
+            if "associated industries" in carrier_lower:
+                gl_cov["carrier"] = "AmTrust E&S (Associated Industries)"
+                logger.info(f"Fixed GL carrier: '{carrier}' -> 'AmTrust E&S (Associated Industries)'")
+            elif "technology insurance" in carrier_lower:
+                gl_cov["carrier"] = "AmTrust E&S (Technology Insurance)"
+                logger.info(f"Fixed GL carrier: '{carrier}' -> 'AmTrust E&S (Technology Insurance)'")
+        
+        # Fix 3: Validate that forms_endorsements is not empty for property and GL
+        for cov_key in ["property", "general_liability"]:
+            cov = data.get("coverages", {}).get(cov_key, {})
+            if cov and not cov.get("forms_endorsements"):
+                logger.warning(f"{cov_key} has no forms_endorsements extracted — may need manual review")
+        
+        # Fix 4: Validate additional_coverages for property
+        prop_cov = data.get("coverages", {}).get("property", {})
+        if prop_cov and not prop_cov.get("additional_coverages"):
+            logger.warning("Property has no additional_coverages (sublimits) extracted — may need manual review")
 
         # Validate and fix total_premium for each coverage
         for key, cov in data.get("coverages", {}).items():
@@ -1000,7 +1092,7 @@ async def apply_corrections(data: dict, corrections_text: str) -> dict:
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
-            max_tokens=16000
+            max_tokens=32000
         )
         corrected = json.loads(response.choices[0].message.content)
         logger.info("Corrections applied successfully")
@@ -1078,7 +1170,7 @@ class ProposalExtractor:
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.1,
-                max_tokens=16000,
+                max_tokens=32000,
             )
 
             result_text = response.choices[0].message.content
