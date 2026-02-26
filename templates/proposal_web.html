@@ -664,6 +664,15 @@
                 <div id="coverages-list"></div>
             </div>
 
+            <!-- Expiring Premiums -->
+            <div class="card">
+                <h2>&#128176; Expiring Premiums <span style="font-size:0.75rem; color:var(--gray-500); font-weight:400; margin-left:0.5rem;">(optional &mdash; enables premium comparison with % and $ change)</span></h2>
+                <p style="font-size:0.85rem; color:var(--gray-500); margin-bottom:1rem;">
+                    Enter prior year premiums to generate the Premium Summary with increase/decrease comparison.
+                </p>
+                <div id="expiring-premiums-list"></div>
+            </div>
+
             <!-- Locations -->
             <div class="card">
                 <h2>&#127968; Locations (<span id="loc-count">0</span>)</h2>
@@ -920,6 +929,9 @@ function populateReview() {
 
     // Coverages
     renderCoverages();
+
+    // Expiring Premiums
+    renderExpiringPremiums();
 
     // Locations
     renderLocations();
@@ -1237,6 +1249,108 @@ function removeSubj(key, idx) {
     renderCoverages();
 }
 
+// ─── Expiring Premiums ───
+function renderExpiringPremiums() {
+    const container = document.getElementById('expiring-premiums-list');
+    const covs = extractedData.coverages || {};
+    
+    // Initialize expiring_premiums if not present
+    if (!extractedData.expiring_premiums) {
+        extractedData.expiring_premiums = {};
+    }
+    const ep = extractedData.expiring_premiums;
+    
+    let html = '<table class="data-table"><thead><tr>';
+    html += '<th style="width:30%">Coverage</th>';
+    html += '<th style="width:20%">Carrier</th>';
+    html += '<th style="width:15%">Proposed Premium</th>';
+    html += '<th style="width:15%">Expiring Premium</th>';
+    html += '<th style="width:10%">$ Change</th>';
+    html += '<th style="width:10%">% Change</th>';
+    html += '</tr></thead><tbody>';
+    
+    for (const [key, cov] of Object.entries(covs)) {
+        if (!cov || typeof cov !== 'object' || !cov.carrier) continue;
+        const displayName = COV_DISPLAY[key] || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        const proposed = parseFloat(cov.premium) || 0;
+        const expiring = parseFloat(ep[key]) || 0;
+        const dollarChange = expiring > 0 ? proposed - expiring : 0;
+        const pctChange = expiring > 0 ? ((proposed - expiring) / expiring * 100) : 0;
+        const changeColor = dollarChange > 0 ? 'var(--danger)' : dollarChange < 0 ? 'var(--success)' : 'var(--gray-700)';
+        const changeSign = dollarChange > 0 ? '+' : '';
+        
+        html += `<tr>`;
+        html += `<td><strong>${displayName}</strong></td>`;
+        html += `<td style="font-size:0.85rem; color:var(--gray-700);">${escHtml(cov.carrier || '')}</td>`;
+        html += `<td style="text-align:right;">$${formatNum(proposed)}</td>`;
+        html += `<td><input type="text" value="${expiring > 0 ? formatNum(expiring) : ''}" 
+                    placeholder="Enter expiring" 
+                    style="width:100%; padding:0.4rem; border:1px solid var(--gray-300); border-radius:4px; text-align:right; font-size:0.85rem;"
+                    onchange="updateExpiringPremium('${key}', this.value)" 
+                    onkeyup="previewPremiumChange('${key}', this.value, ${proposed})"></td>`;
+        html += `<td style="text-align:right; color:${changeColor}; font-weight:600; font-size:0.85rem;" id="ep-dollar-${key}">${expiring > 0 ? changeSign + '$' + formatNum(Math.abs(dollarChange)) : '—'}</td>`;
+        html += `<td style="text-align:right; color:${changeColor}; font-weight:600; font-size:0.85rem;" id="ep-pct-${key}">${expiring > 0 ? changeSign + pctChange.toFixed(1) + '%' : '—'}</td>`;
+        html += `</tr>`;
+    }
+    
+    // Total row
+    let totalProposed = 0;
+    let totalExpiring = 0;
+    for (const [key, cov] of Object.entries(covs)) {
+        if (!cov || typeof cov !== 'object' || !cov.carrier) continue;
+        totalProposed += parseFloat(cov.premium) || 0;
+        totalExpiring += parseFloat(ep[key]) || 0;
+    }
+    const totalDollarChange = totalExpiring > 0 ? totalProposed - totalExpiring : 0;
+    const totalPctChange = totalExpiring > 0 ? ((totalProposed - totalExpiring) / totalExpiring * 100) : 0;
+    const totalColor = totalDollarChange > 0 ? 'var(--danger)' : totalDollarChange < 0 ? 'var(--success)' : 'var(--gray-700)';
+    const totalSign = totalDollarChange > 0 ? '+' : '';
+    
+    html += `<tr style="background:var(--gray-100); font-weight:700; border-top:2px solid var(--gray-300);">`;
+    html += `<td>TOTAL</td><td></td>`;
+    html += `<td style="text-align:right;">$${formatNum(totalProposed)}</td>`;
+    html += `<td style="text-align:right;">$${totalExpiring > 0 ? formatNum(totalExpiring) : '—'}</td>`;
+    html += `<td style="text-align:right; color:${totalColor};" id="ep-dollar-total">${totalExpiring > 0 ? totalSign + '$' + formatNum(Math.abs(totalDollarChange)) : '—'}</td>`;
+    html += `<td style="text-align:right; color:${totalColor};" id="ep-pct-total">${totalExpiring > 0 ? totalSign + totalPctChange.toFixed(1) + '%' : '—'}</td>`;
+    html += `</tr>`;
+    
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+function updateExpiringPremium(key, value) {
+    if (!extractedData.expiring_premiums) extractedData.expiring_premiums = {};
+    const num = parseFloat(value.replace(/[,$]/g, '')) || 0;
+    extractedData.expiring_premiums[key] = num;
+    // Re-render to update totals
+    renderExpiringPremiums();
+}
+
+function previewPremiumChange(key, value, proposed) {
+    const expiring = parseFloat(value.replace(/[,$]/g, '')) || 0;
+    const dollarEl = document.getElementById(`ep-dollar-${key}`);
+    const pctEl = document.getElementById(`ep-pct-${key}`);
+    if (!dollarEl || !pctEl) return;
+    
+    if (expiring <= 0) {
+        dollarEl.textContent = '—';
+        pctEl.textContent = '—';
+        dollarEl.style.color = 'var(--gray-700)';
+        pctEl.style.color = 'var(--gray-700)';
+        return;
+    }
+    
+    const dollarChange = proposed - expiring;
+    const pctChange = (dollarChange / expiring * 100);
+    const color = dollarChange > 0 ? 'var(--danger)' : dollarChange < 0 ? 'var(--success)' : 'var(--gray-700)';
+    const sign = dollarChange > 0 ? '+' : '';
+    
+    dollarEl.textContent = sign + '$' + formatNum(Math.abs(dollarChange));
+    dollarEl.style.color = color;
+    pctEl.textContent = sign + pctChange.toFixed(1) + '%';
+    pctEl.style.color = color;
+}
+
 // ─── Locations ───
 function renderLocations() {
     const locs = extractedData.locations || [];
@@ -1354,6 +1468,21 @@ function syncVisualToData() {
     extractedData.client_info.entity_type = document.getElementById('edit-entity-type').value;
     extractedData.client_info.address = document.getElementById('edit-address').value;
     extractedData.client_info.effective_date = document.getElementById('edit-effective-date').value;
+
+    // Sync expiring premiums into the data structure for the generator
+    if (extractedData.expiring_premiums && Object.keys(extractedData.expiring_premiums).length > 0) {
+        const ep = extractedData.expiring_premiums;
+        const hasAnyExpiring = Object.values(ep).some(v => parseFloat(v) > 0);
+        if (hasAnyExpiring) {
+            // Populate expiring_premiums in the format the generator expects
+            if (!extractedData.expiring_premiums_data) extractedData.expiring_premiums_data = {};
+            for (const [key, val] of Object.entries(ep)) {
+                if (parseFloat(val) > 0) {
+                    extractedData.expiring_premiums_data[key] = parseFloat(val);
+                }
+            }
+        }
+    }
 
     // Update JSON editor
     document.getElementById('json-editor').value = JSON.stringify(extractedData, null, 2);
