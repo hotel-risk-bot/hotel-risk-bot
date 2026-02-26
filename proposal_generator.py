@@ -71,6 +71,11 @@ AM_BEST_RATINGS = {
     "southlake specialty": "A- (VIII)",
     "futuristic underwriters": "A- (VIII)",
     "kinsale insurance": "A (VIII)",
+    "kinsale insurance company": "A (VIII)",
+    "gotham insurance": "A- (VIII)",
+    "gotham insurance company": "A- (VIII)",
+    "coaction": "A- (VIII)",
+    "coaction specialty insurance": "A- (VIII)",
     "markel insurance": "A (XV)",
     "evanston insurance": "A+ (XV)",
     "general star indemnity": "A++ (XV)",
@@ -731,6 +736,8 @@ def generate_premium_summary(doc, data):
     
     coverage_names = {
         "property": "Property",
+        "excess_property": "Excess Property (Layer 1)",
+        "excess_property_2": "Excess Property (Layer 2)",
         "general_liability": "General Liability",
         "umbrella": "Umbrella / Excess",
         "umbrella_layer_2": "2nd Excess Layer",
@@ -1062,6 +1069,8 @@ def generate_subjectivities(doc, data):
     coverages = data.get("coverages", {})
     coverage_names = {
         "property": "Property",
+        "excess_property": "Excess Property (Layer 1)",
+        "excess_property_2": "Excess Property (Layer 2)",
         "general_liability": "General Liability",
         "umbrella": "Umbrella / Excess",
         "umbrella_layer_2": "2nd Excess Layer",
@@ -2121,6 +2130,16 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     if cov.get("policy_period"):
         carrier_rows.append(["Policy Period", cov["policy_period"]])
     
+    # Add layer description for excess property
+    layer_desc = cov.get("layer_description", "")
+    if layer_desc and coverage_key in ("excess_property", "excess_property_2"):
+        carrier_rows.append(["Layer", layer_desc])
+    
+    # Add TIV if present (for property coverages)
+    tiv = cov.get("tiv", "")
+    if tiv and coverage_key in ("property", "excess_property", "excess_property_2"):
+        carrier_rows.append(["Total Insured Value", tiv])
+    
     # Add GL deductible if present
     gl_ded = cov.get("gl_deductible", "")
     if gl_ded and gl_ded not in ("$0", "None", "N/A", "", "0"):
@@ -2269,6 +2288,34 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
                            header_size=10, body_size=10,
                            header_alignments={0: L, 1: L})
+    
+    # Coinsurance & Valuation (Property)
+    coinsurance = cov.get("coinsurance", [])
+    valuation = cov.get("valuation", "")
+    if coinsurance or valuation:
+        add_subsection_header(doc, "Coinsurance & Valuation")
+        headers = ["Coverage", "Coinsurance / Limitation"]
+        rows = []
+        for ci in coinsurance:
+            if isinstance(ci, dict):
+                cov_name = ci.get("coverage", "")
+                pct = ci.get("percentage", "")
+                limitation = ci.get("limitation", "")
+                val = limitation if limitation else pct
+                if val:
+                    rows.append([cov_name, val])
+        if valuation:
+            rows.append(["Valuation", valuation])
+        if rows:
+            L = WD_ALIGN_PARAGRAPH.LEFT
+            create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
+                               header_size=10, body_size=10,
+                               header_alignments={0: L, 1: L})
+    
+    # Layer Description (Excess Property)
+    layer_desc = cov.get("layer_description", "")
+    if layer_desc and coverage_key in ("excess_property", "excess_property_2"):
+        add_formatted_paragraph(doc, f"Layer: {layer_desc}", size=11, bold=True, space_after=6)
     
     # Schedule of Hazards (GL)
     hazards = cov.get("schedule_of_hazards", [])
@@ -2610,7 +2657,7 @@ def generate_confirmation_to_bind(doc, data):
         "By signing below, the undersigned authorized representative of the Applicant confirms "
         "the following statements and authorizes HUB International to bind the coverages as outlined "
         "in this proposal, subject to the terms and conditions of the respective policies.",
-        size=11, space_after=10)
+        size=10, space_after=6)
     
     # Application Statements
     add_subsection_header(doc, "Application Statements")
@@ -2628,13 +2675,13 @@ def generate_confirmation_to_bind(doc, data):
     ]
     
     for i, stmt in enumerate(statements, 1):
-        add_formatted_paragraph(doc, f"{i}. {stmt}", size=10, space_after=4)
+        add_formatted_paragraph(doc, f"{i}. {stmt}", size=9, space_after=2)
     
     # Earned premium / cancellation disclaimer - small font, bold, red
     _add_earned_premium_disclaimer(doc)
     
     # Signature block
-    add_formatted_paragraph(doc, "", space_before=12)
+    add_formatted_paragraph(doc, "", space_before=6)
     sig_table = doc.add_table(rows=5, cols=2)
     sig_table.alignment = WD_TABLE_ALIGNMENT.LEFT
     
@@ -2650,10 +2697,10 @@ def generate_confirmation_to_bind(doc, data):
         cell_label = sig_table.rows[i].cells[0]
         cell_label.width = Inches(2.0)
         p = cell_label.paragraphs[0]
-        p.paragraph_format.space_before = Pt(8)
-        p.paragraph_format.space_after = Pt(8)
+        p.paragraph_format.space_before = Pt(4)
+        p.paragraph_format.space_after = Pt(4)
         run = p.add_run(label)
-        run.font.size = Pt(11)
+        run.font.size = Pt(10)
         run.font.color.rgb = CLASSIC_BLUE
         run.font.bold = True
         run.font.name = "Calibri"
@@ -2661,8 +2708,8 @@ def generate_confirmation_to_bind(doc, data):
         cell_val = sig_table.rows[i].cells[1]
         cell_val.width = Inches(5.0)
         p = cell_val.paragraphs[0]
-        p.paragraph_format.space_before = Pt(8)
-        p.paragraph_format.space_after = Pt(8)
+        p.paragraph_format.space_before = Pt(4)
+        p.paragraph_format.space_after = Pt(4)
         pPr = p._p.get_or_add_pPr()
         pBdr = parse_xml(
             f'<w:pBdr {nsdecls("w")}>'
@@ -2699,7 +2746,7 @@ def _add_earned_premium_disclaimer(doc):
         p.paragraph_format.space_before = Pt(4)
         p.paragraph_format.space_after = Pt(2)
         run = p.add_run(para_text.strip())
-        run.font.size = Pt(7)
+        run.font.size = Pt(6.5)
         run.font.bold = True
         run.font.color.rgb = RED
         run.font.name = "Calibri"
@@ -2767,6 +2814,8 @@ def generate_carrier_rating(doc, data):
     carriers_seen = {}
     coverage_names = {
         "property": "Property",
+        "excess_property": "Excess Property (Layer 1)",
+        "excess_property_2": "Excess Property (Layer 2)",
         "general_liability": "General Liability",
         "umbrella": "Umbrella / Excess",
         "umbrella_layer_2": "2nd Excess Layer",
@@ -3086,6 +3135,10 @@ def generate_proposal(data: dict, output_path: str) -> str:
     coverages = data.get("coverages", {})
     if "property" in coverages:
         generate_coverage_section(doc, data, "property", "Property Coverage")
+    if "excess_property" in coverages:
+        generate_coverage_section(doc, data, "excess_property", "Excess Property Coverage — Layer 1")
+    if "excess_property_2" in coverages:
+        generate_coverage_section(doc, data, "excess_property_2", "Excess Property Coverage — Layer 2")
     if "general_liability" in coverages:
         generate_coverage_section(doc, data, "general_liability", "General Liability Coverage")
     if "workers_comp" in coverages:

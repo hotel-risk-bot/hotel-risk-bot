@@ -439,6 +439,8 @@ CRITICAL RULES:
 15. GL schedule_of_classes MUST include ALL class codes with actual dollar exposure amounts
 16. Named insureds MUST be exact legal entity names from the quote - do NOT concatenate hotel brand names into entity names
 17. For carrier names: Use the ISSUING carrier name (e.g., "Associated Industries Insurance Company" or "Technology Insurance Company" for AmTrust policies, "Palms Insurance Company" for Palms). Do NOT use the wholesale broker name as the carrier.
+18. Property coinsurance is MANDATORY - ALWAYS extract coinsurance percentages and monthly limitation for Business Income. Look for "Coinsurance", "Monthly Limitation", "Coinsurance & Valuation" sections. This is a critical part of every property quote.
+19. For LAYERED property programs with multiple carriers: Use "property" for the primary layer, "excess_property" for the first excess layer, and "excess_property_2" for the second excess layer. Each layer has its own carrier, limits, deductibles, forms, coinsurance, and subjectivities.
 
 Return your extraction as a JSON object with the following structure. Only include sections that are present in the documents."""
 
@@ -484,8 +486,66 @@ The JSON structure should be:
         {{"description": "Business Income Extended Period", "limit": "X days"}},
         {{"description": "Sign Coverage", "limit": "$X"}}
       ],
+      "coinsurance": [
+        {{"coverage": "Building", "percentage": "0% or 80% or 90% or 100%"}},
+        {{"coverage": "Business Income", "limitation": "Monthly Limitation: 1/4 or 1/3 or per underlying"}},
+        {{"coverage": "Business Personal Property", "percentage": "0% or 80% or 90% or 100%"}}
+      ],
+      "valuation": "Replacement Cost or Actual Cash Value or Agreed Value",
       "forms_endorsements": [
         {{"form_number": "CP 00 10 06/07", "description": "Building and Personal Property Coverage Form"}}
+      ],
+      "subjectivities": ["List of binding requirements"]
+    }},
+    "excess_property": {{
+      "carrier": "Excess property layer 1 carrier name (e.g., Kinsale)",
+      "carrier_admitted": true or false,
+      "am_best_rating": "A+ XV or similar",
+      "premium": 0,
+      "taxes_fees": 0,
+      "total_premium": 0,
+      "tria_premium": 0,
+      "layer_description": "$Xm xs $Xm (e.g., $10,000,000 xs $10,000,000)",
+      "tiv": "$X Total Insured Value",
+      "limits": [
+        {{"description": "Per Occurrence", "limit": "$X"}},
+        {{"description": "Excess Of", "limit": "$X"}}
+      ],
+      "deductibles": [
+        {{"description": "All Other Perils", "amount": "As per underlying or $X"}},
+        {{"description": "Named Storm", "amount": "As per underlying or $X"}}
+      ],
+      "coinsurance": [
+        {{"coverage": "Building", "percentage": "0% or N/A or per underlying"}}
+      ],
+      "forms_endorsements": [
+        {{"form_number": "XPF1000-1224", "description": "Excess Property Insurance Policy Declarations"}}
+      ],
+      "subjectivities": ["List of binding requirements"]
+    }},
+    "excess_property_2": {{
+      "carrier": "Excess property layer 2 carrier name (e.g., Gotham via Coaction)",
+      "carrier_admitted": true or false,
+      "am_best_rating": "A+ XV or similar",
+      "premium": 0,
+      "taxes_fees": 0,
+      "total_premium": 0,
+      "tria_premium": 0,
+      "layer_description": "$Xm xs $Xm (e.g., $10,050,000 xs $20,000,000)",
+      "tiv": "$X Total Insured Value",
+      "limits": [
+        {{"description": "Per Occurrence", "limit": "$X"}},
+        {{"description": "Excess Of", "limit": "$X"}}
+      ],
+      "deductibles": [
+        {{"description": "All Other Perils", "amount": "As per underlying or $X"}},
+        {{"description": "Named Storm", "amount": "As per underlying or $X"}}
+      ],
+      "coinsurance": [
+        {{"coverage": "Building", "percentage": "0% or N/A or per underlying"}}
+      ],
+      "forms_endorsements": [
+        {{"form_number": "PN049937", "description": "How to Report a Claim"}}
       ],
       "subjectivities": ["List of binding requirements"]
     }},
@@ -696,6 +756,8 @@ The JSON structure should be:
   ],
   "expiring_premiums": {{
     "property": 0,
+    "excess_property": 0,
+    "excess_property_2": 0,
     "general_liability": 0,
     "umbrella": 0,
     "workers_comp": 0,
@@ -729,6 +791,8 @@ IMPORTANT:
 - For additional_named_insureds: Search ALL pages for "Additional Named Insured", "Additional Named Insureds Schedule", "Named Insured Schedule", or similar headings. These are often on a separate page listing multiple entities (e.g., LLCs, management companies, DBAs). Extract every entity listed. Do NOT duplicate entities already in named_insureds.
 - For additional_insureds: Search for "Additional Insured", "Additional Insured Schedule", or endorsement pages listing additional insureds (franchisors, mortgagees, managers). Extract all of them.
 - CRIME COVERAGE: For crime/fidelity bond policies (e.g., Chubb ForeFront Portfolio, Travelers Crime), extract ALL insuring clauses with their individual limits and retentions. Common insuring clauses include: Employee Theft, Forgery or Alteration, Inside the Premises (Theft of Money & Securities), Inside the Premises (Robbery/Safe Burglary), Outside the Premises, Computer and Funds Transfer Fraud, Money Orders and Counterfeit Money, Social Engineering Fraud. Also extract all endorsements from the forms schedule. If the policy is claims-made, note the retroactive date.
+- LAYERED PROPERTY PROGRAMS: When a property quote contains multiple carriers in a layered/shared program (e.g., Lexington primary + Kinsale excess + Gotham/Coaction excess), extract EACH layer separately. Use "property" for the primary layer, "excess_property" for the first excess layer, and "excess_property_2" for the second excess layer. Each layer has its own carrier, premium, limits, deductibles, forms, subjectivities, and coinsurance. The layer_description should show the attachment point (e.g., "$10,000,000 xs $10,000,000"). Look for terms like "Excess", "xs", "excess of", or "Per Schedule" to identify excess layers. Common excess property carriers include Kinsale, Gotham (via Coaction), and others.
+- COINSURANCE & VALUATION: For ALL property layers (primary and excess), extract the coinsurance percentage for Building, Business Income, and BPP. Also extract the Monthly Limitation for Business Income (e.g., "1/4 Monthly", "1/3 Monthly"). This is a CRITICAL field that must ALWAYS be included in property quotes. Look for "Coinsurance", "Monthly Limitation", "Coinsurance & Valuation" sections. If coinsurance is waived or 0%, still include it as "0%". Also extract the valuation basis (Replacement Cost, Actual Cash Value, Agreed Value).
 - UMBRELLA/EXCESS LAYERS: When multiple umbrella/excess liability quotes are provided (e.g., separate PDFs for different layers), extract EACH layer as a separate coverage entry. Use "umbrella" for the primary excess layer, "umbrella_layer_2" for the second excess layer ($XM xs $XM), and "umbrella_layer_3" for the third excess layer ($XM xs $XM). Each layer has its own carrier, premium, limits, forms, and subjectivities. The tower_structure field should show that layer's position. Look for "Controlling Underlying" or "Schedule of Underlying" to determine the layer position. If a quote says it sits excess of another carrier's layer, it is a higher layer.
 
 DOCUMENT TEXT:

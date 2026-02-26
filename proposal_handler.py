@@ -327,6 +327,16 @@ def _merge_extraction_results(existing: dict, new_data: dict) -> dict:
                 logger.info(f"Auto-promoted duplicate umbrella to umbrella_layer_3 from {cov_data.get('carrier', 'unknown')}")
             else:
                 logger.info(f"All umbrella layers full, skipping duplicate umbrella from {cov_data.get('carrier', 'unknown')}")
+        elif cov_key == "property":
+            # Auto-promote to next available excess property layer
+            if "excess_property" not in existing_covs:
+                existing_covs["excess_property"] = cov_data
+                logger.info(f"Auto-promoted duplicate property to excess_property from {cov_data.get('carrier', 'unknown')}")
+            elif "excess_property_2" not in existing_covs:
+                existing_covs["excess_property_2"] = cov_data
+                logger.info(f"Auto-promoted duplicate property to excess_property_2 from {cov_data.get('carrier', 'unknown')}")
+            else:
+                logger.info(f"All property layers full, skipping duplicate property from {cov_data.get('carrier', 'unknown')}")
         else:
             logger.info(f"Coverage {cov_key} already exists, keeping existing")
     merged["coverages"] = existing_covs
@@ -773,9 +783,32 @@ async def generate_doc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     for key, cov in coverages.items():
         logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, premium={cov.get('total_premium', 0)}")
     
-    # Enrich GL schedule_of_classes with SOV address/brand data
+    # Enrich client_info with SOV named_insured (may contain DBA via dash separator)
     sov_data = session.extracted_data.get('sov_data', {})
     sov_locations = sov_data.get('locations', []) if sov_data else []
+    if sov_data:
+        sov_summary = sov_data.get('summary', {})
+        sov_named = sov_summary.get('named_insured', '')
+        ci = session.extracted_data.get('client_info', {})
+        # If SOV named insured contains " - " (e.g., "LV Hotels LLC - Latitude Apartment"),
+        # split into name and DBA
+        if sov_named and ' - ' in sov_named:
+            parts = sov_named.split(' - ', 1)
+            sov_name = parts[0].strip()
+            sov_dba = parts[1].strip()
+            # Only set DBA if not already set from quote
+            if not ci.get('dba'):
+                ci['dba'] = sov_dba
+                logger.info(f"Enriched client_info DBA from SOV: {sov_dba}")
+            # Also enrich named_insureds if the first entry lacks a DBA
+            named_insureds = session.extracted_data.get('named_insureds', [])
+            if named_insureds:
+                first_ni = named_insureds[0]
+                if isinstance(first_ni, dict) and not first_ni.get('dba'):
+                    first_ni['dba'] = sov_dba
+                    logger.info(f"Enriched first named_insured DBA from SOV: {sov_dba}")
+    
+    # Enrich GL schedule_of_classes with SOV address/brand data
     gl_cov = coverages.get('general_liability', {})
     if gl_cov and sov_locations:
         classes = gl_cov.get('schedule_of_classes', [])
