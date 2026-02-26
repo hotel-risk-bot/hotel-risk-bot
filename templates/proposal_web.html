@@ -1282,7 +1282,10 @@ function renderExpiringPremiums() {
         html += `<tr>`;
         html += `<td><strong>${displayName}</strong></td>`;
         html += `<td style="font-size:0.85rem; color:var(--gray-700);">${escHtml(cov.carrier || '')}</td>`;
-        html += `<td style="text-align:right;">$${formatNum(proposed)}</td>`;
+        html += `<td><input type="text" value="${formatNum(proposed)}" 
+                    style="width:100%; padding:0.4rem; border:1px solid var(--gray-300); border-radius:4px; text-align:right; font-size:0.85rem;"
+                    onchange="updateProposedPremium('${key}', this.value)" 
+                    onkeyup="previewProposedChange('${key}', this)"></td>`;
         html += `<td><input type="text" value="${expiring > 0 ? formatNum(expiring) : ''}" 
                     placeholder="Enter expiring" 
                     style="width:100%; padding:0.4rem; border:1px solid var(--gray-300); border-radius:4px; text-align:right; font-size:0.85rem;"
@@ -1316,6 +1319,34 @@ function renderExpiringPremiums() {
     
     html += '</tbody></table>';
     container.innerHTML = html;
+}
+
+function updateProposedPremium(key, value) {
+    const num = parseFloat(value.replace(/[,$]/g, '')) || 0;
+    if (extractedData.coverages && extractedData.coverages[key]) {
+        extractedData.coverages[key].premium = num;
+    }
+    // Re-render to update totals and change calculations
+    renderExpiringPremiums();
+}
+
+function previewProposedChange(key, inputEl) {
+    // When proposed changes, recalculate the $ and % change for this row
+    const proposed = parseFloat(inputEl.value.replace(/[,$]/g, '')) || 0;
+    const expiring = parseFloat(extractedData.expiring_premiums?.[key]) || 0;
+    const dollarEl = document.getElementById(`ep-dollar-${key}`);
+    const pctEl = document.getElementById(`ep-pct-${key}`);
+    if (!dollarEl || !pctEl || expiring <= 0) return;
+    
+    const dollarChange = proposed - expiring;
+    const pctChange = (dollarChange / expiring * 100);
+    const color = dollarChange > 0 ? 'var(--danger)' : dollarChange < 0 ? 'var(--success)' : 'var(--gray-700)';
+    const sign = dollarChange > 0 ? '+' : '';
+    
+    dollarEl.textContent = sign + '$' + formatNum(Math.abs(dollarChange));
+    dollarEl.style.color = color;
+    pctEl.textContent = sign + pctChange.toFixed(1) + '%';
+    pctEl.style.color = color;
 }
 
 function updateExpiringPremium(key, value) {
