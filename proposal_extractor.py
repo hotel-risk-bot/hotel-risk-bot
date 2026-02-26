@@ -844,18 +844,11 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
             cleaned_named.append(ni)
         data["named_insureds"] = cleaned_named
         
-        # Fix 2: Ensure GL carrier name is correct (AmTrust entities often misidentified)
+        # Fix 2: Log GL carrier name (keep original from quote)
         gl_cov = data.get("coverages", {}).get("general_liability", {})
         if gl_cov:
             carrier = gl_cov.get("carrier", "")
-            carrier_lower = carrier.lower()
-            # If carrier contains "associated industries" but forms show AmTrust, fix it
-            if "associated industries" in carrier_lower:
-                gl_cov["carrier"] = "AmTrust E&S (Associated Industries)"
-                logger.info(f"Fixed GL carrier: '{carrier}' -> 'AmTrust E&S (Associated Industries)'")
-            elif "technology insurance" in carrier_lower:
-                gl_cov["carrier"] = "AmTrust E&S (Technology Insurance)"
-                logger.info(f"Fixed GL carrier: '{carrier}' -> 'AmTrust E&S (Technology Insurance)'")
+            logger.info(f"GL carrier from extraction: '{carrier}'")
         
         # Fix 3: Validate that forms_endorsements is not empty for property and GL
         for cov_key in ["property", "general_liability"]:
@@ -1267,20 +1260,28 @@ class ProposalExtractor:
             return {"error": f"AI extraction failed: {e}"}
 
     def _pass2_forms_extraction(self, data: dict, combined_text: str) -> dict:
-        """Pass 2: Focused extraction of forms & endorsements for coverages missing them."""
+        """Pass 2: Focused extraction of forms & endorsements for coverages that have too few."""
         covs = data.get("coverages", {})
         if not isinstance(covs, dict):
             return data
         
         # Check which coverages need forms extraction
+        # Trigger when forms count < 5 (not just empty) — GPT often captures only 1-2 forms
+        # in the initial pass due to attention dilution across the full document
+        MIN_FORMS_THRESHOLD = 5
         needs_forms = []
         for key in ["property", "general_liability", "umbrella", "umbrella_layer_2", "umbrella_layer_3", "crime"]:
             cov = covs.get(key, {})
-            if cov and cov.get("carrier") and not cov.get("forms_endorsements"):
+            if not cov or not cov.get("carrier"):
+                continue
+            existing_forms = cov.get("forms_endorsements", [])
+            form_count = len(existing_forms) if isinstance(existing_forms, list) else 0
+            if form_count < MIN_FORMS_THRESHOLD:
                 needs_forms.append(key)
+                logger.info(f"Pass 2: {key} has only {form_count} forms (threshold={MIN_FORMS_THRESHOLD}), will re-extract")
         
         if not needs_forms:
-            logger.info("Pass 2 (forms): All coverages have forms, skipping")
+            logger.info("Pass 2 (forms): All coverages have sufficient forms, skipping")
             return data
         
         logger.info(f"Pass 2 (forms): Extracting forms for {needs_forms}")
@@ -1325,9 +1326,12 @@ DOCUMENT TEXT:
                 )
                 result = json.loads(response.choices[0].message.content)
                 forms = result.get("forms_endorsements", [])
-                if forms and isinstance(forms, list) and len(forms) > 0:
+                existing_count = len(cov.get("forms_endorsements", []) or [])
+                if forms and isinstance(forms, list) and len(forms) > existing_count:
                     cov["forms_endorsements"] = forms
-                    logger.info(f"Pass 2: Extracted {len(forms)} forms for {cov_key}")
+                    logger.info(f"Pass 2: Extracted {len(forms)} forms for {cov_key} (was {existing_count})")
+                elif forms and isinstance(forms, list) and len(forms) > 0:
+                    logger.info(f"Pass 2: Found {len(forms)} forms for {cov_key} but not better than existing {existing_count}")
                 else:
                     logger.warning(f"Pass 2: No forms found for {cov_key} in focused extraction")
             except Exception as e:
@@ -1344,13 +1348,16 @@ DOCUMENT TEXT:
             logger.info("Pass 3 (addresses): No GL coverage found, skipping")
             return data
         
-        # Check if designated_premises is already populated
+        # Check if designated_premises needs more addresses
+        # Trigger when count < 3 — GPT often captures only 1-2 addresses in initial pass
+        MIN_ADDRESSES_THRESHOLD = 3
         dp = gl.get("designated_premises", [])
-        if dp and isinstance(dp, list) and len(dp) > 0:
-            logger.info(f"Pass 3 (addresses): GL already has {len(dp)} designated premises, skipping")
+        dp_count = len(dp) if isinstance(dp, list) else 0
+        if dp_count >= MIN_ADDRESSES_THRESHOLD:
+            logger.info(f"Pass 3 (addresses): GL already has {dp_count} designated premises (threshold={MIN_ADDRESSES_THRESHOLD}), skipping")
             return data
         
-        logger.info("Pass 3 (addresses): GL missing designated_premises, running focused extraction")
+        logger.info(f"Pass 3 (addresses): GL has only {dp_count} designated premises (threshold={MIN_ADDRESSES_THRESHOLD}), running focused extraction")
         
         prompt = f"""From this General Liability insurance document, extract ALL physical street addresses that represent covered locations.
 
@@ -1388,9 +1395,11 @@ DOCUMENT TEXT:
             result = json.loads(response.choices[0].message.content)
             
             addresses = result.get("designated_premises", [])
-            if addresses and isinstance(addresses, list) and len(addresses) > 0:
+            if addresses and isinstance(addresses, list) and len(addresses) > dp_count:
                 gl["designated_premises"] = addresses
-                logger.info(f"Pass 3: Extracted {len(addresses)} designated premises for GL")
+                logger.info(f"Pass 3: Extracted {len(addresses)} designated premises for GL (was {dp_count})")
+            elif addresses and isinstance(addresses, list) and len(addresses) > 0:
+                logger.info(f"Pass 3: Found {len(addresses)} addresses but not better than existing {dp_count}")
             
             # Also update schedule_of_classes if it was empty or incomplete
             soc = result.get("schedule_of_classes", [])
