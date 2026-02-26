@@ -26,12 +26,44 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max upload
 
-# In-memory session storage (keyed by session_id)
-# In production, consider Redis or database-backed sessions
-sessions = {}
-
-UPLOAD_DIR = tempfile.mkdtemp(prefix="proposal_web_")
+# File-backed session storage to survive across workers/restarts
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR", tempfile.mkdtemp(prefix="proposal_web_"))
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+SESSION_FILE = os.path.join(UPLOAD_DIR, "_sessions.json")
 logger.info(f"Upload directory: {UPLOAD_DIR}")
+
+
+def _load_sessions():
+    """Load sessions from disk."""
+    try:
+        if os.path.exists(SESSION_FILE):
+            with open(SESSION_FILE, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load sessions: {e}")
+    return {}
+
+
+def _save_sessions(sessions):
+    """Save sessions to disk."""
+    try:
+        with open(SESSION_FILE, 'w') as f:
+            json.dump(sessions, f)
+    except Exception as e:
+        logger.warning(f"Failed to save sessions: {e}")
+
+
+def _get_session(session_id):
+    """Get a session by ID."""
+    sessions = _load_sessions()
+    return sessions.get(session_id)
+
+
+def _set_session(session_id, data):
+    """Set a session by ID."""
+    sessions = _load_sessions()
+    sessions[session_id] = data
+    _save_sessions(sessions)
 
 
 # ─── Helper functions (ported from proposal_handler.py) ───
@@ -267,7 +299,7 @@ def create_session():
     session_dir = os.path.join(UPLOAD_DIR, session_id)
     os.makedirs(session_dir, exist_ok=True)
 
-    sessions[session_id] = {
+    session_data = {
         "client_name": client_name,
         "session_dir": session_dir,
         "files": [],
@@ -276,6 +308,7 @@ def create_session():
         "status": "created",
         "created_at": datetime.now().isoformat(),
     }
+    _set_session(session_id, session_data)
 
     return jsonify({"session_id": session_id, "client_name": client_name})
 
@@ -283,7 +316,7 @@ def create_session():
 @app.route("/api/upload/<session_id>", methods=["POST"])
 def upload_files(session_id):
     """Upload files (PDFs and Excel SOVs) to a session."""
-    session = sessions.get(session_id)
+    session = _get_session(session_id)
     if not session:
         return jsonify({"error": "Session not found"}), 404
 
@@ -326,13 +359,14 @@ def upload_files(session_id):
             "size": file_info["size"],
         })
 
+    _set_session(session_id, session)
     return jsonify({"uploaded": uploaded, "total_files": len(session["files"])})
 
 
 @app.route("/api/extract/<session_id>", methods=["POST"])
 def extract_data(session_id):
     """Extract and structure data from all uploaded files."""
-    session = sessions.get(session_id)
+    session = _get_session(session_id)
     if not session:
         return jsonify({"error": "Session not found"}), 404
 
@@ -396,6 +430,7 @@ def extract_data(session_id):
 
         session["extracted_data"] = merged_data
         session["status"] = "extracted"
+        _set_session(session_id, session)
 
         # Build a summary for the UI
         summary = _build_review_summary(merged_data)
@@ -409,13 +444,14 @@ def extract_data(session_id):
     except Exception as e:
         logger.exception(f"Extraction failed: {e}")
         session["status"] = "error"
+        _set_session(session_id, session)
         return jsonify({"error": f"Extraction failed: {str(e)}"}), 500
 
 
 @app.route("/api/update/<session_id>", methods=["POST"])
 def update_data(session_id):
     """Update the extracted data with user edits."""
-    session = sessions.get(session_id)
+    session = _get_session(session_id)
     if not session:
         return jsonify({"error": "Session not found"}), 404
 
@@ -425,10 +461,13 @@ def update_data(session_id):
 
     # Preserve sov_data from the session (it's large and not edited in the UI)
     if session.get("sov_data") and "sov_data" not in updated_data:
-        updated_data["sov_data"] = session["extracted_data"].get("sov_data")
+        existing_data = session.get("extracted_data", {})
+        if existing_data:
+            updated_data["sov_data"] = existing_data.get("sov_data")
 
     session["extracted_data"] = updated_data
     session["status"] = "reviewed"
+    _set_session(session_id, session)
 
     return jsonify({"status": "updated"})
 
@@ -436,7 +475,7 @@ def update_data(session_id):
 @app.route("/api/generate/<session_id>", methods=["POST"])
 def generate_doc(session_id):
     """Generate the DOCX proposal from the (possibly edited) extracted data."""
-    session = sessions.get(session_id)
+    session = _get_session(session_id)
     if not session:
         return jsonify({"error": "Session not found"}), 404
 
@@ -444,6 +483,7 @@ def generate_doc(session_id):
         return jsonify({"error": "No extracted data available. Run extraction first."}), 400
 
     session["status"] = "generating"
+    _set_session(session_id, session)
 
     try:
         client_name = session["client_name"].replace(" ", "_").replace("/", "-")
@@ -451,11 +491,18 @@ def generate_doc(session_id):
         docx_filename = f"HUB_Proposal_{client_name}_{timestamp}.docx"
         docx_path = os.path.join(session["session_dir"], docx_filename)
 
-        generate_proposal(session["extracted_data"], docx_path)
+        # Map web UI expiring premiums into the format the generator expects
+        gen_data = session["extracted_data"]
+        if gen_data.get("expiring_premiums_data"):
+            gen_data["expiring_premiums"] = gen_data["expiring_premiums_data"]
+            logger.info(f"Mapped expiring premiums: {gen_data['expiring_premiums']}")
+
+        generate_proposal(gen_data, docx_path)
 
         session["status"] = "complete"
         session["docx_path"] = docx_path
         session["docx_filename"] = docx_filename
+        _set_session(session_id, session)
 
         return jsonify({
             "status": "complete",
@@ -466,13 +513,14 @@ def generate_doc(session_id):
     except Exception as e:
         logger.exception(f"Generation failed: {e}")
         session["status"] = "error"
+        _set_session(session_id, session)
         return jsonify({"error": f"Document generation failed: {str(e)}"}), 500
 
 
 @app.route("/api/download/<session_id>", methods=["GET"])
 def download_doc(session_id):
     """Download the generated DOCX file."""
-    session = sessions.get(session_id)
+    session = _get_session(session_id)
     if not session:
         return jsonify({"error": "Session not found"}), 404
 
@@ -490,7 +538,7 @@ def download_doc(session_id):
 @app.route("/api/session/<session_id>", methods=["GET"])
 def get_session(session_id):
     """Get session status and data."""
-    session = sessions.get(session_id)
+    session = _get_session(session_id)
     if not session:
         return jsonify({"error": "Session not found"}), 404
 
