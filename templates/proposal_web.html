@@ -1,0 +1,1388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HUB Proposal Generator</title>
+    <style>
+        :root {
+            --hub-electric: #0077C8;
+            --hub-classic: #002B5C;
+            --hub-dark: #001F3F;
+            --hub-light: #E8F4FD;
+            --hub-accent: #00A3E0;
+            --success: #28a745;
+            --warning: #ffc107;
+            --danger: #dc3545;
+            --gray-50: #f8f9fa;
+            --gray-100: #f1f3f5;
+            --gray-200: #e9ecef;
+            --gray-300: #dee2e6;
+            --gray-500: #adb5bd;
+            --gray-700: #495057;
+            --gray-900: #212529;
+            --radius: 8px;
+            --shadow: 0 2px 8px rgba(0,0,0,0.08);
+            --shadow-lg: 0 4px 24px rgba(0,0,0,0.12);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--gray-50);
+            color: var(--gray-900);
+            line-height: 1.6;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, var(--hub-classic), var(--hub-dark));
+            color: white;
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            box-shadow: var(--shadow-lg);
+        }
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+        }
+        .header .subtitle {
+            font-size: 0.85rem;
+            opacity: 0.7;
+            margin-left: auto;
+        }
+        .hub-logo {
+            width: 48px;
+            height: 48px;
+            background: white;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            color: var(--hub-classic);
+            font-size: 1.1rem;
+        }
+
+        /* Progress Steps */
+        .steps-bar {
+            background: white;
+            padding: 1.25rem 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0;
+            border-bottom: 1px solid var(--gray-200);
+        }
+        .step {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1.25rem;
+            border-radius: 24px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: var(--gray-500);
+            transition: all 0.3s;
+        }
+        .step.active {
+            background: var(--hub-light);
+            color: var(--hub-electric);
+            font-weight: 600;
+        }
+        .step.done {
+            color: var(--success);
+        }
+        .step-num {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            font-weight: 700;
+            background: var(--gray-200);
+            color: var(--gray-500);
+        }
+        .step.active .step-num {
+            background: var(--hub-electric);
+            color: white;
+        }
+        .step.done .step-num {
+            background: var(--success);
+            color: white;
+        }
+        .step-connector {
+            width: 60px;
+            height: 2px;
+            background: var(--gray-200);
+            margin: 0 0.5rem;
+        }
+        .step-connector.done { background: var(--success); }
+
+        /* Main Content */
+        .main {
+            max-width: 1100px;
+            margin: 2rem auto;
+            padding: 0 1.5rem;
+        }
+
+        /* Cards */
+        .card {
+            background: white;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            padding: 2rem;
+            margin-bottom: 1.5rem;
+        }
+        .card h2 {
+            font-size: 1.2rem;
+            color: var(--hub-classic);
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .card h3 {
+            font-size: 1rem;
+            color: var(--hub-electric);
+            margin: 1.25rem 0 0.75rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--gray-200);
+        }
+
+        /* Forms */
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        .form-group label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--gray-700);
+            margin-bottom: 0.25rem;
+        }
+        .form-group input, .form-group select, .form-group textarea {
+            width: 100%;
+            padding: 0.6rem 0.75rem;
+            border: 1px solid var(--gray-300);
+            border-radius: var(--radius);
+            font-size: 0.9rem;
+            transition: border-color 0.2s;
+        }
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+            outline: none;
+            border-color: var(--hub-electric);
+            box-shadow: 0 0 0 3px rgba(0,119,200,0.1);
+        }
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+        .form-row-3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 1rem;
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.7rem 1.5rem;
+            border: none;
+            border-radius: var(--radius);
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: var(--hub-electric);
+            color: white;
+        }
+        .btn-primary:hover { background: #0066b0; }
+        .btn-primary:disabled {
+            background: var(--gray-300);
+            cursor: not-allowed;
+        }
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+        .btn-success:hover { background: #218838; }
+        .btn-outline {
+            background: white;
+            color: var(--hub-electric);
+            border: 2px solid var(--hub-electric);
+        }
+        .btn-outline:hover { background: var(--hub-light); }
+        .btn-sm {
+            padding: 0.4rem 0.75rem;
+            font-size: 0.8rem;
+        }
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+        .btn-danger:hover { background: #c82333; }
+
+        /* Upload Area */
+        .upload-area {
+            border: 2px dashed var(--gray-300);
+            border-radius: var(--radius);
+            padding: 3rem 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: var(--gray-50);
+        }
+        .upload-area:hover, .upload-area.dragover {
+            border-color: var(--hub-electric);
+            background: var(--hub-light);
+        }
+        .upload-area .icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+        .upload-area p {
+            color: var(--gray-700);
+            margin-bottom: 0.5rem;
+        }
+        .upload-area .hint {
+            font-size: 0.8rem;
+            color: var(--gray-500);
+        }
+
+        /* File List */
+        .file-list {
+            margin-top: 1rem;
+        }
+        .file-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            background: var(--gray-50);
+            border-radius: var(--radius);
+            margin-bottom: 0.5rem;
+            border: 1px solid var(--gray-200);
+        }
+        .file-item .file-icon {
+            font-size: 1.5rem;
+        }
+        .file-item .file-name {
+            font-weight: 500;
+            flex: 1;
+        }
+        .file-item .file-meta {
+            font-size: 0.8rem;
+            color: var(--gray-500);
+        }
+        .file-item .file-badge {
+            font-size: 0.7rem;
+            padding: 0.15rem 0.5rem;
+            border-radius: 12px;
+            font-weight: 600;
+        }
+        .badge-pdf { background: #fee2e2; color: #dc2626; }
+        .badge-sov { background: #d1fae5; color: #059669; }
+        .badge-excel { background: #fef3c7; color: #d97706; }
+
+        /* Coverage Cards */
+        .coverage-card {
+            border: 1px solid var(--gray-200);
+            border-radius: var(--radius);
+            margin-bottom: 1rem;
+            overflow: hidden;
+        }
+        .coverage-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.75rem 1rem;
+            background: var(--gray-50);
+            cursor: pointer;
+            border-bottom: 1px solid var(--gray-200);
+        }
+        .coverage-header:hover { background: var(--gray-100); }
+        .coverage-header h4 {
+            font-size: 0.95rem;
+            color: var(--hub-classic);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .coverage-header .carrier-badge {
+            font-size: 0.75rem;
+            padding: 0.15rem 0.5rem;
+            background: var(--hub-light);
+            color: var(--hub-electric);
+            border-radius: 12px;
+            font-weight: 500;
+        }
+        .coverage-body {
+            padding: 1rem;
+            display: none;
+        }
+        .coverage-body.open { display: block; }
+
+        /* Tables */
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+            margin-top: 0.5rem;
+        }
+        .data-table th {
+            text-align: left;
+            padding: 0.5rem 0.75rem;
+            background: var(--gray-50);
+            border-bottom: 2px solid var(--gray-200);
+            font-weight: 600;
+            color: var(--gray-700);
+        }
+        .data-table td {
+            padding: 0.5rem 0.75rem;
+            border-bottom: 1px solid var(--gray-100);
+        }
+        .data-table input {
+            width: 100%;
+            padding: 0.3rem 0.5rem;
+            border: 1px solid var(--gray-300);
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+        .data-table input:focus {
+            outline: none;
+            border-color: var(--hub-electric);
+        }
+
+        /* Status / Loading */
+        .status-bar {
+            padding: 1rem 1.5rem;
+            border-radius: var(--radius);
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-weight: 500;
+        }
+        .status-info { background: var(--hub-light); color: var(--hub-classic); }
+        .status-success { background: #d1fae5; color: #065f46; }
+        .status-error { background: #fee2e2; color: #991b1b; }
+        .status-warning { background: #fef3c7; color: #92400e; }
+
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 3px solid var(--gray-200);
+            border-top-color: var(--hub-electric);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(255,255,255,0.85);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            gap: 1rem;
+        }
+        .loading-overlay .spinner {
+            width: 48px;
+            height: 48px;
+            border-width: 4px;
+        }
+        .loading-overlay p {
+            font-size: 1.1rem;
+            font-weight: 500;
+            color: var(--hub-classic);
+        }
+        .loading-overlay .sub {
+            font-size: 0.85rem;
+            color: var(--gray-500);
+        }
+
+        /* Action Bar */
+        .action-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1.5rem 0;
+            gap: 1rem;
+        }
+
+        /* Collapsible sections */
+        .section-toggle {
+            cursor: pointer;
+            user-select: none;
+        }
+        .section-toggle::before {
+            content: '▸';
+            display: inline-block;
+            margin-right: 0.5rem;
+            transition: transform 0.2s;
+        }
+        .section-toggle.open::before {
+            transform: rotate(90deg);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .form-row, .form-row-3 { grid-template-columns: 1fr; }
+            .header { padding: 0.75rem 1rem; }
+            .main { padding: 0 0.75rem; margin: 1rem auto; }
+            .card { padding: 1.25rem; }
+            .steps-bar { padding: 0.75rem; gap: 0; }
+            .step { padding: 0.4rem 0.75rem; font-size: 0.8rem; }
+            .step-connector { width: 30px; }
+        }
+
+        /* Hidden */
+        .hidden { display: none !important; }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            padding: 1rem 1.5rem;
+            border-radius: var(--radius);
+            color: white;
+            font-weight: 500;
+            box-shadow: var(--shadow-lg);
+            z-index: 2000;
+            animation: slideIn 0.3s ease;
+        }
+        .toast-success { background: var(--success); }
+        .toast-error { background: var(--danger); }
+        @keyframes slideIn {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        /* Forms/Endorsements list */
+        .forms-list {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid var(--gray-200);
+            border-radius: var(--radius);
+            padding: 0.5rem;
+        }
+        .form-entry {
+            display: grid;
+            grid-template-columns: 180px 1fr 40px;
+            gap: 0.5rem;
+            align-items: center;
+            padding: 0.25rem 0;
+            border-bottom: 1px solid var(--gray-100);
+        }
+        .form-entry:last-child { border-bottom: none; }
+        .form-entry input {
+            padding: 0.25rem 0.5rem;
+            border: 1px solid var(--gray-200);
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+        .form-entry .remove-btn {
+            background: none;
+            border: none;
+            color: var(--danger);
+            cursor: pointer;
+            font-size: 1.1rem;
+            padding: 0.25rem;
+        }
+
+        /* JSON editor */
+        .json-editor {
+            width: 100%;
+            min-height: 400px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.8rem;
+            padding: 1rem;
+            border: 1px solid var(--gray-300);
+            border-radius: var(--radius);
+            background: var(--gray-50);
+            resize: vertical;
+        }
+
+        /* Tab navigation for review */
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid var(--gray-200);
+            margin-bottom: 1.5rem;
+        }
+        .tab {
+            padding: 0.75rem 1.25rem;
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: var(--gray-500);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.2s;
+        }
+        .tab:hover { color: var(--hub-electric); }
+        .tab.active {
+            color: var(--hub-electric);
+            border-bottom-color: var(--hub-electric);
+        }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+    </style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+    <div class="hub-logo">HUB</div>
+    <div>
+        <h1>Proposal Generator</h1>
+    </div>
+    <div class="subtitle">Hotel Franchise Insurance Program</div>
+</div>
+
+<!-- Progress Steps -->
+<div class="steps-bar">
+    <div class="step active" id="step1">
+        <span class="step-num">1</span>
+        <span>Upload Files</span>
+    </div>
+    <div class="step-connector" id="conn1"></div>
+    <div class="step" id="step2">
+        <span class="step-num">2</span>
+        <span>Review &amp; Edit</span>
+    </div>
+    <div class="step-connector" id="conn2"></div>
+    <div class="step" id="step3">
+        <span class="step-num">3</span>
+        <span>Generate &amp; Download</span>
+    </div>
+</div>
+
+<!-- Main Content -->
+<div class="main">
+
+    <!-- ═══════ STEP 1: Upload ═══════ -->
+    <div id="panel-upload">
+        <div class="card">
+            <h2>&#128203; Client Information</h2>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Client / Named Insured</label>
+                    <input type="text" id="client-name" placeholder="e.g., Q Hotels LLC" autofocus>
+                </div>
+                <div class="form-group">
+                    <label>Effective Date (optional)</label>
+                    <input type="text" id="effective-date" placeholder="e.g., 03/01/2026">
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>&#128193; Upload Quote PDFs &amp; SOV</h2>
+            <div class="upload-area" id="upload-area">
+                <div class="icon">&#128196;</div>
+                <p><strong>Drag &amp; drop files here</strong> or click to browse</p>
+                <p class="hint">Accepts PDF (quotes) and Excel (SOV) files &mdash; up to 50MB total</p>
+                <input type="file" id="file-input" multiple accept=".pdf,.xlsx,.xls,.csv" style="display:none">
+            </div>
+            <div class="file-list" id="file-list"></div>
+        </div>
+
+        <div class="action-bar">
+            <div></div>
+            <button class="btn btn-primary" id="btn-extract" disabled>
+                Extract &amp; Analyze &#8594;
+            </button>
+        </div>
+    </div>
+
+    <!-- ═══════ STEP 2: Review & Edit ═══════ -->
+    <div id="panel-review" class="hidden">
+
+        <div class="tabs">
+            <div class="tab active" data-tab="tab-visual">Visual Editor</div>
+            <div class="tab" data-tab="tab-json">JSON Editor</div>
+        </div>
+
+        <!-- Visual Editor Tab -->
+        <div class="tab-content active" id="tab-visual">
+
+            <!-- Client Info -->
+            <div class="card">
+                <h2>&#128100; Client Information</h2>
+                <div class="form-row-3">
+                    <div class="form-group">
+                        <label>Named Insured</label>
+                        <input type="text" id="edit-named-insured">
+                    </div>
+                    <div class="form-group">
+                        <label>DBA</label>
+                        <input type="text" id="edit-dba">
+                    </div>
+                    <div class="form-group">
+                        <label>Entity Type</label>
+                        <input type="text" id="edit-entity-type" placeholder="LLC, Corp, etc.">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Mailing Address</label>
+                        <input type="text" id="edit-address">
+                    </div>
+                    <div class="form-group">
+                        <label>Effective Date</label>
+                        <input type="text" id="edit-effective-date">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Named Insureds -->
+            <div class="card">
+                <h2>&#128101; Named Insureds</h2>
+                <div id="named-insureds-list"></div>
+                <button class="btn btn-sm btn-outline" onclick="addNamedInsured()" style="margin-top:0.75rem">+ Add Named Insured</button>
+            </div>
+
+            <!-- Coverages -->
+            <div class="card">
+                <h2>&#128737; Coverages</h2>
+                <div id="coverages-list"></div>
+            </div>
+
+            <!-- Locations -->
+            <div class="card">
+                <h2>&#127968; Locations (<span id="loc-count">0</span>)</h2>
+                <div style="max-height:400px; overflow-y:auto;">
+                    <table class="data-table" id="locations-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Property Name</th>
+                                <th>Address</th>
+                                <th>City</th>
+                                <th>State</th>
+                                <th>TIV</th>
+                            </tr>
+                        </thead>
+                        <tbody id="locations-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- JSON Editor Tab -->
+        <div class="tab-content" id="tab-json">
+            <div class="card">
+                <h2>&#128221; Raw JSON Data</h2>
+                <p style="font-size:0.85rem; color:var(--gray-500); margin-bottom:1rem;">
+                    Advanced: Edit the raw extraction JSON directly. Changes here will override the visual editor.
+                </p>
+                <textarea class="json-editor" id="json-editor"></textarea>
+                <div style="margin-top:0.75rem;">
+                    <button class="btn btn-sm btn-outline" onclick="applyJsonEdits()">Apply JSON Changes</button>
+                    <button class="btn btn-sm btn-outline" onclick="formatJson()" style="margin-left:0.5rem;">Format JSON</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="action-bar">
+            <button class="btn btn-outline" onclick="goToStep(1)">&#8592; Back to Upload</button>
+            <button class="btn btn-success" id="btn-generate">
+                Generate Proposal &#128196;
+            </button>
+        </div>
+    </div>
+
+    <!-- ═══════ STEP 3: Download ═══════ -->
+    <div id="panel-download" class="hidden">
+        <div class="card" style="text-align:center; padding:3rem;">
+            <div style="font-size:4rem; margin-bottom:1rem;">&#9989;</div>
+            <h2 style="justify-content:center; font-size:1.4rem; margin-bottom:0.5rem;">Proposal Generated Successfully</h2>
+            <p style="color:var(--gray-500); margin-bottom:2rem;" id="download-filename"></p>
+            <a class="btn btn-primary" id="btn-download" href="#" style="text-decoration:none; font-size:1rem; padding:0.85rem 2.5rem;">
+                &#11015; Download DOCX
+            </a>
+            <div style="margin-top:2rem;">
+                <button class="btn btn-outline" onclick="startNew()">Start New Proposal</button>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Loading Overlay -->
+<div class="loading-overlay hidden" id="loading">
+    <div class="spinner"></div>
+    <p id="loading-text">Processing...</p>
+    <p class="sub" id="loading-sub"></p>
+</div>
+
+<script>
+// ─── State ───
+let sessionId = null;
+let extractedData = null;
+let uploadedFiles = [];
+
+// ─── DOM refs ───
+const panels = {
+    upload: document.getElementById('panel-upload'),
+    review: document.getElementById('panel-review'),
+    download: document.getElementById('panel-download'),
+};
+const steps = [
+    document.getElementById('step1'),
+    document.getElementById('step2'),
+    document.getElementById('step3'),
+];
+const connectors = [
+    document.getElementById('conn1'),
+    document.getElementById('conn2'),
+];
+
+// ─── Step Navigation ───
+function goToStep(n) {
+    Object.values(panels).forEach(p => p.classList.add('hidden'));
+    steps.forEach((s, i) => {
+        s.classList.remove('active', 'done');
+        if (i < n - 1) s.classList.add('done');
+        if (i === n - 1) s.classList.add('active');
+    });
+    connectors.forEach((c, i) => {
+        c.classList.toggle('done', i < n - 1);
+    });
+    if (n === 1) panels.upload.classList.remove('hidden');
+    if (n === 2) { panels.review.classList.remove('hidden'); populateReview(); }
+    if (n === 3) panels.download.classList.remove('hidden');
+}
+
+// ─── Loading ───
+function showLoading(text, sub) {
+    document.getElementById('loading-text').textContent = text;
+    document.getElementById('loading-sub').textContent = sub || '';
+    document.getElementById('loading').classList.remove('hidden');
+}
+function hideLoading() {
+    document.getElementById('loading').classList.add('hidden');
+}
+
+// ─── Toast ───
+function showToast(msg, type = 'success') {
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = msg;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 4000);
+}
+
+// ─── File Upload ───
+const uploadArea = document.getElementById('upload-area');
+const fileInput = document.getElementById('file-input');
+const fileList = document.getElementById('file-list');
+const btnExtract = document.getElementById('btn-extract');
+
+uploadArea.addEventListener('click', () => fileInput.click());
+uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+uploadArea.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadArea.classList.remove('dragover');
+    handleFiles(e.dataTransfer.files);
+});
+fileInput.addEventListener('change', () => handleFiles(fileInput.files));
+
+function handleFiles(files) {
+    for (const f of files) {
+        const ext = f.name.split('.').pop().toLowerCase();
+        if (!['pdf', 'xlsx', 'xls', 'csv'].includes(ext)) continue;
+        uploadedFiles.push(f);
+    }
+    renderFileList();
+    btnExtract.disabled = uploadedFiles.length === 0;
+}
+
+function removeFile(idx) {
+    uploadedFiles.splice(idx, 1);
+    renderFileList();
+    btnExtract.disabled = uploadedFiles.length === 0;
+}
+
+function renderFileList() {
+    fileList.innerHTML = uploadedFiles.map((f, i) => {
+        const ext = f.name.split('.').pop().toLowerCase();
+        let badge = 'badge-pdf';
+        let label = 'PDF';
+        if (ext === 'xlsx' || ext === 'xls') { badge = 'badge-excel'; label = 'Excel'; }
+        const size = (f.size / 1024).toFixed(0) + ' KB';
+        return `<div class="file-item">
+            <span class="file-icon">${ext === 'pdf' ? '📄' : '📊'}</span>
+            <span class="file-name">${f.name}</span>
+            <span class="file-badge ${badge}">${label}</span>
+            <span class="file-meta">${size}</span>
+            <button class="btn btn-sm btn-danger" onclick="removeFile(${i})" title="Remove">✕</button>
+        </div>`;
+    }).join('');
+}
+
+// ─── Extract ───
+btnExtract.addEventListener('click', async () => {
+    const clientName = document.getElementById('client-name').value.trim();
+    if (!clientName) {
+        showToast('Please enter a client name', 'error');
+        document.getElementById('client-name').focus();
+        return;
+    }
+    if (uploadedFiles.length === 0) {
+        showToast('Please upload at least one file', 'error');
+        return;
+    }
+
+    showLoading('Creating session...', '');
+
+    try {
+        // 1. Create session
+        const sessRes = await fetch('/api/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ client_name: clientName }),
+        });
+        const sessData = await sessRes.json();
+        if (!sessRes.ok) throw new Error(sessData.error);
+        sessionId = sessData.session_id;
+
+        // 2. Upload files
+        showLoading('Uploading files...', `${uploadedFiles.length} file(s)`);
+        const formData = new FormData();
+        for (const f of uploadedFiles) {
+            formData.append('files', f);
+        }
+        const upRes = await fetch(`/api/upload/${sessionId}`, {
+            method: 'POST',
+            body: formData,
+        });
+        const upData = await upRes.json();
+        if (!upRes.ok) throw new Error(upData.error);
+
+        // 3. Extract
+        showLoading('Extracting insurance data with AI...', 'This may take 30-90 seconds depending on file complexity');
+        const exRes = await fetch(`/api/extract/${sessionId}`, { method: 'POST' });
+        const exData = await exRes.json();
+        if (!exRes.ok) throw new Error(exData.error);
+
+        extractedData = exData.data;
+
+        // Store effective date if provided
+        const effDate = document.getElementById('effective-date').value.trim();
+        if (effDate && extractedData.client_info) {
+            extractedData.client_info.effective_date = effDate;
+        }
+
+        hideLoading();
+        showToast('Extraction complete!');
+        goToStep(2);
+
+    } catch (err) {
+        hideLoading();
+        showToast(err.message || 'Extraction failed', 'error');
+    }
+});
+
+// ─── Review / Edit ───
+function populateReview() {
+    if (!extractedData) return;
+    const d = extractedData;
+    const ci = d.client_info || {};
+
+    // Client info
+    document.getElementById('edit-named-insured').value = ci.named_insured || '';
+    document.getElementById('edit-dba').value = ci.dba || '';
+    document.getElementById('edit-entity-type').value = ci.entity_type || '';
+    document.getElementById('edit-address').value = ci.address || '';
+    document.getElementById('edit-effective-date').value = ci.effective_date || '';
+
+    // Named insureds
+    renderNamedInsureds();
+
+    // Coverages
+    renderCoverages();
+
+    // Locations
+    renderLocations();
+
+    // JSON editor
+    document.getElementById('json-editor').value = JSON.stringify(d, null, 2);
+}
+
+function renderNamedInsureds() {
+    const list = document.getElementById('named-insureds-list');
+    const named = extractedData.named_insureds || [];
+    list.innerHTML = named.map((ni, i) => {
+        const name = typeof ni === 'string' ? ni : (ni.name || '');
+        const dba = typeof ni === 'object' ? (ni.dba || '') : '';
+        const rel = typeof ni === 'object' ? (ni.relationship || '') : '';
+        return `<div class="form-row-3" style="margin-bottom:0.5rem; align-items:end;">
+            <div class="form-group" style="margin-bottom:0">
+                <label>Name</label>
+                <input type="text" value="${escHtml(name)}" onchange="updateNI(${i},'name',this.value)">
+            </div>
+            <div class="form-group" style="margin-bottom:0">
+                <label>DBA</label>
+                <input type="text" value="${escHtml(dba)}" onchange="updateNI(${i},'dba',this.value)">
+            </div>
+            <div class="form-group" style="margin-bottom:0; display:flex; align-items:end; gap:0.5rem;">
+                <div style="flex:1">
+                    <label>Relationship</label>
+                    <input type="text" value="${escHtml(rel)}" onchange="updateNI(${i},'relationship',this.value)">
+                </div>
+                <button class="btn btn-sm btn-danger" onclick="removeNI(${i})" title="Remove">✕</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function updateNI(idx, field, value) {
+    if (!extractedData.named_insureds) return;
+    let ni = extractedData.named_insureds[idx];
+    if (typeof ni === 'string') {
+        ni = { name: ni, dba: '', relationship: '' };
+        extractedData.named_insureds[idx] = ni;
+    }
+    ni[field] = value;
+}
+
+function removeNI(idx) {
+    extractedData.named_insureds.splice(idx, 1);
+    renderNamedInsureds();
+}
+
+function addNamedInsured() {
+    if (!extractedData.named_insureds) extractedData.named_insureds = [];
+    extractedData.named_insureds.push({ name: '', dba: '', relationship: '' });
+    renderNamedInsureds();
+}
+
+// ─── Coverage Rendering ───
+const COV_DISPLAY = {
+    property: 'Property',
+    excess_property: 'Excess Property Layer 1',
+    excess_property_2: 'Excess Property Layer 2',
+    general_liability: 'General Liability',
+    umbrella: 'Umbrella / Excess Layer 1',
+    umbrella_layer_2: 'Excess Layer 2',
+    umbrella_layer_3: 'Excess Layer 3',
+    workers_compensation: 'Workers Compensation',
+    commercial_auto: 'Commercial Auto',
+    crime: 'Crime / Fidelity',
+    epli: 'EPLI',
+    cyber: 'Cyber Liability',
+    flood: 'Flood',
+    earthquake: 'Earthquake',
+};
+
+function renderCoverages() {
+    const container = document.getElementById('coverages-list');
+    const covs = extractedData.coverages || {};
+    container.innerHTML = '';
+
+    for (const [key, cov] of Object.entries(covs)) {
+        if (!cov || typeof cov !== 'object' || !cov.carrier) continue;
+        const displayName = COV_DISPLAY[key] || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        const card = document.createElement('div');
+        card.className = 'coverage-card';
+        card.innerHTML = `
+            <div class="coverage-header" onclick="toggleCoverage(this)">
+                <h4>
+                    ${displayName}
+                    <span class="carrier-badge">${escHtml(cov.carrier || '')}</span>
+                </h4>
+                <span style="font-size:0.8rem; color:var(--gray-500);">
+                    Premium: $${formatNum(cov.premium || 0)} | 
+                    Forms: ${(cov.forms_endorsements || []).length} |
+                    Limits: ${(cov.coverage_limits || []).length}
+                    ▾
+                </span>
+            </div>
+            <div class="coverage-body">
+                ${renderCoverageFields(key, cov)}
+            </div>
+        `;
+        container.appendChild(card);
+    }
+
+    if (container.innerHTML === '') {
+        container.innerHTML = '<p style="color:var(--gray-500); padding:1rem;">No coverages extracted. Check the JSON editor for raw data.</p>';
+    }
+}
+
+function renderCoverageFields(key, cov) {
+    let html = '';
+
+    // Basic fields
+    html += `<div class="form-row-3">
+        <div class="form-group">
+            <label>Carrier</label>
+            <input type="text" value="${escHtml(cov.carrier || '')}" onchange="updateCov('${key}','carrier',this.value)">
+        </div>
+        <div class="form-group">
+            <label>Premium</label>
+            <input type="number" value="${cov.premium || 0}" onchange="updateCov('${key}','premium',parseFloat(this.value)||0)">
+        </div>
+        <div class="form-group">
+            <label>Total Premium (incl. taxes/fees)</label>
+            <input type="number" value="${cov.total_premium || 0}" onchange="updateCov('${key}','total_premium',parseFloat(this.value)||0)">
+        </div>
+    </div>`;
+
+    html += `<div class="form-row-3">
+        <div class="form-group">
+            <label>Taxes &amp; Fees</label>
+            <input type="number" value="${cov.taxes_fees || 0}" onchange="updateCov('${key}','taxes_fees',parseFloat(this.value)||0)">
+        </div>
+        <div class="form-group">
+            <label>Policy Number</label>
+            <input type="text" value="${escHtml(cov.policy_number || '')}" onchange="updateCov('${key}','policy_number',this.value)">
+        </div>
+        <div class="form-group">
+            <label>Coinsurance</label>
+            <input type="text" value="${escHtml(cov.coinsurance || '')}" onchange="updateCov('${key}','coinsurance',this.value)">
+        </div>
+    </div>`;
+
+    // Layer description for excess property
+    if (key.startsWith('excess_property') || key.startsWith('umbrella')) {
+        html += `<div class="form-row">
+            <div class="form-group">
+                <label>Layer Description</label>
+                <input type="text" value="${escHtml(cov.layer_description || '')}" onchange="updateCov('${key}','layer_description',this.value)" placeholder="e.g., $10M xs $10M">
+            </div>
+        </div>`;
+    }
+
+    // Coverage Limits
+    const limits = cov.coverage_limits || [];
+    if (limits.length > 0) {
+        html += `<h3 class="section-toggle open" onclick="toggleSection(this)">Coverage Limits (${limits.length})</h3>`;
+        html += `<div class="section-content">`;
+        html += `<table class="data-table"><thead><tr><th>Description</th><th>Limit</th><th></th></tr></thead><tbody>`;
+        limits.forEach((lim, i) => {
+            const desc = typeof lim === 'string' ? lim : (lim.description || lim.type || '');
+            const val = typeof lim === 'string' ? '' : (lim.limit || lim.amount || '');
+            html += `<tr>
+                <td><input value="${escHtml(desc)}" onchange="updateCovLimit('${key}',${i},'description',this.value)"></td>
+                <td><input value="${escHtml(String(val))}" onchange="updateCovLimit('${key}',${i},'limit',this.value)"></td>
+                <td><button class="btn btn-sm btn-danger" onclick="removeCovLimit('${key}',${i})">✕</button></td>
+            </tr>`;
+        });
+        html += `</tbody></table>`;
+        html += `<button class="btn btn-sm btn-outline" onclick="addCovLimit('${key}')" style="margin-top:0.5rem">+ Add Limit</button>`;
+        html += `</div>`;
+    }
+
+    // Deductibles
+    const deductibles = cov.deductibles || [];
+    if (deductibles.length > 0) {
+        html += `<h3 class="section-toggle open" onclick="toggleSection(this)">Deductibles (${deductibles.length})</h3>`;
+        html += `<div class="section-content">`;
+        html += `<table class="data-table"><thead><tr><th>Type</th><th>Amount</th><th></th></tr></thead><tbody>`;
+        deductibles.forEach((ded, i) => {
+            const desc = typeof ded === 'string' ? ded : (ded.type || ded.description || '');
+            const val = typeof ded === 'string' ? '' : (ded.amount || '');
+            html += `<tr>
+                <td><input value="${escHtml(desc)}" onchange="updateCovDed('${key}',${i},'type',this.value)"></td>
+                <td><input value="${escHtml(String(val))}" onchange="updateCovDed('${key}',${i},'amount',this.value)"></td>
+                <td><button class="btn btn-sm btn-danger" onclick="removeCovDed('${key}',${i})">✕</button></td>
+            </tr>`;
+        });
+        html += `</tbody></table></div>`;
+    }
+
+    // Forms & Endorsements
+    const forms = cov.forms_endorsements || [];
+    html += `<h3 class="section-toggle" onclick="toggleSection(this)">Forms &amp; Endorsements (${forms.length})</h3>`;
+    html += `<div class="section-content" style="display:none">`;
+    html += `<div class="forms-list">`;
+    forms.forEach((f, i) => {
+        const num = typeof f === 'string' ? f : (f.form_number || '');
+        const desc = typeof f === 'string' ? '' : (f.description || '');
+        html += `<div class="form-entry">
+            <input value="${escHtml(num)}" onchange="updateForm('${key}',${i},'form_number',this.value)">
+            <input value="${escHtml(desc)}" onchange="updateForm('${key}',${i},'description',this.value)">
+            <button class="remove-btn" onclick="removeForm('${key}',${i})">✕</button>
+        </div>`;
+    });
+    html += `</div>`;
+    html += `<button class="btn btn-sm btn-outline" onclick="addForm('${key}')" style="margin-top:0.5rem">+ Add Form</button>`;
+    html += `</div>`;
+
+    // Additional Coverages / Sublimits
+    const addlCov = cov.additional_coverages || [];
+    if (addlCov.length > 0) {
+        html += `<h3 class="section-toggle" onclick="toggleSection(this)">Sublimits &amp; Extensions (${addlCov.length})</h3>`;
+        html += `<div class="section-content" style="display:none">`;
+        html += `<table class="data-table"><thead><tr><th>Coverage</th><th>Limit</th><th>Deductible</th><th></th></tr></thead><tbody>`;
+        addlCov.forEach((ac, i) => {
+            html += `<tr>
+                <td><input value="${escHtml(ac.coverage || ac.name || '')}" onchange="updateAddlCov('${key}',${i},'coverage',this.value)"></td>
+                <td><input value="${escHtml(String(ac.limit || ''))}" onchange="updateAddlCov('${key}',${i},'limit',this.value)"></td>
+                <td><input value="${escHtml(String(ac.deductible || ''))}" onchange="updateAddlCov('${key}',${i},'deductible',this.value)"></td>
+                <td><button class="btn btn-sm btn-danger" onclick="removeAddlCov('${key}',${i})">✕</button></td>
+            </tr>`;
+        });
+        html += `</tbody></table></div>`;
+    }
+
+    // Subjectivities
+    const subj = cov.subjectivities || [];
+    if (subj.length > 0) {
+        html += `<h3 class="section-toggle" onclick="toggleSection(this)">Subjectivities (${subj.length})</h3>`;
+        html += `<div class="section-content" style="display:none">`;
+        subj.forEach((s, i) => {
+            const text = typeof s === 'string' ? s : (s.description || s.text || JSON.stringify(s));
+            html += `<div style="display:flex; gap:0.5rem; margin-bottom:0.25rem;">
+                <input style="flex:1; padding:0.3rem 0.5rem; border:1px solid var(--gray-300); border-radius:4px; font-size:0.85rem;" 
+                       value="${escHtml(text)}" onchange="updateSubj('${key}',${i},this.value)">
+                <button class="btn btn-sm btn-danger" onclick="removeSubj('${key}',${i})">✕</button>
+            </div>`;
+        });
+        html += `</div>`;
+    }
+
+    return html;
+}
+
+// ─── Coverage Edit Functions ───
+function updateCov(key, field, value) {
+    if (extractedData.coverages && extractedData.coverages[key]) {
+        extractedData.coverages[key][field] = value;
+    }
+}
+
+function updateCovLimit(key, idx, field, value) {
+    const lim = extractedData.coverages[key].coverage_limits[idx];
+    if (typeof lim === 'string') {
+        extractedData.coverages[key].coverage_limits[idx] = { description: value, limit: '' };
+    } else {
+        lim[field] = value;
+    }
+}
+function removeCovLimit(key, idx) {
+    extractedData.coverages[key].coverage_limits.splice(idx, 1);
+    renderCoverages();
+}
+function addCovLimit(key) {
+    if (!extractedData.coverages[key].coverage_limits) extractedData.coverages[key].coverage_limits = [];
+    extractedData.coverages[key].coverage_limits.push({ description: '', limit: '' });
+    renderCoverages();
+}
+
+function updateCovDed(key, idx, field, value) {
+    const ded = extractedData.coverages[key].deductibles[idx];
+    if (typeof ded === 'string') {
+        extractedData.coverages[key].deductibles[idx] = { type: value, amount: '' };
+    } else {
+        ded[field] = value;
+    }
+}
+function removeCovDed(key, idx) {
+    extractedData.coverages[key].deductibles.splice(idx, 1);
+    renderCoverages();
+}
+
+function updateForm(key, idx, field, value) {
+    const f = extractedData.coverages[key].forms_endorsements[idx];
+    if (typeof f === 'string') {
+        extractedData.coverages[key].forms_endorsements[idx] = { form_number: value, description: '' };
+    } else {
+        f[field] = value;
+    }
+}
+function removeForm(key, idx) {
+    extractedData.coverages[key].forms_endorsements.splice(idx, 1);
+    renderCoverages();
+}
+function addForm(key) {
+    if (!extractedData.coverages[key].forms_endorsements) extractedData.coverages[key].forms_endorsements = [];
+    extractedData.coverages[key].forms_endorsements.push({ form_number: '', description: '' });
+    renderCoverages();
+}
+
+function updateAddlCov(key, idx, field, value) {
+    extractedData.coverages[key].additional_coverages[idx][field] = value;
+}
+function removeAddlCov(key, idx) {
+    extractedData.coverages[key].additional_coverages.splice(idx, 1);
+    renderCoverages();
+}
+
+function updateSubj(key, idx, value) {
+    extractedData.coverages[key].subjectivities[idx] = value;
+}
+function removeSubj(key, idx) {
+    extractedData.coverages[key].subjectivities.splice(idx, 1);
+    renderCoverages();
+}
+
+// ─── Locations ───
+function renderLocations() {
+    const locs = extractedData.locations || [];
+    document.getElementById('loc-count').textContent = locs.length;
+    const tbody = document.getElementById('locations-body');
+    tbody.innerHTML = locs.map((loc, i) => `<tr>
+        <td>${i + 1}</td>
+        <td><input value="${escHtml(loc.name || '')}" onchange="updateLoc(${i},'name',this.value)"></td>
+        <td><input value="${escHtml(loc.address || '')}" onchange="updateLoc(${i},'address',this.value)"></td>
+        <td><input value="${escHtml(loc.city || '')}" onchange="updateLoc(${i},'city',this.value)" style="width:100px"></td>
+        <td><input value="${escHtml(loc.state || '')}" onchange="updateLoc(${i},'state',this.value)" style="width:60px"></td>
+        <td><input value="${formatNum(loc.tiv || 0)}" onchange="updateLoc(${i},'tiv',parseFloat(this.value.replace(/,/g,''))||0)" style="width:120px"></td>
+    </tr>`).join('');
+}
+
+function updateLoc(idx, field, value) {
+    if (extractedData.locations && extractedData.locations[idx]) {
+        extractedData.locations[idx][field] = value;
+    }
+}
+
+// ─── Toggle ───
+function toggleCoverage(header) {
+    const body = header.nextElementSibling;
+    body.classList.toggle('open');
+}
+
+function toggleSection(el) {
+    el.classList.toggle('open');
+    const content = el.nextElementSibling;
+    if (content) {
+        content.style.display = content.style.display === 'none' ? 'block' : 'none';
+    }
+}
+
+// ─── Tabs ───
+document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById(tab.dataset.tab).classList.add('active');
+    });
+});
+
+// ─── JSON Editor ───
+function applyJsonEdits() {
+    try {
+        const json = document.getElementById('json-editor').value;
+        extractedData = JSON.parse(json);
+        populateReview();
+        showToast('JSON changes applied');
+    } catch (e) {
+        showToast('Invalid JSON: ' + e.message, 'error');
+    }
+}
+
+function formatJson() {
+    try {
+        const json = document.getElementById('json-editor').value;
+        const parsed = JSON.parse(json);
+        document.getElementById('json-editor').value = JSON.stringify(parsed, null, 2);
+    } catch (e) {
+        showToast('Invalid JSON: ' + e.message, 'error');
+    }
+}
+
+// ─── Generate ───
+document.getElementById('btn-generate').addEventListener('click', async () => {
+    if (!extractedData || !sessionId) {
+        showToast('No data available', 'error');
+        return;
+    }
+
+    // Sync visual editor fields back to data
+    syncVisualToData();
+
+    showLoading('Saving your edits...', '');
+
+    try {
+        // Update data on server
+        const upRes = await fetch(`/api/update/${sessionId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ data: extractedData }),
+        });
+        if (!upRes.ok) {
+            const err = await upRes.json();
+            throw new Error(err.error);
+        }
+
+        // Generate
+        showLoading('Generating proposal document...', 'Building DOCX with HUB branding');
+        const genRes = await fetch(`/api/generate/${sessionId}`, { method: 'POST' });
+        const genData = await genRes.json();
+        if (!genRes.ok) throw new Error(genData.error);
+
+        hideLoading();
+        document.getElementById('download-filename').textContent = genData.filename;
+        document.getElementById('btn-download').href = genData.download_url;
+        showToast('Proposal generated!');
+        goToStep(3);
+
+    } catch (err) {
+        hideLoading();
+        showToast(err.message || 'Generation failed', 'error');
+    }
+});
+
+function syncVisualToData() {
+    // Sync client info from visual editor
+    if (!extractedData.client_info) extractedData.client_info = {};
+    extractedData.client_info.named_insured = document.getElementById('edit-named-insured').value;
+    extractedData.client_info.dba = document.getElementById('edit-dba').value;
+    extractedData.client_info.entity_type = document.getElementById('edit-entity-type').value;
+    extractedData.client_info.address = document.getElementById('edit-address').value;
+    extractedData.client_info.effective_date = document.getElementById('edit-effective-date').value;
+
+    // Update JSON editor
+    document.getElementById('json-editor').value = JSON.stringify(extractedData, null, 2);
+}
+
+// ─── Start New ───
+function startNew() {
+    sessionId = null;
+    extractedData = null;
+    uploadedFiles = [];
+    document.getElementById('client-name').value = '';
+    document.getElementById('effective-date').value = '';
+    fileList.innerHTML = '';
+    btnExtract.disabled = true;
+    goToStep(1);
+}
+
+// ─── Helpers ───
+function escHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML.replace(/"/g, '&quot;');
+}
+
+function formatNum(n) {
+    if (typeof n === 'string') n = parseFloat(n.replace(/[,$]/g, '')) || 0;
+    return n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+</script>
+
+</body>
+</html>
