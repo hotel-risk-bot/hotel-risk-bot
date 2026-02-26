@@ -1659,6 +1659,11 @@ def generate_locations(doc, data):
                     liability_addr_keys.add(resolved_key)
                     break
     
+    # NOTE: Blanket liability fallback removed. Multi-pass extraction (Pass 3) in
+    # proposal_extractor.py now handles focused address extraction for GL when
+    # designated_premises is empty. Liability checkmarks are only applied to
+    # locations explicitly confirmed on the liability quote per Stefan's rule.
+    
     # --- Build master location list ---
     # Helper: fuzzy address matching (must be defined before _is_on_liability)
     def _fuzzy_addr_match(addr1, addr2):

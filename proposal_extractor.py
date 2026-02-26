@@ -157,9 +157,14 @@ def _score_page(page_text: str) -> float:
     ])
     # Also detect if page has many form numbers (e.g., CP 00 10, CG 00 01, etc.)
     form_numbers = re.findall(r'[A-Z]{2,4}\s*\d{2,4}\s+\d{2,4}', page_text)
-    if len(form_numbers) >= 5:
+    # Also detect NASC/NXLL style form numbers (e.g., NASC 0002 08 09, NXLL 110)
+    nasc_forms = re.findall(r'(?:NASC|NXLL|CSXC|CSIP)\s*\d{3,4}', page_text)
+    all_form_count = len(form_numbers) + len(nasc_forms)
+    if all_form_count >= 3:
         is_forms_schedule = True
-        score += 5.0  # Boost pages with many form numbers
+        score += 10.0  # High boost for pages with form numbers - these are critical
+    elif all_form_count >= 1:
+        score += 3.0  # Moderate boost for pages with at least one form number
 
     # Negative signals: boilerplate forms (but NOT forms schedule pages)
     if not is_forms_schedule:
@@ -179,7 +184,7 @@ def _score_page(page_text: str) -> float:
     return score
 
 
-def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 120000) -> str:
+def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 200000) -> str:
     """
     Smart PDF text extraction that prioritizes quote summary pages
     over forms/endorsements boilerplate.
@@ -755,7 +760,7 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
     combined_text = "\n".join(all_text)
 
     # Final safety truncation (should rarely be needed with smart extraction)
-    max_chars = 120000
+    max_chars = 200000
     if len(combined_text) > max_chars:
         logger.warning(f"Combined text truncated from {len(combined_text)} to {max_chars} chars")
         combined_text = combined_text[:max_chars]
@@ -902,6 +907,30 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
         logger.error(f"Raw response (first 500 chars): {result_text[:500] if 'result_text' in dir() else 'N/A'}")
         return {"error": f"Failed to parse extraction results: {e}"}
     except Exception as e:
+        error_str = str(e)
+        # Retry on rate limit errors (429)
+        if "429" in error_str or "rate_limit" in error_str.lower():
+            logger.warning(f"Rate limit hit, waiting 60 seconds and retrying...")
+            import asyncio
+            await asyncio.sleep(60)
+            try:
+                response = _get_openai_client().chat.completions.create(
+                    model=GPT_MODEL,
+                    messages=[
+                        {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
+                        {"role": "user", "content": EXTRACTION_USER_PROMPT.format(document_text=combined_text)}
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.1,
+                    max_tokens=32000
+                )
+                result_text = response.choices[0].message.content
+                data = json.loads(result_text)
+                logger.info(f"Retry successful. Coverages found: {list(data.get('coverages', {}).keys())}")
+                return data
+            except Exception as retry_e:
+                logger.error(f"Retry also failed: {retry_e}")
+                return {"error": f"AI extraction failed after retry: {retry_e}"}
         logger.error(f"GPT extraction failed: {e}")
         return {"error": f"AI extraction failed: {e}"}
 
@@ -1147,7 +1176,7 @@ class ProposalExtractor:
         combined_text = "\n".join(all_text_parts)
 
         # Safety truncation
-        max_chars = 120000
+        max_chars = 200000
         if len(combined_text) > max_chars:
             logger.warning(
                 f"Document text truncated from {len(combined_text)} to {max_chars} chars"
@@ -1218,6 +1247,16 @@ class ProposalExtractor:
                     if isinstance(cov, dict):
                         logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, premium={cov.get('premium', 0)}, total={cov.get('total_premium', 0)}")
 
+            # ===== MULTI-PASS EXTRACTION =====
+            # Pass 2: Focused forms & endorsements extraction for coverages missing them
+            data = self._pass2_forms_extraction(data, combined_text)
+            
+            # Pass 3: Focused address extraction for GL missing designated_premises
+            data = self._pass3_address_extraction(data, combined_text)
+            
+            # Pass 4: Focused sublimits extraction for property missing additional_coverages
+            data = self._pass4_sublimits_extraction(data, combined_text)
+
             return data
 
         except json.JSONDecodeError as e:
@@ -1226,6 +1265,236 @@ class ProposalExtractor:
         except Exception as e:
             logger.error(f"GPT extraction failed: {e}")
             return {"error": f"AI extraction failed: {e}"}
+
+    def _pass2_forms_extraction(self, data: dict, combined_text: str) -> dict:
+        """Pass 2: Focused extraction of forms & endorsements for coverages missing them."""
+        covs = data.get("coverages", {})
+        if not isinstance(covs, dict):
+            return data
+        
+        # Check which coverages need forms extraction
+        needs_forms = []
+        for key in ["property", "general_liability", "umbrella", "umbrella_layer_2", "umbrella_layer_3", "crime"]:
+            cov = covs.get(key, {})
+            if cov and cov.get("carrier") and not cov.get("forms_endorsements"):
+                needs_forms.append(key)
+        
+        if not needs_forms:
+            logger.info("Pass 2 (forms): All coverages have forms, skipping")
+            return data
+        
+        logger.info(f"Pass 2 (forms): Extracting forms for {needs_forms}")
+        
+        coverage_display = {
+            "property": "Property", "general_liability": "General Liability",
+            "umbrella": "Umbrella/Excess Layer 1", "umbrella_layer_2": "Excess Layer 2",
+            "umbrella_layer_3": "Excess Layer 3", "crime": "Crime/Fidelity"
+        }
+        
+        for cov_key in needs_forms:
+            cov = covs[cov_key]
+            carrier = cov.get("carrier", "unknown")
+            display = coverage_display.get(cov_key, cov_key)
+            
+            prompt = f"""Extract EVERY form number and endorsement from this insurance document for the {display} coverage issued by {carrier}.
+
+Rules:
+- Extract EVERY form/endorsement number with its full description and edition date
+- Format: {{"form_number": "XX 00 00 MM/YY", "description": "Full description"}}
+- Include ALL forms from the forms schedule, endorsement schedule, or forms list
+- Do NOT skip any forms even if the list is very long
+- Include standard forms (e.g., CP 00 10, CG 00 01) AND manuscript/carrier-specific forms
+- For NASC/NXLL/CSXC forms, include the full number and description
+
+Return a JSON object with exactly one key:
+{{"forms_endorsements": [{{"form_number": "...", "description": "..."}}]}}
+
+DOCUMENT TEXT:
+{combined_text}"""
+            
+            try:
+                response = _get_openai_client().chat.completions.create(
+                    model=GPT_MODEL,
+                    messages=[
+                        {"role": "system", "content": "You are an expert insurance forms extraction assistant. Extract every form number and endorsement exactly as written."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.0,
+                    max_tokens=16000
+                )
+                result = json.loads(response.choices[0].message.content)
+                forms = result.get("forms_endorsements", [])
+                if forms and isinstance(forms, list) and len(forms) > 0:
+                    cov["forms_endorsements"] = forms
+                    logger.info(f"Pass 2: Extracted {len(forms)} forms for {cov_key}")
+                else:
+                    logger.warning(f"Pass 2: No forms found for {cov_key} in focused extraction")
+            except Exception as e:
+                logger.error(f"Pass 2 forms extraction failed for {cov_key}: {e}")
+        
+        return data
+
+    def _pass3_address_extraction(self, data: dict, combined_text: str) -> dict:
+        """Pass 3: Focused extraction of covered addresses for GL."""
+        covs = data.get("coverages", {})
+        gl = covs.get("general_liability", {})
+        
+        if not gl or not gl.get("carrier"):
+            logger.info("Pass 3 (addresses): No GL coverage found, skipping")
+            return data
+        
+        # Check if designated_premises is already populated
+        dp = gl.get("designated_premises", [])
+        if dp and isinstance(dp, list) and len(dp) > 0:
+            logger.info(f"Pass 3 (addresses): GL already has {len(dp)} designated premises, skipping")
+            return data
+        
+        logger.info("Pass 3 (addresses): GL missing designated_premises, running focused extraction")
+        
+        prompt = f"""From this General Liability insurance document, extract ALL physical street addresses that represent covered locations.
+
+Look for addresses in:
+- CG 21 44 or NXLL 110 (Limitation of Coverage to Designated Premises) form
+- Schedule of Hazards / Schedule of Locations
+- Any numbered list of addresses (e.g., "1) 4285 Highway 51, LaPlace, LA 70068")
+- Any section listing covered premises, designated locations, or insured locations
+- The declarations page showing location addresses
+
+Rules:
+- Extract the COMPLETE street address including street number, street name, city, state, and zip
+- Include ALL addresses, even if they span multiple pages
+- Do NOT include PO Boxes or mailing addresses — only physical location addresses
+- Each address should be a separate entry
+
+Return a JSON object:
+{{"designated_premises": ["Full address 1", "Full address 2", ...],
+  "schedule_of_classes": [{{"location": "Loc 1", "address": "Street", "city": "City", "state": "ST", "brand_dba": "Hotel name if shown", "classification": "Hotels/Motels", "class_code": "XXXXX", "exposure_basis": "Gross Sales", "exposure": "$X", "premium": "$X"}}]}}
+
+DOCUMENT TEXT:
+{combined_text}"""
+        
+        try:
+            response = _get_openai_client().chat.completions.create(
+                model=GPT_MODEL,
+                messages=[
+                    {"role": "system", "content": "You are an expert at finding physical addresses in insurance documents. Extract every covered location address."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.0,
+                max_tokens=8000
+            )
+            result = json.loads(response.choices[0].message.content)
+            
+            addresses = result.get("designated_premises", [])
+            if addresses and isinstance(addresses, list) and len(addresses) > 0:
+                gl["designated_premises"] = addresses
+                logger.info(f"Pass 3: Extracted {len(addresses)} designated premises for GL")
+            
+            # Also update schedule_of_classes if it was empty or incomplete
+            soc = result.get("schedule_of_classes", [])
+            existing_soc = gl.get("schedule_of_classes", [])
+            if soc and isinstance(soc, list) and len(soc) > len(existing_soc):
+                gl["schedule_of_classes"] = soc
+                logger.info(f"Pass 3: Updated schedule_of_classes from {len(existing_soc)} to {len(soc)} entries")
+            
+        except Exception as e:
+            logger.error(f"Pass 3 address extraction failed: {e}")
+        
+        return data
+
+    def _pass4_sublimits_extraction(self, data: dict, combined_text: str) -> dict:
+        """Pass 4: Focused extraction of property sublimits/extensions."""
+        covs = data.get("coverages", {})
+        prop = covs.get("property", {})
+        
+        if not prop or not prop.get("carrier"):
+            logger.info("Pass 4 (sublimits): No property coverage found, skipping")
+            return data
+        
+        # Check if additional_coverages is already populated
+        ac = prop.get("additional_coverages", [])
+        if ac and isinstance(ac, list) and len(ac) >= 5:
+            logger.info(f"Pass 4 (sublimits): Property already has {len(ac)} sublimits, skipping")
+            return data
+        
+        logger.info(f"Pass 4 (sublimits): Property has only {len(ac) if ac else 0} sublimits, running focused extraction")
+        
+        prompt = f"""From this Property insurance document, extract ALL sublimits of liability, extensions of coverage, and additional coverages.
+
+Look for sections titled:
+- Sublimits of Liability
+- Extensions of Coverage
+- Additional Coverages
+- Coverage Extensions
+- Supplemental Coverages
+- Any table or list showing coverage descriptions with dollar limits
+
+Common property sublimits to look for:
+- Flood (per occurrence and aggregate)
+- Earthquake
+- Equipment Breakdown
+- Ordinance or Law (Coverage A, B, C)
+- Spoilage
+- Business Income Extended Period (days)
+- Sign Coverage
+- Accounts Receivable
+- Valuable Papers
+- Fine Arts
+- Newly Acquired Property
+- Transit
+- Debris Removal
+- Pollutant Cleanup
+- Utility Services (Direct Damage and Time Element)
+- Green Building
+- Sewer/Drain Backup
+- Water Damage
+- Mold/Fungi
+- Electronic Data
+- Brands and Labels
+- Civil/Military Authority
+- Ingress/Egress
+- Service Interruption
+- Contingent Business Income
+
+Rules:
+- Extract EVERY sublimit with its dollar amount or status (Included, Excluded, NOT COVERED)
+- Include deductibles for each sublimit if shown
+- If a sublimit has different per-occurrence and aggregate limits, include both
+- Mark excluded coverages as "Excluded" or "NOT COVERED"
+- Include the ACTUAL dollar amounts, not just "Included"
+
+Return a JSON object:
+{{"additional_coverages": [{{"description": "Coverage name", "limit": "$X or Excluded", "deductible": "$X or N/A"}}]}}
+
+DOCUMENT TEXT:
+{combined_text}"""
+        
+        try:
+            response = _get_openai_client().chat.completions.create(
+                model=GPT_MODEL,
+                messages=[
+                    {"role": "system", "content": "You are an expert at extracting property insurance sublimits and extensions of coverage. Extract every sublimit with its exact dollar amount."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.0,
+                max_tokens=8000
+            )
+            result = json.loads(response.choices[0].message.content)
+            
+            sublimits = result.get("additional_coverages", [])
+            if sublimits and isinstance(sublimits, list) and len(sublimits) > len(ac or []):
+                prop["additional_coverages"] = sublimits
+                logger.info(f"Pass 4: Extracted {len(sublimits)} sublimits for property (was {len(ac or [])}")
+            else:
+                logger.info(f"Pass 4: Focused extraction found {len(sublimits) if sublimits else 0} sublimits (not better than existing {len(ac or [])})")
+            
+        except Exception as e:
+            logger.error(f"Pass 4 sublimits extraction failed: {e}")
+        
+        return data
 
     def apply_adjustments(self, data: dict, instructions: str) -> dict:
         """
