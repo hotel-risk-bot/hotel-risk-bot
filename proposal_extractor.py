@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # OpenAI client (lazy initialization)
 _client = None
-GPT_MODEL = "gpt-4.1-mini"
+GPT_MODEL = "gpt-4.1"
 
 
 def _get_openai_client():
