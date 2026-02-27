@@ -488,7 +488,7 @@ def generate_doc(session_id):
     try:
         client_name = session["client_name"].replace(" ", "_").replace("/", "-")
         timestamp = datetime.now().strftime("%Y%m%d")
-        docx_filename = f"HUB_Proposal_{client_name}_{timestamp}.docx"
+        docx_filename = f"Proposal_{client_name}_{timestamp}.docx"
         docx_path = os.path.join(session["session_dir"], docx_filename)
 
         # Map web UI expiring premiums into the format the generator expects
