@@ -158,7 +158,7 @@ SERVICE_TEAM = [
         "role": "Account Executive",
         "name": "Maureen Harvey, CIC, CRM",
         "phone": "O: 407-893-3830\nF: 407-831-3063",
-        "email": ""
+        "email": "maureen.harvey@hubinternational.com"
     },
     {
         "role": "Senior Franchise Claims Advocate",
@@ -758,6 +758,7 @@ def generate_premium_summary(doc, data):
         "workplace_violence": "Workplace Violence",
         "garage_keepers": "Garage Keepers",
         "enviro_pack": "Enviro Pack",
+        "wind_deductible_buydown": "Wind Deductible Buy Down",
     }
     
     if has_expiring:
@@ -896,8 +897,10 @@ def generate_premium_summary(doc, data):
                 pct_str
             ])
             
-            total_expiring += exp if exp else 0
-            total_proposed += proposed
+            # Exclude terrorism/TRIA from totals
+            if key != "terrorism":
+                total_expiring += exp if exp else 0
+                total_proposed += proposed
         
         else:
             # === SIMPLE MODE (no expiring premiums) ===
@@ -920,8 +923,10 @@ def generate_premium_summary(doc, data):
                 fmt_currency(taxes_fees) if taxes_fees else "\u2014",
                 fmt_currency(total_prem) if total_prem else "\u2014",
             ])
-            total_proposed += total_prem
-            total_taxes_fees += taxes_fees
+            # Exclude terrorism/TRIA from totals
+            if key != "terrorism":
+                total_proposed += total_prem
+                total_taxes_fees += taxes_fees
     
     # Total row
     if has_expiring:
@@ -1098,6 +1103,7 @@ def generate_subjectivities(doc, data):
         "workplace_violence": "Workplace Violence",
         "garage_keepers": "Garage Keepers",
         "enviro_pack": "Enviro Pack",
+        "wind_deductible_buydown": "Wind Deductible Buy Down",
     }
     
     has_subjectivities = False
@@ -1297,9 +1303,16 @@ def generate_information_summary(doc, data):
             rows.append(["Total Sales / Exposure", gl_cov["total_sales"]])
     
     # Add number of locations with property/liability breakdown
+    # Count UNIQUE addresses (1 address with 4 buildings = 1 location)
     sov_data = data.get("sov_data")
     sov_locs = sov_data.get("locations", []) if sov_data else []
-    prop_loc_count = len(sov_locs) if sov_locs else 0
+    _prop_unique_addrs = set()
+    if sov_locs:
+        for loc in sov_locs:
+            addr = _normalize_addr(loc.get("address", ""))
+            if addr:
+                _prop_unique_addrs.add(addr)
+    prop_loc_count = len(_prop_unique_addrs) if _prop_unique_addrs else 0
     if not prop_loc_count and coverages.get("property"):
         prop_loc_count = int(coverages["property"].get("num_locations", 0) or 0)
     
@@ -1693,7 +1706,8 @@ def generate_locations(doc, data):
     def _fuzzy_addr_match(addr1, addr2):
         """Check if two normalized addresses refer to the same location.
         Handles cases like '4288 HWY 51' vs '4285 HWY 51' by comparing
-        the street name portion after stripping house numbers."""
+        the street name portion after stripping house numbers.
+        Also handles 'OCEAN BEACH BLVD' vs 'OCEAN BEACH' word-level matching."""
         if not addr1 or not addr2:
             return False
         if addr1 == addr2:
@@ -1708,9 +1722,23 @@ def generate_locations(doc, data):
             street2 = num2.group(2)
             house1 = int(num1.group(1))
             house2 = int(num2.group(1))
-            # Same street name and house numbers within 20 of each other
-            if street1 == street2 and abs(house1 - house2) <= 20:
-                return True
+            # Same house number (or within 20) and street names match
+            if abs(house1 - house2) <= 20:
+                if street1 == street2:
+                    return True
+                # Word-level match: one street name contains all words of the other
+                # e.g., 'OCEAN BEACH BLVD' vs 'OCEAN BEACH' or 'N OCEAN BLVD' vs 'OCEAN BLVD'
+                words1 = set(street1.split())
+                words2 = set(street2.split())
+                # Remove common suffixes for comparison
+                _suffixes = {'ST', 'AVE', 'BLVD', 'DR', 'RD', 'LN', 'CT', 'PL', 'CIR', 'HWY', 'PKWY', 'TER', 'WAY'}
+                core1 = words1 - _suffixes
+                core2 = words2 - _suffixes
+                if core1 and core2 and (core1.issubset(core2) or core2.issubset(core1)):
+                    return True
+                # Also check if one is a substring of the other at word level
+                if street1 in street2 or street2 in street1:
+                    return True
         return False
     
     # Helper: check if an addr_key matches any key in liability_addr_keys using fuzzy matching
@@ -2827,6 +2855,7 @@ def generate_carrier_rating(doc, data):
         "workplace_violence": "Workplace Violence",
         "garage_keepers": "Garage Keepers",
         "enviro_pack": "Enviro Pack",
+        "wind_deductible_buydown": "Wind Deductible Buy Down",
     }
     
     for key, display_name in coverage_names.items():
@@ -3162,6 +3191,20 @@ def generate_proposal(data: dict, output_path: str) -> str:
         generate_coverage_section(doc, data, "crime", "Crime Coverage")
     if "inland_marine" in coverages:
         generate_coverage_section(doc, data, "inland_marine", "Inland Marine Coverage")
+    if "equipment_breakdown" in coverages:
+        generate_coverage_section(doc, data, "equipment_breakdown", "Equipment Breakdown Coverage")
+    if "liquor_liability" in coverages:
+        generate_coverage_section(doc, data, "liquor_liability", "Liquor Liability Coverage")
+    if "innkeepers_liability" in coverages:
+        generate_coverage_section(doc, data, "innkeepers_liability", "Innkeepers Liability Coverage")
+    if "environmental" in coverages:
+        generate_coverage_section(doc, data, "environmental", "Environmental / Pollution Coverage")
+    if "workplace_violence" in coverages:
+        generate_coverage_section(doc, data, "workplace_violence", "Workplace Violence Coverage")
+    if "garage_keepers" in coverages:
+        generate_coverage_section(doc, data, "garage_keepers", "Garage Keepers Coverage")
+    if "wind_deductible_buydown" in coverages:
+        generate_coverage_section(doc, data, "wind_deductible_buydown", "Wind Deductible Buy Down Coverage")
     
     # Part 3: Coverage Recommendations (before signature pages)
     generate_coverage_recommendations(doc)
