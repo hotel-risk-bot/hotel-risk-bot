@@ -743,6 +743,7 @@ def generate_premium_summary(doc, data):
         "umbrella_layer_2": "2nd Excess Layer",
         "umbrella_layer_3": "3rd Excess Layer",
         "workers_comp": "Workers Compensation",
+        "workers_compensation": "Workers Compensation",
         "commercial_auto": "Commercial Auto",
         "flood": "Flood",
         "epli": "EPLI",
@@ -750,7 +751,13 @@ def generate_premium_summary(doc, data):
         "terrorism": "Terrorism / TRIA",
         "crime": "Crime",
         "inland_marine": "Inland Marine",
-        "equipment_breakdown": "Equipment Breakdown"
+        "equipment_breakdown": "Equipment Breakdown",
+        "liquor_liability": "Liquor Liability",
+        "innkeepers_liability": "Innkeepers Liability",
+        "environmental": "Environmental / Pollution",
+        "workplace_violence": "Workplace Violence",
+        "garage_keepers": "Garage Keepers",
+        "enviro_pack": "Enviro Pack",
     }
     
     if has_expiring:
@@ -1076,13 +1083,21 @@ def generate_subjectivities(doc, data):
         "umbrella_layer_2": "2nd Excess Layer",
         "umbrella_layer_3": "3rd Excess Layer",
         "workers_comp": "Workers Compensation",
+        "workers_compensation": "Workers Compensation",
         "commercial_auto": "Commercial Auto",
         "terrorism": "Terrorism / TRIA",
         "cyber": "Cyber Liability",
         "epli": "Employment Practices Liability",
         "crime": "Crime",
         "flood": "Flood",
-        "inland_marine": "Inland Marine"
+        "inland_marine": "Inland Marine",
+        "equipment_breakdown": "Equipment Breakdown",
+        "liquor_liability": "Liquor Liability",
+        "innkeepers_liability": "Innkeepers Liability",
+        "environmental": "Environmental / Pollution",
+        "workplace_violence": "Workplace Violence",
+        "garage_keepers": "Garage Keepers",
+        "enviro_pack": "Enviro Pack",
     }
     
     has_subjectivities = False
@@ -1745,6 +1760,18 @@ def generate_locations(doc, data):
         return False
     
     # First: SOV locations (property locations)
+    # Determine fallback corporate name from SOV summary or client_info
+    _fallback_corp = ""
+    if sov_data and sov_data.get("summary", {}).get("named_insured"):
+        _ni = sov_data["summary"]["named_insured"]
+        # If named_insured contains " - ", split into corp and DBA
+        if " - " in _ni:
+            _fallback_corp = _ni.split(" - ")[0].strip()
+        else:
+            _fallback_corp = _ni.strip()
+    if not _fallback_corp:
+        _fallback_corp = (ci.get("client_name", "") or "").strip()
+    
     # SKIP vacant land — it belongs on property SOV but NOT on the Schedule of Locations
     if sov_data and sov_data.get("locations"):
         for loc in sov_data["locations"]:
@@ -1764,6 +1791,8 @@ def generate_locations(doc, data):
                        loc.get("state", "").strip().upper())
             # Build "Corporate Name - DBA" format for property name
             corporate_name = (loc.get("corporate_name", "") or "").strip()
+            if not corporate_name:
+                corporate_name = _fallback_corp
             dba = (loc.get("dba", "") or loc.get("hotel_flag", "") or "").strip()
             if corporate_name and dba:
                 name = f"{corporate_name} - {dba}"
@@ -2496,47 +2525,9 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                            header_size=9, body_size=9,
                            header_alignments={0: L, 1: L})
     
-    # GL Sales / Exposure Summary (always include when GL has schedule_of_classes)
-    if coverage_key == "general_liability":
-        gl_classes_for_exposure = cov.get("schedule_of_classes", [])
-        if gl_classes_for_exposure:
-            add_subsection_header(doc, "Sales / Exposure")
-            add_formatted_paragraph(doc,
-                "The following exposures are as presented on the carrier quote. "
-                "Final earned premium will be determined at audit based on actual exposures.",
-                size=9, italic=True, color=CHARCOAL, space_after=4)
-            exp_headers = ["Code", "Classification", "Exposure Basis", "Gross Sales"]
-            exp_rows = []
-            total_sales = 0
-            for c in gl_classes_for_exposure:
-                if not isinstance(c, dict):
-                    continue
-                code = c.get("class_code", c.get("code", ""))
-                classification = c.get("classification", "")
-                basis = c.get("exposure_basis", "")
-                exposure = c.get("exposure", 0)
-                # Try to parse exposure as number for totaling
-                try:
-                    exp_num = float(str(exposure).replace(",", "").replace("$", ""))
-                except (ValueError, TypeError):
-                    exp_num = 0
-                total_sales += exp_num
-                exp_str = fmt_currency(exp_num) if exp_num else str(exposure)
-                exp_rows.append([str(code), classification, basis, exp_str])
-            # Add total row
-            exp_rows.append(["", "TOTAL", "", fmt_currency(total_sales)])
-            exp_table = create_styled_table(doc, exp_headers, exp_rows,
-                              col_widths=[0.8, 3.0, 1.5, 1.7],
-                              header_size=9, body_size=9,
-                              col_alignments={3: WD_ALIGN_PARAGRAPH.RIGHT})
-            # Bold the total row
-            last_row = exp_table.rows[-1]
-            for cell in last_row.cells:
-                set_cell_shading(cell, ELECTRIC_BLUE_HEX)
-                for p in cell.paragraphs:
-                    for run in p.runs:
-                        run.font.bold = True
-                        run.font.color.rgb = WHITE
+    # NOTE: Sales / Exposure section removed — the Exposures table above already
+    # renders the full schedule_of_classes data including addresses, classifications,
+    # codes, rates, and exposure amounts. Having both was redundant.
     
     # Covered Locations (GL only) - backup list of liability locations from GL quote
     if coverage_key == "general_liability":
@@ -2821,13 +2812,21 @@ def generate_carrier_rating(doc, data):
         "umbrella_layer_2": "2nd Excess Layer",
         "umbrella_layer_3": "3rd Excess Layer",
         "workers_comp": "Workers Compensation",
+        "workers_compensation": "Workers Compensation",
         "commercial_auto": "Commercial Auto",
         "terrorism": "Terrorism / TRIA",
         "cyber": "Cyber Liability",
         "epli": "Employment Practices Liability",
         "crime": "Crime",
         "flood": "Flood",
-        "inland_marine": "Inland Marine"
+        "inland_marine": "Inland Marine",
+        "equipment_breakdown": "Equipment Breakdown",
+        "liquor_liability": "Liquor Liability",
+        "innkeepers_liability": "Innkeepers Liability",
+        "environmental": "Environmental / Pollution",
+        "workplace_violence": "Workplace Violence",
+        "garage_keepers": "Garage Keepers",
+        "enviro_pack": "Enviro Pack",
     }
     
     for key, display_name in coverage_names.items():
