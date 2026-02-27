@@ -662,6 +662,35 @@
             <div class="card">
                 <h2>&#128737; Coverages</h2>
                 <div id="coverages-list"></div>
+                <div style="margin-top:1rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                    <select id="add-coverage-select" style="padding:0.5rem; border:1px solid var(--gray-300); border-radius:var(--radius); font-size:0.85rem; min-width:200px;">
+                        <option value="">— Select coverage to add —</option>
+                        <option value="property">Property</option>
+                        <option value="excess_property">Excess Property Layer 1</option>
+                        <option value="excess_property_2">Excess Property Layer 2</option>
+                        <option value="general_liability">General Liability</option>
+                        <option value="umbrella">Umbrella / Excess Layer 1</option>
+                        <option value="umbrella_layer_2">Excess Layer 2</option>
+                        <option value="umbrella_layer_3">Excess Layer 3</option>
+                        <option value="workers_compensation">Workers Compensation</option>
+                        <option value="commercial_auto">Commercial Auto</option>
+                        <option value="crime">Crime / Fidelity</option>
+                        <option value="epli">EPLI</option>
+                        <option value="cyber">Cyber Liability</option>
+                        <option value="flood">Flood</option>
+                        <option value="earthquake">Earthquake</option>
+                        <option value="terrorism">Terrorism / TRIA</option>
+                        <option value="equipment_breakdown">Equipment Breakdown</option>
+                        <option value="liquor_liability">Liquor Liability</option>
+                        <option value="innkeepers_liability">Innkeepers Liability</option>
+                        <option value="environmental">Environmental / Pollution</option>
+                        <option value="workplace_violence">Workplace Violence</option>
+                        <option value="garage_keepers">Garage Keepers</option>
+                        <option value="inland_marine">Inland Marine</option>
+                    </select>
+                    <button onclick="addCoverage()" style="padding:0.5rem 1rem; background:var(--hub-electric); color:white; border:none; border-radius:var(--radius); cursor:pointer; font-size:0.85rem;">+ Add Coverage</button>
+                    <span style="font-size:0.75rem; color:var(--gray-500);">Add policy types even without a quote (e.g., renewal premium only)</span>
+                </div>
             </div>
 
             <!-- Expiring Premiums -->
@@ -1004,7 +1033,48 @@ const COV_DISPLAY = {
     cyber: 'Cyber Liability',
     flood: 'Flood',
     earthquake: 'Earthquake',
+    terrorism: 'Terrorism / TRIA',
+    equipment_breakdown: 'Equipment Breakdown',
+    liquor_liability: 'Liquor Liability',
+    innkeepers_liability: 'Innkeepers Liability',
+    environmental: 'Environmental / Pollution',
+    workplace_violence: 'Workplace Violence',
+    garage_keepers: 'Garage Keepers',
+    inland_marine: 'Inland Marine',
 };
+
+function addCoverage() {
+    const sel = document.getElementById('add-coverage-select');
+    const key = sel.value;
+    if (!key) { alert('Please select a coverage type'); return; }
+    if (!extractedData.coverages) extractedData.coverages = {};
+    if (extractedData.coverages[key] && extractedData.coverages[key].carrier) {
+        alert(COV_DISPLAY[key] + ' already exists. Edit it in the list above.');
+        return;
+    }
+    extractedData.coverages[key] = {
+        carrier: '',
+        premium: 0,
+        total_premium: 0,
+        surplus_lines_tax: 0,
+        stamping_fee: 0,
+        coverage_limits: [],
+        deductibles: [],
+        forms_endorsements: [],
+        additional_coverages: [],
+        subjectivities: [],
+    };
+    sel.value = '';
+    renderCoverages();
+    renderExpiringPremiums();
+}
+
+function removeCoverage(key) {
+    if (!confirm('Remove ' + (COV_DISPLAY[key] || key) + '?')) return;
+    delete extractedData.coverages[key];
+    renderCoverages();
+    renderExpiringPremiums();
+}
 
 function renderCoverages() {
     const container = document.getElementById('coverages-list');
@@ -1012,7 +1082,9 @@ function renderCoverages() {
     container.innerHTML = '';
 
     for (const [key, cov] of Object.entries(covs)) {
-        if (!cov || typeof cov !== 'object' || !cov.carrier) continue;
+        if (!cov || typeof cov !== 'object') continue;
+        // Show coverage if it has a carrier OR if it was manually added (premium >= 0)
+        if (!cov.carrier && cov.carrier !== '') continue;
         const displayName = COV_DISPLAY[key] || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
         const card = document.createElement('div');
         card.className = 'coverage-card';
@@ -1020,13 +1092,16 @@ function renderCoverages() {
             <div class="coverage-header" onclick="toggleCoverage(this)">
                 <h4>
                     ${displayName}
-                    <span class="carrier-badge">${escHtml(cov.carrier || '')}</span>
+                    <span class="carrier-badge">${escHtml(cov.carrier || 'TBD')}</span>
+                    <button onclick="event.stopPropagation(); removeCoverage('${key}')" 
+                        style="margin-left:0.5rem; background:var(--danger); color:white; border:none; border-radius:4px; padding:0.15rem 0.5rem; font-size:0.7rem; cursor:pointer;" 
+                        title="Remove this coverage">&times;</button>
                 </h4>
                 <span style="font-size:0.8rem; color:var(--gray-500);">
                     Premium: $${formatNum(cov.premium || 0)} | 
                     Forms: ${(cov.forms_endorsements || []).length} |
                     Limits: ${(cov.coverage_limits || []).length}
-                    ▾
+                    \u25be
                 </span>
             </div>
             <div class="coverage-body">
