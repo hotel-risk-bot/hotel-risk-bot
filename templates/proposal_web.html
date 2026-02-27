@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SBs Proposal Generator</title>
+    <title>AI Proposal Generator</title>
     <style>
         :root {
             --hub-electric: #0077C8;
@@ -550,7 +550,7 @@
 <div class="header">
     <div class="hub-logo">SB</div>
     <div>
-        <h1>SBs Proposal Generator</h1>
+        <h1>AI Proposal Generator</h1>
     </div>
 </div>
 
@@ -686,7 +686,9 @@
                         <option value="workplace_violence">Workplace Violence</option>
                         <option value="garage_keepers">Garage Keepers</option>
                         <option value="inland_marine">Inland Marine</option>
+                        <option value="wind_deductible_buydown">Wind Deductible Buy Down</option>
                     </select>
+                    <input type="text" id="add-coverage-carrier" placeholder="Carrier name (optional)" style="padding:0.4rem 0.75rem; border:1px solid var(--gray-300); border-radius:var(--radius); font-size:0.85rem; width:200px;">
                     <button onclick="addCoverage()" style="padding:0.5rem 1rem; background:var(--hub-electric); color:white; border:none; border-radius:var(--radius); cursor:pointer; font-size:0.85rem;">+ Add Coverage</button>
                     <span style="font-size:0.75rem; color:var(--gray-500);">Add policy types even without a quote (e.g., renewal premium only)</span>
                 </div>
@@ -1040,10 +1042,12 @@ const COV_DISPLAY = {
     workplace_violence: 'Workplace Violence',
     garage_keepers: 'Garage Keepers',
     inland_marine: 'Inland Marine',
+    wind_deductible_buydown: 'Wind Deductible Buy Down',
 };
 
 function addCoverage() {
     const sel = document.getElementById('add-coverage-select');
+    const carrierInput = document.getElementById('add-coverage-carrier');
     const key = sel.value;
     if (!key) { alert('Please select a coverage type'); return; }
     if (!extractedData.coverages) extractedData.coverages = {};
@@ -1051,8 +1055,9 @@ function addCoverage() {
         alert(COV_DISPLAY[key] + ' already exists. Edit it in the list above.');
         return;
     }
+    const carrierName = carrierInput ? carrierInput.value.trim() : '';
     extractedData.coverages[key] = {
-        carrier: '',
+        carrier: carrierName,
         premium: 0,
         total_premium: 0,
         surplus_lines_tax: 0,
@@ -1064,6 +1069,7 @@ function addCoverage() {
         subjectivities: [],
     };
     sel.value = '';
+    if (carrierInput) carrierInput.value = '';
     renderCoverages();
     renderExpiringPremiums();
 }
@@ -1345,7 +1351,8 @@ function renderExpiringPremiums() {
     for (const [key, cov] of Object.entries(covs)) {
         if (!cov || typeof cov !== 'object') continue;
         const displayName = COV_DISPLAY[key] || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-        const proposed = parseFloat(cov.premium) || 0;
+        // Use total_premium (includes taxes/fees) for proposed; fall back to premium
+        const proposed = parseFloat(cov.total_premium) || parseFloat(cov.premium) || 0;
         const expiring = parseFloat(ep[key]) || 0;
         const dollarChange = expiring > 0 ? proposed - expiring : 0;
         const pctChange = expiring > 0 ? ((proposed - expiring) / expiring * 100) : 0;
@@ -1374,7 +1381,9 @@ function renderExpiringPremiums() {
     let totalExpiring = 0;
     for (const [key, cov] of Object.entries(covs)) {
         if (!cov || typeof cov !== 'object') continue;
-        totalProposed += parseFloat(cov.premium) || 0;
+        // Exclude terrorism/TRIA from totals
+        if (key === 'terrorism') continue;
+        totalProposed += parseFloat(cov.total_premium) || parseFloat(cov.premium) || 0;
         totalExpiring += parseFloat(ep[key]) || 0;
     }
     const totalDollarChange = totalExpiring > 0 ? totalProposed - totalExpiring : 0;
@@ -1398,6 +1407,7 @@ function updateProposedPremium(key, value) {
     const num = parseFloat(value.replace(/[,$]/g, '')) || 0;
     if (extractedData.coverages && extractedData.coverages[key]) {
         extractedData.coverages[key].premium = num;
+        extractedData.coverages[key].total_premium = num;
     }
     // Re-render to update totals and change calculations
     renderExpiringPremiums();
