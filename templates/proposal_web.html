@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HUB Proposal Generator</title>
+    <title>SBs Proposal Generator</title>
     <style>
         :root {
             --hub-electric: #0077C8;
@@ -548,11 +548,10 @@
 
 <!-- Header -->
 <div class="header">
-    <div class="hub-logo">HUB</div>
+    <div class="hub-logo">SB</div>
     <div>
-        <h1>Proposal Generator</h1>
+        <h1>SBs Proposal Generator</h1>
     </div>
-    <div class="subtitle">Hotel Franchise Insurance Program</div>
 </div>
 
 <!-- Progress Steps -->
@@ -1083,8 +1082,7 @@ function renderCoverages() {
 
     for (const [key, cov] of Object.entries(covs)) {
         if (!cov || typeof cov !== 'object') continue;
-        // Show coverage if it has a carrier OR if it was manually added (premium >= 0)
-        if (!cov.carrier && cov.carrier !== '') continue;
+        // Show all coverages (including manually added ones with empty carrier)
         const displayName = COV_DISPLAY[key] || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
         const card = document.createElement('div');
         card.className = 'coverage-card';
@@ -1345,7 +1343,7 @@ function renderExpiringPremiums() {
     html += '</tr></thead><tbody>';
     
     for (const [key, cov] of Object.entries(covs)) {
-        if (!cov || typeof cov !== 'object' || !cov.carrier) continue;
+        if (!cov || typeof cov !== 'object') continue;
         const displayName = COV_DISPLAY[key] || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
         const proposed = parseFloat(cov.premium) || 0;
         const expiring = parseFloat(ep[key]) || 0;
@@ -1375,7 +1373,7 @@ function renderExpiringPremiums() {
     let totalProposed = 0;
     let totalExpiring = 0;
     for (const [key, cov] of Object.entries(covs)) {
-        if (!cov || typeof cov !== 'object' || !cov.carrier) continue;
+        if (!cov || typeof cov !== 'object') continue;
         totalProposed += parseFloat(cov.premium) || 0;
         totalExpiring += parseFloat(ep[key]) || 0;
     }
@@ -1549,7 +1547,7 @@ document.getElementById('btn-generate').addEventListener('click', async () => {
         }
 
         // Generate
-        showLoading('Generating proposal document...', 'Building DOCX with HUB branding');
+        showLoading('Generating proposal document...', 'Building professional DOCX proposal');
         const genRes = await fetch(`/api/generate/${sessionId}`, { method: 'POST' });
         const genData = await genRes.json();
         if (!genRes.ok) throw new Error(genData.error);
