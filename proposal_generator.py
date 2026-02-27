@@ -1770,7 +1770,7 @@ def generate_locations(doc, data):
         else:
             _fallback_corp = _ni.strip()
     if not _fallback_corp:
-        _fallback_corp = (ci.get("client_name", "") or "").strip()
+        _fallback_corp = (data.get("client_info", {}).get("client_name", "") or "").strip()
     
     # SKIP vacant land — it belongs on property SOV but NOT on the Schedule of Locations
     if sov_data and sov_data.get("locations"):
