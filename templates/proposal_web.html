@@ -1100,6 +1100,10 @@ function renderCoverages() {
                     <button onclick="event.stopPropagation(); removeCoverage('${key}')" 
                         style="margin-left:0.5rem; background:var(--danger); color:white; border:none; border-radius:4px; padding:0.15rem 0.5rem; font-size:0.7rem; cursor:pointer;" 
                         title="Remove this coverage">&times;</button>
+                    <label onclick="event.stopPropagation()" style="margin-left:1rem; font-size:0.75rem; color:var(--gray-600); cursor:pointer; display:inline-flex; align-items:center; gap:0.25rem; font-weight:400;">
+                        <input type="checkbox" ${cov.optional ? 'checked' : ''} onchange="updateCov('${key}','optional',this.checked); renderExpiringPremiums();" style="cursor:pointer;">
+                        Optional
+                    </label>
                 </h4>
                 <span style="font-size:0.8rem; color:var(--gray-500);">
                     Premium: $${formatNum(cov.premium || 0)} | 
@@ -1348,8 +1352,20 @@ function renderExpiringPremiums() {
     html += '<th style="width:10%">% Change</th>';
     html += '</tr></thead><tbody>';
     
+    // Separate main and optional coverages
+    const mainCovs = [];
+    const optionalCovs = [];
     for (const [key, cov] of Object.entries(covs)) {
         if (!cov || typeof cov !== 'object') continue;
+        if (cov.optional) {
+            optionalCovs.push([key, cov]);
+        } else {
+            mainCovs.push([key, cov]);
+        }
+    }
+    
+    // Render main coverages
+    for (const [key, cov] of mainCovs) {
         const displayName = COV_DISPLAY[key] || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
         // Use total_premium (includes taxes/fees) for proposed; fall back to premium
         const proposed = parseFloat(cov.total_premium) || parseFloat(cov.premium) || 0;
@@ -1371,17 +1387,15 @@ function renderExpiringPremiums() {
                     style="width:100%; padding:0.4rem; border:1px solid var(--gray-300); border-radius:4px; text-align:right; font-size:0.85rem;"
                     onchange="updateExpiringPremium('${key}', this.value)" 
                     onkeyup="previewPremiumChange('${key}', this.value, ${proposed})"></td>`;
-        html += `<td style="text-align:right; color:${changeColor}; font-weight:600; font-size:0.85rem;" id="ep-dollar-${key}">${expiring > 0 ? changeSign + '$' + formatNum(Math.abs(dollarChange)) : '—'}</td>`;
-        html += `<td style="text-align:right; color:${changeColor}; font-weight:600; font-size:0.85rem;" id="ep-pct-${key}">${expiring > 0 ? changeSign + pctChange.toFixed(1) + '%' : '—'}</td>`;
+        html += `<td style="text-align:right; color:${changeColor}; font-weight:600; font-size:0.85rem;" id="ep-dollar-${key}">${expiring > 0 ? changeSign + '$' + formatNum(Math.abs(dollarChange)) : '\u2014'}</td>`;
+        html += `<td style="text-align:right; color:${changeColor}; font-weight:600; font-size:0.85rem;" id="ep-pct-${key}">${expiring > 0 ? changeSign + pctChange.toFixed(1) + '%' : '\u2014'}</td>`;
         html += `</tr>`;
     }
     
-    // Total row
+    // Total row (excludes terrorism and optional coverages)
     let totalProposed = 0;
     let totalExpiring = 0;
-    for (const [key, cov] of Object.entries(covs)) {
-        if (!cov || typeof cov !== 'object') continue;
-        // Exclude terrorism/TRIA from totals
+    for (const [key, cov] of mainCovs) {
         if (key === 'terrorism') continue;
         totalProposed += parseFloat(cov.total_premium) || parseFloat(cov.premium) || 0;
         totalExpiring += parseFloat(ep[key]) || 0;
@@ -1394,10 +1408,39 @@ function renderExpiringPremiums() {
     html += `<tr style="background:var(--gray-100); font-weight:700; border-top:2px solid var(--gray-300);">`;
     html += `<td>TOTAL</td><td></td>`;
     html += `<td style="text-align:right;">$${formatNum(totalProposed)}</td>`;
-    html += `<td style="text-align:right;">$${totalExpiring > 0 ? formatNum(totalExpiring) : '—'}</td>`;
-    html += `<td style="text-align:right; color:${totalColor};" id="ep-dollar-total">${totalExpiring > 0 ? totalSign + '$' + formatNum(Math.abs(totalDollarChange)) : '—'}</td>`;
-    html += `<td style="text-align:right; color:${totalColor};" id="ep-pct-total">${totalExpiring > 0 ? totalSign + totalPctChange.toFixed(1) + '%' : '—'}</td>`;
+    html += `<td style="text-align:right;">$${totalExpiring > 0 ? formatNum(totalExpiring) : '\u2014'}</td>`;
+    html += `<td style="text-align:right; color:${totalColor};" id="ep-dollar-total">${totalExpiring > 0 ? totalSign + '$' + formatNum(Math.abs(totalDollarChange)) : '\u2014'}</td>`;
+    html += `<td style="text-align:right; color:${totalColor};" id="ep-pct-total">${totalExpiring > 0 ? totalSign + totalPctChange.toFixed(1) + '%' : '\u2014'}</td>`;
     html += `</tr>`;
+    
+    // Optional coverages section below TOTAL
+    if (optionalCovs.length > 0) {
+        html += `<tr><td colspan="6" style="padding:0.5rem; font-weight:600; color:var(--gray-600); font-size:0.85rem; border-top:2px solid var(--gray-300);">Optional Coverages (not included in TOTAL)</td></tr>`;
+        for (const [key, cov] of optionalCovs) {
+            const displayName = COV_DISPLAY[key] || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            const proposed = parseFloat(cov.total_premium) || parseFloat(cov.premium) || 0;
+            const expiring = parseFloat(ep[key]) || 0;
+            const dollarChange = expiring > 0 ? proposed - expiring : 0;
+            const pctChange = expiring > 0 ? ((proposed - expiring) / expiring * 100) : 0;
+            const changeColor = dollarChange > 0 ? 'var(--danger)' : dollarChange < 0 ? 'var(--success)' : 'var(--gray-700)';
+            const changeSign = dollarChange > 0 ? '+' : '';
+            html += `<tr style="background:#f8f9fa;">`;
+            html += `<td><em>${displayName}</em></td>`;
+            html += `<td style="font-size:0.85rem; color:var(--gray-700);">${escHtml(cov.carrier || '')}</td>`;
+            html += `<td><input type="text" value="${formatNum(proposed)}" 
+                        style="width:100%; padding:0.4rem; border:1px solid var(--gray-300); border-radius:4px; text-align:right; font-size:0.85rem;"
+                        onchange="updateProposedPremium('${key}', this.value)" 
+                        onkeyup="previewProposedChange('${key}', this)"></td>`;
+            html += `<td><input type="text" value="${expiring > 0 ? formatNum(expiring) : ''}" 
+                        placeholder="Enter expiring" 
+                        style="width:100%; padding:0.4rem; border:1px solid var(--gray-300); border-radius:4px; text-align:right; font-size:0.85rem;"
+                        onchange="updateExpiringPremium('${key}', this.value)" 
+                        onkeyup="previewPremiumChange('${key}', this.value, ${proposed})"></td>`;
+            html += `<td style="text-align:right; color:${changeColor}; font-weight:600; font-size:0.85rem;" id="ep-dollar-${key}">${expiring > 0 ? changeSign + '$' + formatNum(Math.abs(dollarChange)) : '\u2014'}</td>`;
+            html += `<td style="text-align:right; color:${changeColor}; font-weight:600; font-size:0.85rem;" id="ep-pct-${key}">${expiring > 0 ? changeSign + pctChange.toFixed(1) + '%' : '\u2014'}</td>`;
+            html += `</tr>`;
+        }
+    }
     
     html += '</tbody></table>';
     container.innerHTML = html;
