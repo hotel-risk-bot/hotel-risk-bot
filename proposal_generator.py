@@ -794,10 +794,16 @@ def generate_premium_summary(doc, data):
             if umb_detail and umb_detail.get("carrier"):
                 expiring_umb_carriers.append(umb_detail.get("carrier"))
     
+    # Separate optional coverages from main coverages
+    optional_rows = []
+    optional_expiring_total = 0
+    optional_proposed_total = 0
+    
     for key in all_keys:
         display_name = coverage_names[key]
         cov = coverages.get(key)
         exp = expiring.get(key, 0)
+        is_optional = cov.get("optional", False) if isinstance(cov, dict) else False
         
         if has_expiring:
             # === COMPARISON MODE (with expiring premiums) ===
@@ -888,19 +894,26 @@ def generate_premium_summary(doc, data):
                 dollar_str = "N/A"
                 pct_str = "N/A"
             
-            rows.append([
+            row_data = [
                 display_name,
                 carrier_short,
                 f"${exp:,.2f}" if exp else "N/A",
                 f"${proposed:,.2f}" if proposed else "N/A",
                 dollar_str,
                 pct_str
-            ])
+            ]
             
-            # Exclude terrorism/TRIA from totals
-            if key != "terrorism":
-                total_expiring += exp if exp else 0
-                total_proposed += proposed
+            if is_optional:
+                optional_rows.append(row_data)
+                if key != "terrorism":
+                    optional_expiring_total += exp if exp else 0
+                    optional_proposed_total += proposed
+            else:
+                rows.append(row_data)
+                # Exclude terrorism/TRIA from totals
+                if key != "terrorism":
+                    total_expiring += exp if exp else 0
+                    total_proposed += proposed
         
         else:
             # === SIMPLE MODE (no expiring premiums) ===
@@ -916,17 +929,21 @@ def generate_premium_summary(doc, data):
             total_prem = cov.get("total_premium", 0) or 0
             taxes_fees = total_prem - premium if total_prem > premium else 0
             
-            rows.append([
+            row_data = [
                 display_name,
                 carrier_short,
                 fmt_currency(premium) if premium else "\u2014",
                 fmt_currency(taxes_fees) if taxes_fees else "\u2014",
                 fmt_currency(total_prem) if total_prem else "\u2014",
-            ])
-            # Exclude terrorism/TRIA from totals
-            if key != "terrorism":
-                total_proposed += total_prem
-                total_taxes_fees += taxes_fees
+            ]
+            if is_optional:
+                optional_rows.append(row_data)
+            else:
+                rows.append(row_data)
+                # Exclude terrorism/TRIA from totals
+                if key != "terrorism":
+                    total_proposed += total_prem
+                    total_taxes_fees += taxes_fees
     
     # Total row
     if has_expiring:
@@ -1007,6 +1024,44 @@ def generate_premium_summary(doc, data):
                         run.font.color.rgb = GREEN
                     elif text.startswith("+"):
                         run.font.color.rgb = RED
+    
+    # Optional coverages section below TOTAL
+    if optional_rows:
+        add_formatted_paragraph(doc, "", space_before=12)
+        add_subsection_header(doc, "Optional Coverages")
+        add_formatted_paragraph(doc,
+            "The following coverages are presented for consideration and are not included in the total premium above.",
+            size=9, color=CHARCOAL, space_after=6)
+        
+        if has_expiring:
+            opt_headers = ["Coverage", "Carrier", "Expiring", "Proposed", "$ Change", "% Change"]
+            opt_table = create_styled_table(doc, opt_headers, optional_rows,
+                                          col_widths=[1.2, 2.0, 1.0, 1.0, 1.0, 0.8],
+                                          header_size=10, body_size=10,
+                                          col_alignments=[None, None, WD_ALIGN_PARAGRAPH.RIGHT,
+                                                          WD_ALIGN_PARAGRAPH.RIGHT, WD_ALIGN_PARAGRAPH.RIGHT,
+                                                          WD_ALIGN_PARAGRAPH.RIGHT])
+        else:
+            opt_headers = ["Coverage", "Carrier", "Premium", "Taxes & Fees", "Total"]
+            opt_table = create_styled_table(doc, opt_headers, optional_rows,
+                                          col_widths=[1.5, 2.2, 1.2, 1.2, 1.2],
+                                          header_size=10, body_size=10,
+                                          col_alignments=[None, None, WD_ALIGN_PARAGRAPH.RIGHT,
+                                                          WD_ALIGN_PARAGRAPH.RIGHT, WD_ALIGN_PARAGRAPH.RIGHT])
+        # Color-code optional rows too
+        if has_expiring:
+            GREEN_OPT = RGBColor(0x00, 0x80, 0x00)
+            RED_OPT = RGBColor(0xCC, 0x00, 0x00)
+            for row_idx in range(1, len(opt_table.rows)):
+                row = opt_table.rows[row_idx]
+                for col_idx in (4, 5):
+                    for p in row.cells[col_idx].paragraphs:
+                        for run in p.runs:
+                            text = run.text.strip()
+                            if text.startswith("-"):
+                                run.font.color.rgb = GREEN_OPT
+                            elif text.startswith("+"):
+                                run.font.color.rgb = RED_OPT
     
     # Savings/increase callout (comparison mode only)
     if has_expiring and total_expiring > 0:
@@ -1303,47 +1358,94 @@ def generate_information_summary(doc, data):
             rows.append(["Total Sales / Exposure", gl_cov["total_sales"]])
     
     # Add number of locations with property/liability breakdown
-    # Count UNIQUE addresses (1 address with 4 buildings = 1 location)
+    # Count UNIQUE addresses using composite key (addr|city|state) — 1 address with 4 buildings = 1 location
     sov_data = data.get("sov_data")
     sov_locs = sov_data.get("locations", []) if sov_data else []
-    _prop_unique_addrs = set()
+    
+    # Helper to build composite key for dedup
+    def _loc_key(loc):
+        return (_normalize_addr(loc.get("address", "")) + "|" +
+                _normalize_city(loc.get("city", "")) + "|" +
+                loc.get("state", "").strip().upper())
+    
+    # Property locations: unique by composite key
+    _prop_unique_keys = set()
     if sov_locs:
         for loc in sov_locs:
-            addr = _normalize_addr(loc.get("address", ""))
-            if addr:
-                _prop_unique_addrs.add(addr)
-    prop_loc_count = len(_prop_unique_addrs) if _prop_unique_addrs else 0
+            key = _loc_key(loc)
+            if key != "||":
+                _prop_unique_keys.add(key)
+    prop_loc_count = len(_prop_unique_keys) if _prop_unique_keys else 0
     if not prop_loc_count and coverages.get("property"):
         prop_loc_count = int(coverages["property"].get("num_locations", 0) or 0)
     
-    # Count liability locations from schedule_of_classes
-    gl_loc_addrs = set()
+    # Count liability locations from schedule_of_classes (skip non-physical entries)
+    _skip_gl_classes = {"hired auto", "non-owned auto", "loss control", "package store",
+                        "category vi", "liquor", "sundry", "flat"}
+    gl_loc_keys = set()
     if isinstance(gl_cov, dict):
         for entry in gl_cov.get("schedule_of_classes", []):
             if isinstance(entry, dict):
+                classification = (entry.get("classification", "") or "").lower()
+                if any(skip in classification for skip in _skip_gl_classes):
+                    continue
                 addr = entry.get("address", "") or entry.get("location", "")
                 if addr and addr.strip():
-                    gl_loc_addrs.add(_normalize_addr(addr))
-    liab_loc_count = len(gl_loc_addrs) if gl_loc_addrs else int(gl_cov.get("num_locations", 0) or 0) if isinstance(gl_cov, dict) else 0
+                    # Parse city/state from address if available
+                    import re as _re2
+                    parts = [p.strip() for p in addr.split(",")]
+                    street = parts[0] if parts else addr
+                    city = ""
+                    state = ""
+                    if len(parts) >= 3:
+                        city = parts[1]
+                        st_m = _re2.match(r'([A-Z]{2})\s*\d*', parts[2].strip().upper())
+                        if st_m: state = st_m.group(1)
+                    elif len(parts) == 2:
+                        st_m = _re2.match(r'([A-Z]{2})\s*\d*', parts[1].strip().upper())
+                        if st_m:
+                            state = st_m.group(1)
+                        else:
+                            city = parts[1]
+                    key = (_normalize_addr(street) + "|" + _normalize_city(city) + "|" + state.strip().upper())
+                    if key != "||":
+                        gl_loc_keys.add(key)
+    liab_loc_count = len(gl_loc_keys) if gl_loc_keys else int(gl_cov.get("num_locations", 0) or 0) if isinstance(gl_cov, dict) else 0
     
-    # Calculate UNIQUE location count by merging property and liability addresses
-    all_unique_addrs = set()
-    # Add property addresses
-    if sov_data and sov_data.get("locations"):
-        for loc in sov_data["locations"]:
-            addr = _normalize_addr(loc.get("address", ""))
-            if addr:
-                all_unique_addrs.add(addr)
-    # Add liability addresses
-    for addr in gl_loc_addrs:
-        if addr:
-            all_unique_addrs.add(addr)
-    # Add raw locations (deduped)
+    # Calculate UNIQUE total location count by merging all sources with fuzzy matching
+    all_unique_keys = set()
+    # Add property keys
+    all_unique_keys.update(_prop_unique_keys)
+    # Add liability keys (with fuzzy matching against existing)
+    for gl_key in gl_loc_keys:
+        gl_parts = gl_key.split("|")
+        already_matched = False
+        for existing_key in all_unique_keys:
+            ex_parts = existing_key.split("|")
+            if len(gl_parts) == 3 and len(ex_parts) == 3:
+                state_ok = (not gl_parts[2] or not ex_parts[2] or gl_parts[2] == ex_parts[2])
+                if state_ok and _fuzzy_addr_match(gl_parts[0], ex_parts[0]):
+                    already_matched = True
+                    break
+        if not already_matched:
+            all_unique_keys.add(gl_key)
+    # Add raw locations (deduped with fuzzy matching)
     for loc in data.get("locations", []):
-        addr = _normalize_addr(loc.get("address", ""))
-        if addr:
-            all_unique_addrs.add(addr)
-    total_loc_count = len(all_unique_addrs) if all_unique_addrs else max(prop_loc_count, liab_loc_count)
+        loc_k = _loc_key(loc)
+        if loc_k == "||":
+            continue
+        loc_parts = loc_k.split("|")
+        already_matched = False
+        for existing_key in all_unique_keys:
+            ex_parts = existing_key.split("|")
+            if len(loc_parts) == 3 and len(ex_parts) == 3:
+                state_ok = (not loc_parts[2] or not ex_parts[2] or loc_parts[2] == ex_parts[2])
+                if state_ok and _fuzzy_addr_match(loc_parts[0], ex_parts[0]):
+                    already_matched = True
+                    break
+        if not already_matched:
+            all_unique_keys.add(loc_k)
+    total_loc_count = len(all_unique_keys) if all_unique_keys else max(prop_loc_count, liab_loc_count)
     if total_loc_count > 0:
         rows.append(["Total Number of Locations", str(total_loc_count)])
     if prop_loc_count > 0:
@@ -1528,6 +1630,45 @@ def _normalize_city(s):
     return s
 
 
+def _fuzzy_addr_match(addr1, addr2):
+    """Check if two normalized addresses refer to the same location.
+    Handles cases like '4288 HWY 51' vs '4285 HWY 51' by comparing
+    the street name portion after stripping house numbers.
+    Also handles 'OCEAN BEACH BLVD' vs 'OCEAN BEACH' word-level matching."""
+    import re
+    if not addr1 or not addr2:
+        return False
+    if addr1 == addr2:
+        return True
+    if addr1 in addr2 or addr2 in addr1:
+        return True
+    # Extract street name without house number for fuzzy match
+    num1 = re.match(r'^(\d+)\s+(.+)', addr1)
+    num2 = re.match(r'^(\d+)\s+(.+)', addr2)
+    if num1 and num2:
+        street1 = num1.group(2)
+        street2 = num2.group(2)
+        house1 = int(num1.group(1))
+        house2 = int(num2.group(1))
+        # Same house number (or within 20) and street names match
+        if abs(house1 - house2) <= 20:
+            if street1 == street2:
+                return True
+            # Word-level match: one street name contains all words of the other
+            words1 = set(street1.split())
+            words2 = set(street2.split())
+            # Remove common suffixes for comparison
+            _suffixes = {'ST', 'AVE', 'BLVD', 'DR', 'RD', 'LN', 'CT', 'PL', 'CIR', 'HWY', 'PKWY', 'TER', 'WAY'}
+            core1 = words1 - _suffixes
+            core2 = words2 - _suffixes
+            if core1 and core2 and (core1.issubset(core2) or core2.issubset(core1)):
+                return True
+            # Also check if one is a substring of the other at word level
+            if street1 in street2 or street2 in street1:
+                return True
+    return False
+
+
 def _dedup_locations(raw_locations):
     """Deduplicate locations by normalized address."""
     seen_addrs = set()
@@ -1597,19 +1738,36 @@ def generate_locations(doc, data):
         if isinstance(entry, dict):
             addr = entry.get("address", "")
             if addr:
-                # Try to find matching city/state from SOV or locations
+                norm_gl_addr = _normalize_addr(addr)
+                # Try to find matching city/state from SOV or locations using fuzzy matching
                 matched = False
                 for loc in (sov_data.get("locations", []) if sov_data else []) + locations:
-                    if _normalize_addr(addr) in _normalize_addr(loc.get("address", "")) or \
-                       _normalize_addr(loc.get("address", "")) in _normalize_addr(addr):
-                        addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
+                    loc_addr_norm = _normalize_addr(loc.get("address", ""))
+                    if _fuzzy_addr_match(norm_gl_addr, loc_addr_norm):
+                        addr_key = (loc_addr_norm + "|" +
                                    _normalize_city(loc.get("city", "")) + "|" +
                                    loc.get("state", "").strip().upper())
                         liability_addr_keys.add(addr_key)
                         matched = True
                         break
                 if not matched:
-                    liability_addr_keys.add(_normalize_addr(addr) + "||")
+                    # Also try parsing city/state from the GL address itself
+                    parts = [p.strip() for p in addr.split(",")]
+                    street = parts[0] if parts else addr
+                    city = ""
+                    state = ""
+                    if len(parts) >= 3:
+                        city = parts[1]
+                        st_m = re.match(r'([A-Z]{2})\s*\d*', parts[2].strip().upper())
+                        if st_m: state = st_m.group(1)
+                    elif len(parts) == 2:
+                        st_m = re.match(r'([A-Z]{2})\s*\d*', parts[1].strip().upper())
+                        if st_m:
+                            state = st_m.group(1)
+                        else:
+                            city = parts[1]
+                    liability_addr_keys.add(_normalize_addr(street) + "|" + _normalize_city(city) + "|" + state.strip().upper())
+    logger.info(f"Schedule of Locations - liability_addr_keys: {liability_addr_keys}")
     # NOTE: We do NOT default all locations to liability when GL exists.
     # Liability checkmarks are ONLY for locations explicitly listed on the GL carrier quote
     # (from schedule_of_classes addresses and CG2144 designated premises forms).
@@ -1642,11 +1800,12 @@ def generate_locations(doc, data):
                 city = parts[1]
         addr_key = (_normalize_addr(street) + "|" + _normalize_city(city) + "|" + state.strip().upper())
         liability_addr_keys.add(addr_key)
-        # Also try matching against SOV/locations for better key resolution
+        # Also try matching against SOV/locations for better key resolution using fuzzy matching
+        norm_street = _normalize_addr(street)
         for loc in (sov_data.get("locations", []) if sov_data else []) + locations:
-            if _normalize_addr(street) in _normalize_addr(loc.get("address", "")) or \
-               _normalize_addr(loc.get("address", "")) in _normalize_addr(street):
-                resolved_key = (_normalize_addr(loc.get("address", "")) + "|" +
+            loc_addr_norm = _normalize_addr(loc.get("address", ""))
+            if _fuzzy_addr_match(norm_street, loc_addr_norm):
+                resolved_key = (loc_addr_norm + "|" +
                                _normalize_city(loc.get("city", "")) + "|" +
                                loc.get("state", "").strip().upper())
                 liability_addr_keys.add(resolved_key)
@@ -1686,11 +1845,12 @@ def generate_locations(doc, data):
                     city = parts[1]
             addr_key = (_normalize_addr(street) + "|" + _normalize_city(city) + "|" + state.strip().upper())
             liability_addr_keys.add(addr_key)
-            # Also try matching against SOV/locations for better key resolution
+            # Also try matching against SOV/locations for better key resolution using fuzzy matching
+            norm_street_cg = _normalize_addr(street)
             for loc in (sov_data.get("locations", []) if sov_data else []) + locations:
-                if _normalize_addr(street) in _normalize_addr(loc.get("address", "")) or \
-                   _normalize_addr(loc.get("address", "")) in _normalize_addr(street):
-                    resolved_key = (_normalize_addr(loc.get("address", "")) + "|" +
+                loc_addr_norm_cg = _normalize_addr(loc.get("address", ""))
+                if _fuzzy_addr_match(norm_street_cg, loc_addr_norm_cg):
+                    resolved_key = (loc_addr_norm_cg + "|" +
                                    _normalize_city(loc.get("city", "")) + "|" +
                                    loc.get("state", "").strip().upper())
                     liability_addr_keys.add(resolved_key)
@@ -1702,44 +1862,7 @@ def generate_locations(doc, data):
     # locations explicitly confirmed on the liability quote per Stefan's rule.
     
     # --- Build master location list ---
-    # Helper: fuzzy address matching (must be defined before _is_on_liability)
-    def _fuzzy_addr_match(addr1, addr2):
-        """Check if two normalized addresses refer to the same location.
-        Handles cases like '4288 HWY 51' vs '4285 HWY 51' by comparing
-        the street name portion after stripping house numbers.
-        Also handles 'OCEAN BEACH BLVD' vs 'OCEAN BEACH' word-level matching."""
-        if not addr1 or not addr2:
-            return False
-        if addr1 == addr2:
-            return True
-        if addr1 in addr2 or addr2 in addr1:
-            return True
-        # Extract street name without house number for fuzzy match
-        num1 = re.match(r'^(\d+)\s+(.+)', addr1)
-        num2 = re.match(r'^(\d+)\s+(.+)', addr2)
-        if num1 and num2:
-            street1 = num1.group(2)
-            street2 = num2.group(2)
-            house1 = int(num1.group(1))
-            house2 = int(num2.group(1))
-            # Same house number (or within 20) and street names match
-            if abs(house1 - house2) <= 20:
-                if street1 == street2:
-                    return True
-                # Word-level match: one street name contains all words of the other
-                # e.g., 'OCEAN BEACH BLVD' vs 'OCEAN BEACH' or 'N OCEAN BLVD' vs 'OCEAN BLVD'
-                words1 = set(street1.split())
-                words2 = set(street2.split())
-                # Remove common suffixes for comparison
-                _suffixes = {'ST', 'AVE', 'BLVD', 'DR', 'RD', 'LN', 'CT', 'PL', 'CIR', 'HWY', 'PKWY', 'TER', 'WAY'}
-                core1 = words1 - _suffixes
-                core2 = words2 - _suffixes
-                if core1 and core2 and (core1.issubset(core2) or core2.issubset(core1)):
-                    return True
-                # Also check if one is a substring of the other at word level
-                if street1 in street2 or street2 in street1:
-                    return True
-        return False
+    # _fuzzy_addr_match is now a module-level function (used by both generate_locations and generate_information_summary)
     
     # Helper: check if an addr_key matches any key in liability_addr_keys using fuzzy matching
     def _is_on_liability(addr_key):
@@ -1800,6 +1923,17 @@ def generate_locations(doc, data):
     if not _fallback_corp:
         _fallback_corp = (data.get("client_info", {}).get("client_name", "") or "").strip()
     
+    # Build a lookup of user-edited location names from data["locations"] array
+    # The web UI stores name overrides in locations[i].name
+    _name_overrides = {}  # addr_key -> user-edited name
+    for ui_loc in data.get("locations", []):
+        ui_addr_key = (_normalize_addr(ui_loc.get("address", "")) + "|" +
+                      _normalize_city(ui_loc.get("city", "")) + "|" +
+                      ui_loc.get("state", "").strip().upper())
+        ui_name = (ui_loc.get("name", "") or "").strip()
+        if ui_name and ui_addr_key != "||":
+            _name_overrides[ui_addr_key] = ui_name
+    
     # SKIP vacant land — it belongs on property SOV but NOT on the Schedule of Locations
     if sov_data and sov_data.get("locations"):
         for loc in sov_data["locations"]:
@@ -1817,20 +1951,27 @@ def generate_locations(doc, data):
             addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
                        _normalize_city(loc.get("city", "")) + "|" +
                        loc.get("state", "").strip().upper())
-            # Build "Corporate Name - DBA" format for property name
-            corporate_name = (loc.get("corporate_name", "") or "").strip()
-            if not corporate_name:
-                corporate_name = _fallback_corp
-            dba = (loc.get("dba", "") or loc.get("hotel_flag", "") or "").strip()
-            if corporate_name and dba:
-                name = f"{corporate_name} - {dba}"
-            elif dba:
-                name = dba
-            elif corporate_name:
-                name = corporate_name
+            
+            # Check for user-edited name override first
+            if addr_key in _name_overrides:
+                name = _name_overrides[addr_key]
             else:
-                name = "Pending"
+                # Build "Corporate Name - DBA" format for property name
+                corporate_name = (loc.get("corporate_name", "") or "").strip()
+                if not corporate_name:
+                    corporate_name = _fallback_corp
+                dba = (loc.get("dba", "") or loc.get("hotel_flag", "") or "").strip()
+                if corporate_name and dba:
+                    name = f"{corporate_name} - {dba}"
+                elif dba:
+                    name = dba
+                elif corporate_name:
+                    name = corporate_name
+                else:
+                    name = "Pending"
             tiv = loc.get("tiv", 0)
+            on_liab = _is_on_liability(addr_key)
+            logger.info(f"Schedule of Locations - SOV loc: addr_key={addr_key}, name={name}, on_liability={on_liab}")
             master_locations.append({
                 "name": name,
                 "address": loc.get("address", ""),
@@ -1838,7 +1979,7 @@ def generate_locations(doc, data):
                 "state": loc.get("state", ""),
                 "tiv": tiv,
                 "on_property": _is_on_property(addr_key),
-                "on_liability": _is_on_liability(addr_key),
+                "on_liability": on_liab,
             })
             seen_addr_keys.add(addr_key)
     
@@ -3173,12 +3314,77 @@ def generate_proposal(data: dict, output_path: str) -> str:
         generate_coverage_section(doc, data, "workers_comp", "Workers Compensation Coverage")
     if "commercial_auto" in coverages:
         generate_coverage_section(doc, data, "commercial_auto", "Commercial Auto Coverage")
-    if "umbrella" in coverages:
-        generate_coverage_section(doc, data, "umbrella", "Umbrella / Excess Liability Coverage")
-    if "umbrella_layer_2" in coverages:
-        generate_coverage_section(doc, data, "umbrella_layer_2", "2nd Excess Liability Layer")
-    if "umbrella_layer_3" in coverages:
-        generate_coverage_section(doc, data, "umbrella_layer_3", "3rd Excess Liability Layer")
+    # Sort umbrella layers by attachment point before rendering
+    # The extractor may assign layers in PDF order, not by actual layer structure
+    _umb_keys = [k for k in ["umbrella", "umbrella_layer_2", "umbrella_layer_3"] if k in coverages]
+    if len(_umb_keys) > 1:
+        import re as _re_umb
+        def _parse_attachment_point(cov_data):
+            """Determine attachment point from underlying insurance or limits.
+            Lower attachment = lower layer (1st excess)."""
+            underlying = cov_data.get("underlying_insurance", []) if isinstance(cov_data, dict) else []
+            # If underlying includes primary policies (GL, Auto, WC), it's the 1st layer
+            has_primary = False
+            has_umbrella_underlying = False
+            max_underlying_limit = 0
+            for u in underlying:
+                if isinstance(u, dict):
+                    cov_type = (u.get("coverage", "") or "").lower()
+                    limits_str = (u.get("limits", "") or "")
+                    # Parse limit amount
+                    limit_nums = _re_umb.findall(r'[\$]?([\d,]+)', str(limits_str))
+                    for n in limit_nums:
+                        try:
+                            val = int(n.replace(',', ''))
+                            if val > max_underlying_limit:
+                                max_underlying_limit = val
+                        except ValueError:
+                            pass
+                    if any(kw in cov_type for kw in ["general liability", "auto", "workers", "employer"]):
+                        has_primary = True
+                    if any(kw in cov_type for kw in ["umbrella", "excess"]):
+                        has_umbrella_underlying = True
+            # If it has primary underlying, it's the 1st layer (attachment ~$1M)
+            if has_primary and not has_umbrella_underlying:
+                return 1000000  # $1M attachment
+            # If it has umbrella/excess underlying, it's a higher layer
+            # Use the max underlying limit as a proxy for attachment point
+            if has_umbrella_underlying and max_underlying_limit > 0:
+                return max_underlying_limit
+            # Fallback: try to parse from limits description
+            limits = cov_data.get("limits", []) if isinstance(cov_data, dict) else []
+            for lim in limits:
+                if isinstance(lim, dict):
+                    desc = (lim.get("description", "") or "").lower()
+                    val = (lim.get("limit", "") or "")
+                    if "retention" in desc or "attachment" in desc or "underlying" in desc:
+                        nums = _re_umb.findall(r'[\$]?([\d,]+)', str(val))
+                        for n in nums:
+                            try:
+                                return int(n.replace(',', ''))
+                            except ValueError:
+                                pass
+            # If no underlying info, use premium as rough proxy (higher premium = lower layer usually)
+            return cov_data.get("total_premium", 0) if isinstance(cov_data, dict) else 0
+        
+        # Sort umbrella keys by attachment point (ascending = 1st layer first)
+        _umb_sorted = sorted(_umb_keys, key=lambda k: _parse_attachment_point(coverages.get(k, {})))
+        # Reassign to canonical keys: umbrella, umbrella_layer_2, umbrella_layer_3
+        _canonical_keys = ["umbrella", "umbrella_layer_2", "umbrella_layer_3"]
+        _umb_data_backup = {k: coverages[k] for k in _umb_keys}
+        for i, sorted_key in enumerate(_umb_sorted):
+            target_key = _canonical_keys[i]
+            coverages[target_key] = _umb_data_backup[sorted_key]
+        logger.info(f"Umbrella layer order after sorting: {[coverages[k].get('carrier', 'unknown') for k in _canonical_keys[:len(_umb_keys)]]}")
+    
+    _umb_titles = {
+        "umbrella": "Umbrella / Excess Liability Coverage",
+        "umbrella_layer_2": "2nd Excess Liability Layer",
+        "umbrella_layer_3": "3rd Excess Liability Layer",
+    }
+    for _uk in ["umbrella", "umbrella_layer_2", "umbrella_layer_3"]:
+        if _uk in coverages:
+            generate_coverage_section(doc, data, _uk, _umb_titles[_uk])
     if "cyber" in coverages:
         generate_coverage_section(doc, data, "cyber", "Cyber Liability Coverage")
     if "epli" in coverages:
