@@ -1419,11 +1419,6 @@ function renderExpiringPremiums() {
         for (const [key, cov] of optionalCovs) {
             const displayName = COV_DISPLAY[key] || key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
             const proposed = parseFloat(cov.total_premium) || parseFloat(cov.premium) || 0;
-            const expiring = parseFloat(ep[key]) || 0;
-            const dollarChange = expiring > 0 ? proposed - expiring : 0;
-            const pctChange = expiring > 0 ? ((proposed - expiring) / expiring * 100) : 0;
-            const changeColor = dollarChange > 0 ? 'var(--danger)' : dollarChange < 0 ? 'var(--success)' : 'var(--gray-700)';
-            const changeSign = dollarChange > 0 ? '+' : '';
             html += `<tr style="background:#f8f9fa;">`;
             html += `<td><em>${displayName}</em></td>`;
             html += `<td style="font-size:0.85rem; color:var(--gray-700);">${escHtml(cov.carrier || '')}</td>`;
@@ -1431,13 +1426,7 @@ function renderExpiringPremiums() {
                         style="width:100%; padding:0.4rem; border:1px solid var(--gray-300); border-radius:4px; text-align:right; font-size:0.85rem;"
                         onchange="updateProposedPremium('${key}', this.value)" 
                         onkeyup="previewProposedChange('${key}', this)"></td>`;
-            html += `<td><input type="text" value="${expiring > 0 ? formatNum(expiring) : ''}" 
-                        placeholder="Enter expiring" 
-                        style="width:100%; padding:0.4rem; border:1px solid var(--gray-300); border-radius:4px; text-align:right; font-size:0.85rem;"
-                        onchange="updateExpiringPremium('${key}', this.value)" 
-                        onkeyup="previewPremiumChange('${key}', this.value, ${proposed})"></td>`;
-            html += `<td style="text-align:right; color:${changeColor}; font-weight:600; font-size:0.85rem;" id="ep-dollar-${key}">${expiring > 0 ? changeSign + '$' + formatNum(Math.abs(dollarChange)) : '\u2014'}</td>`;
-            html += `<td style="text-align:right; color:${changeColor}; font-weight:600; font-size:0.85rem;" id="ep-pct-${key}">${expiring > 0 ? changeSign + pctChange.toFixed(1) + '%' : '\u2014'}</td>`;
+            html += `<td colspan="3" style="text-align:center; color:var(--gray-500); font-size:0.8rem; font-style:italic;">New coverage recommendation</td>`;
             html += `</tr>`;
         }
     }
