@@ -1033,35 +1033,26 @@ def generate_premium_summary(doc, data):
             "The following coverages are presented for consideration and are not included in the total premium above.",
             size=9, color=CHARCOAL, space_after=6)
         
-        if has_expiring:
-            opt_headers = ["Coverage", "Carrier", "Expiring", "Proposed", "$ Change", "% Change"]
-            opt_table = create_styled_table(doc, opt_headers, optional_rows,
-                                          col_widths=[1.2, 2.0, 1.0, 1.0, 1.0, 0.8],
-                                          header_size=10, body_size=10,
-                                          col_alignments=[None, None, WD_ALIGN_PARAGRAPH.RIGHT,
-                                                          WD_ALIGN_PARAGRAPH.RIGHT, WD_ALIGN_PARAGRAPH.RIGHT,
-                                                          WD_ALIGN_PARAGRAPH.RIGHT])
-        else:
-            opt_headers = ["Coverage", "Carrier", "Premium", "Taxes & Fees", "Total"]
-            opt_table = create_styled_table(doc, opt_headers, optional_rows,
-                                          col_widths=[1.5, 2.2, 1.2, 1.2, 1.2],
-                                          header_size=10, body_size=10,
-                                          col_alignments=[None, None, WD_ALIGN_PARAGRAPH.RIGHT,
-                                                          WD_ALIGN_PARAGRAPH.RIGHT, WD_ALIGN_PARAGRAPH.RIGHT])
-        # Color-code optional rows too
-        if has_expiring:
-            GREEN_OPT = RGBColor(0x00, 0x80, 0x00)
-            RED_OPT = RGBColor(0xCC, 0x00, 0x00)
-            for row_idx in range(1, len(opt_table.rows)):
-                row = opt_table.rows[row_idx]
-                for col_idx in (4, 5):
-                    for p in row.cells[col_idx].paragraphs:
-                        for run in p.runs:
-                            text = run.text.strip()
-                            if text.startswith("-"):
-                                run.font.color.rgb = GREEN_OPT
-                            elif text.startswith("+"):
-                                run.font.color.rgb = RED_OPT
+        # Optional coverages always show only 3 columns: Coverage, Carrier, Proposed Premium
+        # No expiring, $ change, or % change since these are new coverage recommendations
+        opt_simple_rows = []
+        for orow in optional_rows:
+            # orow may be 6-col (comparison) or 5-col (simple) format
+            cov_name = orow[0]
+            carrier_name = orow[1]
+            if has_expiring:
+                # In comparison mode, proposed is column index 3
+                proposed_val = orow[3] if len(orow) > 3 else "N/A"
+            else:
+                # In simple mode, total is column index 4
+                proposed_val = orow[4] if len(orow) > 4 else (orow[2] if len(orow) > 2 else "N/A")
+            opt_simple_rows.append([cov_name, carrier_name, proposed_val])
+        
+        opt_headers = ["Coverage", "Carrier", "Proposed Premium"]
+        opt_table = create_styled_table(doc, opt_headers, opt_simple_rows,
+                                      col_widths=[2.0, 2.5, 1.5],
+                                      header_size=10, body_size=10,
+                                      col_alignments=[None, None, WD_ALIGN_PARAGRAPH.RIGHT])
     
     # Savings/increase callout (comparison mode only)
     if has_expiring and total_expiring > 0:
@@ -1630,11 +1621,41 @@ def _normalize_city(s):
     return s
 
 
+def _levenshtein(s1, s2):
+    """Compute Levenshtein edit distance between two strings."""
+    if len(s1) < len(s2):
+        return _levenshtein(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
+    prev_row = range(len(s2) + 1)
+    for i, c1 in enumerate(s1):
+        curr_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = prev_row[j + 1] + 1
+            deletions = curr_row[j] + 1
+            substitutions = prev_row[j] + (c1 != c2)
+            curr_row.append(min(insertions, deletions, substitutions))
+        prev_row = curr_row
+    return prev_row[-1]
+
+
+def _words_fuzzy_equal(w1, w2):
+    """Check if two words are equal or differ by at most 2 edits (for words >= 5 chars)."""
+    if w1 == w2:
+        return True
+    # For short words (< 5 chars), require exact match
+    if len(w1) < 5 or len(w2) < 5:
+        return False
+    # Allow edit distance up to 2 for longer words (catches typos like PARRAMORE vs PARRAMOREE)
+    max_dist = 2 if min(len(w1), len(w2)) >= 7 else 1
+    return _levenshtein(w1, w2) <= max_dist
+
+
 def _fuzzy_addr_match(addr1, addr2):
     """Check if two normalized addresses refer to the same location.
     Handles cases like '4288 HWY 51' vs '4285 HWY 51' by comparing
     the street name portion after stripping house numbers.
-    Also handles 'OCEAN BEACH BLVD' vs 'OCEAN BEACH' word-level matching."""
+    Also handles typos like 'PARRAMORE RD' vs 'PARRAMOREE RD' via edit distance."""
     import re
     if not addr1 or not addr2:
         return False
@@ -1654,18 +1675,42 @@ def _fuzzy_addr_match(addr1, addr2):
         if abs(house1 - house2) <= 20:
             if street1 == street2:
                 return True
-            # Word-level match: one street name contains all words of the other
-            words1 = set(street1.split())
-            words2 = set(street2.split())
+            # Word-level match with edit distance tolerance
+            words1 = street1.split()
+            words2 = street2.split()
+            words1_set = set(words1)
+            words2_set = set(words2)
             # Remove common suffixes for comparison
             _suffixes = {'ST', 'AVE', 'BLVD', 'DR', 'RD', 'LN', 'CT', 'PL', 'CIR', 'HWY', 'PKWY', 'TER', 'WAY'}
-            core1 = words1 - _suffixes
-            core2 = words2 - _suffixes
+            core1 = words1_set - _suffixes
+            core2 = words2_set - _suffixes
+            # Exact subset check
             if core1 and core2 and (core1.issubset(core2) or core2.issubset(core1)):
                 return True
+            # Fuzzy word matching: check if each core word in the smaller set
+            # has a fuzzy match in the larger set (catches typos)
+            if core1 and core2:
+                smaller, larger = (core1, core2) if len(core1) <= len(core2) else (core2, core1)
+                all_match = True
+                for sw in smaller:
+                    found = False
+                    for lw in larger:
+                        if _words_fuzzy_equal(sw, lw):
+                            found = True
+                            break
+                    if not found:
+                        all_match = False
+                        break
+                if all_match:
+                    return True
             # Also check if one is a substring of the other at word level
             if street1 in street2 or street2 in street1:
                 return True
+            # Edit distance on full street name (for very similar streets)
+            if len(street1) >= 5 and len(street2) >= 5:
+                max_dist = 2 if min(len(street1), len(street2)) >= 10 else 1
+                if _levenshtein(street1, street2) <= max_dist:
+                    return True
     return False
 
 
