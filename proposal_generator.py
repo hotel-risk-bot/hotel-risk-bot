@@ -1685,6 +1685,7 @@ def _dedup_locations(raw_locations):
 
 def generate_locations(doc, data):
     """Section 8: Locations — unified schedule with Property/Liability coverage checkmarks."""
+    import re
     add_page_break(doc)
     add_section_header(doc, "Schedule of Locations")
     
@@ -1774,7 +1775,6 @@ def generate_locations(doc, data):
     # Quotes are primary — SOVs only supplement with additional info.
     
     # --- Pre-scan designated premises to add to liability_addr_keys ---
-    import re
     
     # PRIMARY SOURCE: designated_premises array (extracted by GPT from CG2144/NXLL110)
     _cg2144_addrs = []  # Save parsed addresses for the fourth pass later
