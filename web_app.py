@@ -126,9 +126,29 @@ def _merge_extraction_results(existing, new_data):
             existing_ci[key] = val
     merged["client_info"] = existing_ci
 
-    # Merge coverages with auto-promotion
+    # Merge coverages with auto-promotion and standalone prioritization
     existing_covs = merged.get("coverages", {})
     new_covs = new_data.get("coverages", {})
+
+    def _cov_premium(cov):
+        """Extract numeric premium from a coverage dict."""
+        if not isinstance(cov, dict):
+            return 0
+        p = cov.get("total_premium") or cov.get("premium") or 0
+        try:
+            return float(str(p).replace(",", "").replace("$", ""))
+        except (ValueError, TypeError):
+            return 0
+
+    def _is_standalone(cov):
+        """Check if a coverage appears to be a standalone policy (has its own carrier and premium)."""
+        if not isinstance(cov, dict):
+            return False
+        has_carrier = bool(cov.get("carrier", "").strip())
+        has_premium = _cov_premium(cov) > 0
+        has_limits = bool(cov.get("limits"))
+        return has_carrier and (has_premium or has_limits)
+
     for cov_key, cov_data in new_covs.items():
         if cov_key not in existing_covs:
             existing_covs[cov_key] = cov_data
@@ -142,6 +162,21 @@ def _merge_extraction_results(existing, new_data):
                 existing_covs["excess_property"] = cov_data
             elif "excess_property_2" not in existing_covs:
                 existing_covs["excess_property_2"] = cov_data
+        else:
+            # For other coverages (cyber, epli, crime, etc.): prioritize standalone
+            # policy over bundled/incidental coverage from another quote
+            existing_cov = existing_covs[cov_key]
+            new_is_standalone = _is_standalone(cov_data)
+            existing_is_standalone = _is_standalone(existing_cov)
+            new_premium = _cov_premium(cov_data)
+            existing_premium = _cov_premium(existing_cov)
+            # Replace if: new is standalone and existing isn't, or new has higher premium
+            if (new_is_standalone and not existing_is_standalone) or \
+               (new_is_standalone and existing_is_standalone and new_premium > existing_premium):
+                logger.info(f"Replacing {cov_key} coverage: {existing_cov.get('carrier', 'unknown')} "
+                           f"(${existing_premium:,.0f}) -> {cov_data.get('carrier', 'unknown')} "
+                           f"(${new_premium:,.0f})")
+                existing_covs[cov_key] = cov_data
     merged["coverages"] = existing_covs
 
     # Merge locations

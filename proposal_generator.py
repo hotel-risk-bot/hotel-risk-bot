@@ -1452,15 +1452,22 @@ def generate_information_summary(doc, data):
     lro_count = 0
     vacant_count = 0
     other_types = {}
-    seen_loc_addrs = set()  # track by normalized address to avoid double-counting
+    seen_loc_addrs = []  # track normalized addresses for fuzzy dedup
+    
+    def _addr_already_seen(addr):
+        """Check if addr fuzzy-matches any already-seen address."""
+        for existing in seen_loc_addrs:
+            if _fuzzy_addr_match(addr, existing):
+                return True
+        return False
     
     # First: count from SOV locations (most reliable source for property types)
     if sov_data and sov_data.get("locations"):
         for loc in sov_data["locations"]:
             addr = _normalize_addr(loc.get("address", ""))
-            if addr in seen_loc_addrs:
+            if _addr_already_seen(addr):
                 continue
-            seen_loc_addrs.add(addr)
+            seen_loc_addrs.append(addr)
             # Determine type from description, hotel_flag, or occupancy
             desc = (loc.get("description", "") or loc.get("hotel_flag", "") or
                     loc.get("occupancy", "") or loc.get("dba", "") or "").lower()
@@ -1492,9 +1499,9 @@ def generate_information_summary(doc, data):
                 # Skip non-physical-location exposure classes
                 if any(skip in classification for skip in _skip_classes):
                     continue
-                if not addr or addr in seen_loc_addrs:
+                if not addr or _addr_already_seen(addr):
                     continue
-                seen_loc_addrs.add(addr)
+                seen_loc_addrs.append(addr)
                 if any(kw in classification for kw in ["hotel", "motel", "inn", "suite", "lodge", "resort"]):
                     hotel_count += 1
                 elif "office" in classification or "building" in classification:
