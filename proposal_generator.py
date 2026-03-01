@@ -1093,7 +1093,7 @@ def generate_payment_options(doc, data):
                 filtered_opts.append({"carrier": carrier, "coverage_type": po.get("coverage_type", ""), "terms": terms, "mep": po.get("mep", "")})
         
         if filtered_opts:
-            headers = ["Carrier", "Payment Terms", "Minimum Earned Premium"]
+            headers = ["Carrier — Policy Type", "Payment Terms", "Min. Earned Premium"]
             rows = []
             for po in filtered_opts:
                 carrier_name = po.get("carrier", "")
@@ -1104,7 +1104,7 @@ def generate_payment_options(doc, data):
                 else:
                     carrier_display = carrier_name
                 rows.append([carrier_display, po.get("terms", ""), po.get("mep", "")])
-            create_styled_table(doc, headers, rows, col_widths=[2.5, 3.0, 2.0],
+            create_styled_table(doc, headers, rows, col_widths=[2.8, 2.7, 2.0],
                                header_size=10, body_size=9,
                                col_alignments={2: WD_ALIGN_PARAGRAPH.CENTER})
         else:
@@ -2888,6 +2888,90 @@ def generate_confirmation_to_bind(doc, data):
     
     for i, stmt in enumerate(statements, 1):
         add_formatted_paragraph(doc, f"{i}. {stmt}", size=9, space_after=2)
+    
+    # Underwriting Confirmations (True/False checkmarks)
+    add_subsection_header(doc, "Underwriting Confirmations")
+    add_formatted_paragraph(doc,
+        "The insured confirms the following by checking True or False:",
+        size=10, space_after=6)
+    
+    confirmations = [
+        "No prior losses for abuse & molestation, assault & battery, or human trafficking.",
+        "Pest control service contract including bed bug prevention / detection.",
+        "No homeless or government shelters.",
+        "Human trafficking awareness program (annual training all employees).",
+        "Background checks on all employees.",
+    ]
+    
+    # Create a table with columns: #, Confirmation, True, False
+    conf_table = doc.add_table(rows=len(confirmations) + 1, cols=4)
+    conf_table.alignment = WD_TABLE_ALIGNMENT.LEFT
+    
+    # Header row
+    header_cells = conf_table.rows[0].cells
+    for ci, (hdr_text, hdr_width) in enumerate([
+        ("#", Inches(0.4)), ("Confirmation", Inches(5.0)),
+        ("True", Inches(0.8)), ("False", Inches(0.8))
+    ]):
+        header_cells[ci].width = hdr_width
+        p = header_cells[ci].paragraphs[0]
+        p.paragraph_format.space_before = Pt(3)
+        p.paragraph_format.space_after = Pt(3)
+        run = p.add_run(hdr_text)
+        run.font.size = Pt(9)
+        run.font.bold = True
+        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+        run.font.name = "Calibri"
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER if ci >= 2 else WD_ALIGN_PARAGRAPH.LEFT
+        # Blue background for header
+        shading_elm = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{CLASSIC_BLUE_HEX}" w:val="clear"/>')
+        header_cells[ci]._tc.get_or_add_tcPr().append(shading_elm)
+    
+    # Data rows
+    for ri, conf_text in enumerate(confirmations):
+        row_cells = conf_table.rows[ri + 1].cells
+        # Row number
+        p = row_cells[0].paragraphs[0]
+        p.paragraph_format.space_before = Pt(2)
+        p.paragraph_format.space_after = Pt(2)
+        run = p.add_run(str(ri + 1))
+        run.font.size = Pt(9)
+        run.font.name = "Calibri"
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # Confirmation text
+        p = row_cells[1].paragraphs[0]
+        p.paragraph_format.space_before = Pt(2)
+        p.paragraph_format.space_after = Pt(2)
+        run = p.add_run(conf_text)
+        run.font.size = Pt(9)
+        run.font.name = "Calibri"
+        
+        # True checkbox
+        p = row_cells[2].paragraphs[0]
+        p.paragraph_format.space_before = Pt(2)
+        p.paragraph_format.space_after = Pt(2)
+        run = p.add_run("\u2610")  # ☐ empty checkbox
+        run.font.size = Pt(12)
+        run.font.name = "Calibri"
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # False checkbox
+        p = row_cells[3].paragraphs[0]
+        p.paragraph_format.space_before = Pt(2)
+        p.paragraph_format.space_after = Pt(2)
+        run = p.add_run("\u2610")  # ☐ empty checkbox
+        run.font.size = Pt(12)
+        run.font.name = "Calibri"
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # Alternate row shading
+        if ri % 2 == 0:
+            for cell in row_cells:
+                shading_elm = parse_xml(f'<w:shd {nsdecls("w")} w:fill="F2F6FA" w:val="clear"/>')
+                cell._tc.get_or_add_tcPr().append(shading_elm)
+    
+    add_formatted_paragraph(doc, "", space_after=6)  # spacer
     
     # Earned premium / cancellation disclaimer - small font, bold, red
     _add_earned_premium_disclaimer(doc)
