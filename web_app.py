@@ -11,6 +11,7 @@ import json
 import logging
 import tempfile
 import uuid
+import threading
 from pathlib import Path
 from datetime import datetime
 
@@ -398,23 +399,12 @@ def upload_files(session_id):
     return jsonify({"uploaded": uploaded, "total_files": len(session["files"])})
 
 
-@app.route("/api/extract/<session_id>", methods=["POST"])
-def extract_data(session_id):
-    """Extract and structure data from all uploaded files.
-    
-    Optimized flow: extract text from ALL files first, then make a SINGLE
-    combined GPT call instead of per-file calls. This reduces total GPT calls
-    from ~8 to ~4, staying well within Railway's timeout limits.
-    """
+def _run_extraction(session_id):
+    """Background worker: extract and structure data from all uploaded files."""
     session = _get_session(session_id)
     if not session:
-        return jsonify({"error": "Session not found"}), 404
+        return
 
-    if not session["files"]:
-        return jsonify({"error": "No files uploaded yet"}), 400
-
-    session["status"] = "extracting"
-    _set_session(session_id, session)
     extractor = ProposalExtractor()
 
     try:
@@ -448,8 +438,9 @@ def extract_data(session_id):
 
         if not all_pdf_texts and not all_excel_data:
             session["status"] = "error"
+            session["extract_error"] = "No data could be extracted from the uploaded files"
             _set_session(session_id, session)
-            return jsonify({"error": "No data could be extracted from the uploaded files"}), 400
+            return
 
         # Step 2: Single combined GPT call for ALL files at once
         logger.info(f"Sending {len(all_pdf_texts)} PDFs + {len(all_excel_data)} Excel files to GPT in single call")
@@ -459,9 +450,10 @@ def extract_data(session_id):
 
         if not merged_data or "error" in merged_data:
             session["status"] = "error"
+            session["extract_error"] = (merged_data.get("error", "Unknown extraction error")
+                                        if merged_data else "No data extracted")
             _set_session(session_id, session)
-            error_msg = merged_data.get("error", "Unknown extraction error") if merged_data else "No data extracted"
-            return jsonify({"error": error_msg}), 400
+            return
 
         _normalize_coverages(merged_data)
 
@@ -472,21 +464,70 @@ def extract_data(session_id):
         session["extracted_data"] = merged_data
         session["status"] = "extracted"
         _set_session(session_id, session)
+        logger.info(f"Extraction complete for session {session_id}")
 
-        # Build a summary for the UI
+    except Exception as e:
+        logger.exception(f"Extraction failed: {e}")
+        session["status"] = "error"
+        session["extract_error"] = f"Extraction failed: {str(e)}"
+        _set_session(session_id, session)
+
+
+@app.route("/api/extract/<session_id>", methods=["POST"])
+def extract_data(session_id):
+    """Start extraction in a background thread and return immediately.
+    
+    The frontend polls GET /api/extract/<session_id>/status for completion.
+    This avoids Railway's proxy timeout (~100s) for long-running extractions.
+    """
+    session = _get_session(session_id)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
+
+    if not session["files"]:
+        return jsonify({"error": "No files uploaded yet"}), 400
+
+    if session.get("status") == "extracting":
+        return jsonify({"status": "extracting", "message": "Extraction already in progress"})
+
+    session["status"] = "extracting"
+    session["extract_error"] = None
+    _set_session(session_id, session)
+
+    # Start extraction in background thread
+    thread = threading.Thread(target=_run_extraction, args=(session_id,), daemon=True)
+    thread.start()
+    logger.info(f"Started background extraction for session {session_id}")
+
+    return jsonify({"status": "extracting", "message": "Extraction started"})
+
+
+@app.route("/api/extract/<session_id>/status", methods=["GET"])
+def extract_status(session_id):
+    """Poll extraction status. Returns data when complete."""
+    session = _get_session(session_id)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
+
+    status = session.get("status", "unknown")
+
+    if status == "extracting":
+        return jsonify({"status": "extracting"})
+
+    if status == "error":
+        error_msg = session.get("extract_error", "Unknown error")
+        return jsonify({"status": "error", "error": error_msg}), 400
+
+    if status == "extracted":
+        merged_data = session.get("extracted_data", {})
         summary = _build_review_summary(merged_data)
-
         return jsonify({
             "status": "extracted",
             "summary": summary,
             "data": merged_data,
         })
 
-    except Exception as e:
-        logger.exception(f"Extraction failed: {e}")
-        session["status"] = "error"
-        _set_session(session_id, session)
-        return jsonify({"error": f"Extraction failed: {str(e)}"}), 500
+    return jsonify({"status": status})
 
 
 @app.route("/api/update/<session_id>", methods=["POST"])
