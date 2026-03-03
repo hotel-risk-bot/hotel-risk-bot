@@ -1,6 +1,4 @@
 [phases.setup]
-nixPkgs = ["python311", "python311Packages.pip"]
-aptPkgs = ["poppler-utils"]
-
+nixPkgs = ["python311", "python311Packages.pip", "poppler_utils"]
 [start]
 cmd = "python bot.py"
