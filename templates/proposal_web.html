@@ -917,13 +917,37 @@ btnExtract.addEventListener('click', async () => {
         const upData = await upRes.json();
         if (!upRes.ok) throw new Error(upData.error);
 
-        // 3. Extract
-        showLoading('Extracting insurance data with AI...', 'This may take 30-90 seconds depending on file complexity');
+        // 3. Start extraction (async - returns immediately)
+        showLoading('Extracting insurance data with AI...', 'This may take 2-4 minutes for scanned PDFs. Please wait...');
         const exRes = await fetch(`/api/extract/${sessionId}`, { method: 'POST' });
-        const exData = await exRes.json();
-        if (!exRes.ok) throw new Error(exData.error);
+        const exStart = await exRes.json();
+        if (!exRes.ok) throw new Error(exStart.error);
 
-        extractedData = exData.data;
+        // 4. Poll for extraction completion
+        let extractResult = null;
+        let pollCount = 0;
+        const maxPolls = 120; // 10 minutes max (120 * 5s)
+        while (pollCount < maxPolls) {
+            await new Promise(r => setTimeout(r, 5000)); // wait 5 seconds
+            pollCount++;
+            const statusRes = await fetch(`/api/extract/${sessionId}/status`);
+            const statusData = await statusRes.json();
+            if (statusData.status === 'extracted') {
+                extractResult = statusData;
+                break;
+            } else if (statusData.status === 'error') {
+                throw new Error(statusData.error || 'Extraction failed');
+            }
+            // Update loading message with elapsed time
+            const elapsed = pollCount * 5;
+            const mins = Math.floor(elapsed / 60);
+            const secs = elapsed % 60;
+            const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+            showLoading('Extracting insurance data with AI...', `Processing... ${timeStr} elapsed`);
+        }
+        if (!extractResult) throw new Error('Extraction timed out after 10 minutes');
+
+        extractedData = extractResult.data;
 
         // Store effective date if provided
         const effDate = document.getElementById('effective-date').value.trim();
