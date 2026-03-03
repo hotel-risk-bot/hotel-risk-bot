@@ -283,12 +283,14 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 200000) -> str:
         return _extract_with_pdfplumber(pdf_path, max_chars)
 
 
-def _extract_with_ocr(pdf_path: str, total_pages: int = 0, max_pages: int = 10) -> str:
+def _extract_with_ocr(pdf_path: str, total_pages: int = 0, max_pages: int = 3) -> str:
     """OCR fallback for scanned/image-based PDFs using GPT Vision.
     
-    Converts PDF pages to images and sends them to GPT-4.1 with vision
+    Converts PDF pages to images and sends them to GPT-4.1-mini with vision
     to extract text content. Used when both pdftotext and pdfplumber
     fail to extract any text.
+    
+    Optimized for speed: low DPI, limited pages, fast model, single API call.
     """
     if not HAS_PDF2IMAGE:
         logger.warning("pdf2image not available, cannot perform OCR")
@@ -300,13 +302,13 @@ def _extract_with_ocr(pdf_path: str, total_pages: int = 0, max_pages: int = 10) 
     try:
         logger.info(f"OCR fallback: converting PDF pages to images for {pdf_path}")
         
-        # Convert PDF pages to images (limit to max_pages for cost/speed)
+        # Limit pages aggressively — key quote info is in first few pages
         pages_to_convert = min(total_pages, max_pages) if total_pages > 0 else max_pages
         images = convert_from_path(
             pdf_path,
             first_page=1,
             last_page=pages_to_convert,
-            dpi=200,  # Good balance of quality vs size
+            dpi=150,  # Lower DPI for speed and memory
             fmt="jpeg"
         )
         
@@ -316,67 +318,56 @@ def _extract_with_ocr(pdf_path: str, total_pages: int = 0, max_pages: int = 10) 
         
         logger.info(f"OCR: converted {len(images)} pages to images")
         
-        # Process pages in batches to stay within token limits
-        all_text_parts = []
-        batch_size = 5  # Process 5 pages at a time
+        # Build all image content for a single GPT Vision call
+        content_parts = [
+            {"type": "text", "text": f"Extract ALL text from these {len(images)} insurance document page(s). "
+             "Include all numbers, dates, policy details, premiums, limits, carrier names, and coverage information. "
+             "Return the text content of each page separated by '--- Page X ---' markers."}
+        ]
         
-        for batch_start in range(0, len(images), batch_size):
-            batch_images = images[batch_start:batch_start + batch_size]
+        for i, img in enumerate(images):
+            # Convert PIL image to base64 JPEG with moderate quality
+            buffer = BytesIO()
+            img.save(buffer, format="JPEG", quality=70)
+            img_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
             
-            # Build image content for GPT Vision
-            content_parts = [
-                {"type": "text", "text": f"Extract ALL text from these {len(batch_images)} insurance document page(s). "
-                 "Preserve the layout and structure as much as possible. "
-                 "Include all numbers, dates, policy details, premiums, limits, and carrier information. "
-                 "Return the text content of each page separated by '--- Page X ---' markers."}
-            ]
+            content_parts.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{img_base64}",
+                    "detail": "low"  # Use low detail for speed
+                }
+            })
             
-            for i, img in enumerate(batch_images):
-                # Convert PIL image to base64 JPEG
-                buffer = BytesIO()
-                img.save(buffer, format="JPEG", quality=85)
-                img_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
-                
-                content_parts.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{img_base64}",
-                        "detail": "high"
-                    }
-                })
-            
-            try:
-                response = _get_openai_client().chat.completions.create(
-                    model=GPT_MODEL,
-                    messages=[
-                        {"role": "system", "content": "You are an expert OCR assistant. Extract all text from the provided insurance document images accurately and completely."},
-                        {"role": "user", "content": content_parts}
-                    ],
-                    max_tokens=16000,
-                    temperature=0.1
-                )
-                
-                batch_text = response.choices[0].message.content
-                if batch_text:
-                    # Add page markers if not already present
-                    for j, _ in enumerate(batch_images):
-                        page_num = batch_start + j + 1
-                        if f"Page {page_num}" not in batch_text and j == 0:
-                            batch_text = f"\n--- Page {page_num} ---\n" + batch_text
-                    all_text_parts.append(batch_text)
-                    logger.info(f"OCR batch {batch_start//batch_size + 1}: extracted {len(batch_text)} chars")
-                    
-            except Exception as e:
-                logger.error(f"OCR GPT Vision call failed for batch {batch_start//batch_size + 1}: {e}")
-                continue
+            # Free memory immediately
+            del img
+            buffer.close()
         
-        if not all_text_parts:
-            logger.warning("OCR: No text extracted from any page images")
+        # Free the images list
+        del images
+        
+        try:
+            response = _get_openai_client().chat.completions.create(
+                model="gpt-4.1-mini",  # Faster model for OCR
+                messages=[
+                    {"role": "system", "content": "You are an expert OCR assistant. Extract all text from the provided insurance document images accurately and completely."},
+                    {"role": "user", "content": content_parts}
+                ],
+                max_tokens=16000,
+                temperature=0.1
+            )
+            
+            result_text = response.choices[0].message.content
+            if result_text:
+                logger.info(f"OCR: extracted {len(result_text)} chars from {pages_to_convert} pages")
+                return result_text
+            else:
+                logger.warning("OCR: GPT Vision returned empty response")
+                return ""
+                
+        except Exception as e:
+            logger.error(f"OCR GPT Vision call failed: {e}")
             return ""
-        
-        combined = "\n".join(all_text_parts)
-        logger.info(f"OCR: total extracted {len(combined)} chars from {len(images)} pages")
-        return combined
         
     except Exception as e:
         logger.error(f"OCR extraction failed: {e}")
