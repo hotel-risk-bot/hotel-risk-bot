@@ -1421,10 +1421,13 @@ class ProposalExtractor:
             return {"error": f"AI extraction failed: {e}"}
 
     def _pass2_forms_extraction(self, data: dict, combined_text: str) -> dict:
-        """Pass 2: Focused extraction of forms & endorsements for coverages that have too few."""
+        """Pass 2: Focused extraction of forms & endorsements for coverages that have too few.
+        Uses gpt-4.1-mini for speed since this is a focused extraction task."""
         covs = data.get("coverages", {})
         if not isinstance(covs, dict):
             return data
+        
+        PASS_MODEL = "gpt-4.1-mini"  # Faster model for focused extraction passes
         
         # Check which coverages need forms extraction
         # Trigger when forms count < 5 (not just empty) — GPT often captures only 1-2 forms
@@ -1476,7 +1479,7 @@ DOCUMENT TEXT:
             
             try:
                 response = _get_openai_client().chat.completions.create(
-                    model=GPT_MODEL,
+                    model=PASS_MODEL,
                     messages=[
                         {"role": "system", "content": "You are an expert insurance forms extraction assistant. Extract every form number and endorsement exactly as written."},
                         {"role": "user", "content": prompt}
@@ -1501,7 +1504,9 @@ DOCUMENT TEXT:
         return data
 
     def _pass3_address_extraction(self, data: dict, combined_text: str) -> dict:
-        """Pass 3: Focused extraction of covered addresses for GL."""
+        """Pass 3: Focused extraction of covered addresses for GL.
+        Uses gpt-4.1-mini for speed since this is a focused extraction task."""
+        PASS_MODEL = "gpt-4.1-mini"
         covs = data.get("coverages", {})
         gl = covs.get("general_liability", {})
         
@@ -1544,7 +1549,7 @@ DOCUMENT TEXT:
         
         try:
             response = _get_openai_client().chat.completions.create(
-                model=GPT_MODEL,
+                model=PASS_MODEL,
                 messages=[
                     {"role": "system", "content": "You are an expert at finding physical addresses in insurance documents. Extract every covered location address."},
                     {"role": "user", "content": prompt}
@@ -1575,7 +1580,9 @@ DOCUMENT TEXT:
         return data
 
     def _pass4_sublimits_extraction(self, data: dict, combined_text: str) -> dict:
-        """Pass 4: Focused extraction of property sublimits/extensions."""
+        """Pass 4: Focused extraction of property sublimits/extensions.
+        Uses gpt-4.1-mini for speed since this is a focused extraction task."""
+        PASS_MODEL = "gpt-4.1-mini"
         covs = data.get("coverages", {})
         prop = covs.get("property", {})
         
@@ -1643,7 +1650,7 @@ DOCUMENT TEXT:
         
         try:
             response = _get_openai_client().chat.completions.create(
-                model=GPT_MODEL,
+                model=PASS_MODEL,
                 messages=[
                     {"role": "system", "content": "You are an expert at extracting property insurance sublimits and extensions of coverage. Extract every sublimit with its exact dollar amount."},
                     {"role": "user", "content": prompt}
