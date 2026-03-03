@@ -400,7 +400,12 @@ def upload_files(session_id):
 
 @app.route("/api/extract/<session_id>", methods=["POST"])
 def extract_data(session_id):
-    """Extract and structure data from all uploaded files."""
+    """Extract and structure data from all uploaded files.
+    
+    Optimized flow: extract text from ALL files first, then make a SINGLE
+    combined GPT call instead of per-file calls. This reduces total GPT calls
+    from ~8 to ~4, staying well within Railway's timeout limits.
+    """
     session = _get_session(session_id)
     if not session:
         return jsonify({"error": "Session not found"}), 404
@@ -409,8 +414,8 @@ def extract_data(session_id):
         return jsonify({"error": "No files uploaded yet"}), 400
 
     session["status"] = "extracting"
+    _set_session(session_id, session)
     extractor = ProposalExtractor()
-    merged_data = None
 
     try:
         # Process SOV files first
@@ -423,41 +428,42 @@ def extract_data(session_id):
                     session["sov_data"] = sov_data
                     logger.info(f"SOV parsed: {len(sov_data.get('locations', []))} locations")
 
-        # Process each PDF individually, then merge
+        # Step 1: Extract text from ALL files first (fast, no GPT calls)
+        all_pdf_texts = []
+        all_excel_data = []
         for file_info in session["files"]:
             if file_info["type"] == "pdf":
-                logger.info(f"Extracting PDF: {file_info['filename']}")
+                logger.info(f"Extracting text from PDF: {file_info['filename']}")
                 text = extractor.extract_pdf_text(file_info["path"])
-                if not text:
-                    logger.warning(f"No text from {file_info['filename']}")
-                    continue
-
-                pdf_texts = [{"filename": file_info["filename"], "text": text}]
-                file_data = extractor.structure_insurance_data(
-                    pdf_texts, [], session["client_name"]
-                )
-
-                if "error" not in file_data:
-                    _normalize_coverages(file_data)
-                    merged_data = _merge_extraction_results(merged_data, file_data)
-                    logger.info(f"Merged {file_info['filename']}: coverages={list(file_data.get('coverages', {}).keys())}")
+                if text:
+                    all_pdf_texts.append({"filename": file_info["filename"], "text": text})
+                    logger.info(f"  -> {len(text)} chars extracted")
                 else:
-                    logger.error(f"Extraction error for {file_info['filename']}: {file_data['error']}")
-
+                    logger.warning(f"No text from {file_info['filename']}")
             elif file_info["type"] == "excel" and not file_info.get("is_sov"):
                 logger.info(f"Extracting Excel: {file_info['filename']}")
                 data = extractor.extract_excel_data(file_info["path"])
-                excel_data = [{"filename": file_info["filename"], "data": data}]
-                file_data = extractor.structure_insurance_data(
-                    [], excel_data, session["client_name"]
-                )
-                if "error" not in file_data:
-                    _normalize_coverages(file_data)
-                    merged_data = _merge_extraction_results(merged_data, file_data)
+                if data:
+                    all_excel_data.append({"filename": file_info["filename"], "data": data})
 
-        if not merged_data:
+        if not all_pdf_texts and not all_excel_data:
             session["status"] = "error"
+            _set_session(session_id, session)
             return jsonify({"error": "No data could be extracted from the uploaded files"}), 400
+
+        # Step 2: Single combined GPT call for ALL files at once
+        logger.info(f"Sending {len(all_pdf_texts)} PDFs + {len(all_excel_data)} Excel files to GPT in single call")
+        merged_data = extractor.structure_insurance_data(
+            all_pdf_texts, all_excel_data, session["client_name"]
+        )
+
+        if not merged_data or "error" in merged_data:
+            session["status"] = "error"
+            _set_session(session_id, session)
+            error_msg = merged_data.get("error", "Unknown extraction error") if merged_data else "No data extracted"
+            return jsonify({"error": error_msg}), 400
+
+        _normalize_coverages(merged_data)
 
         # Enrich with SOV data
         if session.get("sov_data"):
