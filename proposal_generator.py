@@ -410,25 +410,17 @@ def add_page_header(doc):
         run = p.add_run()
         run.add_picture(LOGO_PATH, width=Inches(1.8))
     
-    # Text cell (right)
+    # Text cell (right) — intentionally left blank per branding preferences
     text_cell = htable.rows[0].cells[1]
     text_cell.width = Inches(4.5)
     p = text_cell.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     p.paragraph_format.space_after = Pt(0)
-    run = p.add_run("Franchise Division")
+    run = p.add_run("Hotel Franchise Practice")
     run.font.size = Pt(12)
     run.font.color.rgb = ELECTRIC_BLUE
     run.font.bold = True
     run.font.name = "Calibri"
-    p2 = text_cell.add_paragraph()
-    p2.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    p2.paragraph_format.space_before = Pt(0)
-    run2 = p2.add_run("Hotel Insurance Programs")
-    run2.font.size = Pt(12)
-    run2.font.color.rgb = ELECTRIC_BLUE
-    run2.font.bold = True
-    run2.font.name = "Calibri"
     
     # Remove borders from header table
     for row in htable.rows:
@@ -684,7 +676,7 @@ def generate_cover_page(doc, data):
                            alignment=WD_ALIGN_PARAGRAPH.CENTER, space_before=10, space_after=2)
     add_formatted_paragraph(doc, "HUB International Midwest Limited", size=13, color=CLASSIC_BLUE,
                            bold=True, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_before=0, space_after=2)
-    add_formatted_paragraph(doc, "Franchise Division | Hotel Insurance Programs", size=11,
+    add_formatted_paragraph(doc, "Hotel Franchise Practice", size=11,
                            color=ELECTRIC_BLUE, alignment=WD_ALIGN_PARAGRAPH.CENTER, space_after=10)
 
 
@@ -2517,7 +2509,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     if limits and not (coverage_key == "crime" and insuring_clauses):
         add_subsection_header(doc, "Coverage Limits")
         headers = ["Description", "Limit"]
-        rows = [[lim.get("description", ""), lim.get("limit", "")] if isinstance(lim, dict) else [str(lim), ""] for lim in limits]
+        rows = [[lim.get("description", "") or lim.get("type", ""), lim.get("limit", "") or lim.get("amount", "")] if isinstance(lim, dict) else [str(lim), ""] for lim in limits]
         # Left-align headers; center Limit values for umbrella/excess
         L = WD_ALIGN_PARAGRAPH.LEFT
         limit_body_align = {}
@@ -2533,7 +2525,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     if deductibles:
         add_subsection_header(doc, "Deductibles")
         headers = ["Peril", "Deductible"]
-        rows = [[ded.get("description", ""), ded.get("amount", "")] if isinstance(ded, dict) else [str(ded), ""] for ded in deductibles]
+        rows = [[ded.get("description", "") or ded.get("type", ""), ded.get("amount", "")] if isinstance(ded, dict) else [str(ded), ""] for ded in deductibles]
         L = WD_ALIGN_PARAGRAPH.LEFT
         create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
                            header_size=10, body_size=10,
@@ -2701,12 +2693,12 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         L = WD_ALIGN_PARAGRAPH.LEFT
         if has_ded:
             headers = ["Description", "Limit", "Deductible"]
-            rows = [[ac.get("description", ""), ac.get("limit", ""), ac.get("deductible", "")] if isinstance(ac, dict) else [str(ac), "", ""] for ac in addl]
+            rows = [[ac.get("description", "") or ac.get("coverage", "") or ac.get("name", ""), ac.get("limit", ""), ac.get("deductible", "")] if isinstance(ac, dict) else [str(ac), "", ""] for ac in addl]
             create_styled_table(doc, headers, rows, col_widths=[3.5, 2.0, 2.0],
                               header_alignments={0: L, 1: L, 2: L})
         else:
             headers = ["Description", "Limit"]
-            rows = [[ac.get("description", ""), ac.get("limit", "")] if isinstance(ac, dict) else [str(ac), ""] for ac in addl]
+            rows = [[ac.get("description", "") or ac.get("coverage", "") or ac.get("name", ""), ac.get("limit", "")] if isinstance(ac, dict) else [str(ac), ""] for ac in addl]
             create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
                               header_alignments={0: L, 1: L})
     
@@ -2864,6 +2856,12 @@ def generate_confirmation_to_bind(doc, data):
     """Section 14: Confirmation to Bind Agreement"""
     add_page_break(doc)
     add_section_header(doc, "Confirmation to Bind Agreement")
+    
+    # Show effective date prominently
+    effective_date = data.get("client_info", {}).get("effective_date", "")
+    if effective_date:
+        add_formatted_paragraph(doc, f"Effective Date: {effective_date}", size=12,
+                               color=ELECTRIC_BLUE, bold=True, space_after=8)
     
     add_formatted_paragraph(doc,
         "By signing below, the undersigned authorized representative of the Applicant confirms "
@@ -3446,8 +3444,10 @@ def generate_proposal(data: dict, output_path: str) -> str:
         generate_coverage_section(doc, data, "excess_property_2", "Excess Property Coverage — Layer 2")
     if "general_liability" in coverages:
         generate_coverage_section(doc, data, "general_liability", "General Liability Coverage")
-    if "workers_comp" in coverages:
-        generate_coverage_section(doc, data, "workers_comp", "Workers Compensation Coverage")
+    # Support both workers_comp and workers_compensation keys
+    _wc_key = "workers_comp" if "workers_comp" in coverages else ("workers_compensation" if "workers_compensation" in coverages else None)
+    if _wc_key:
+        generate_coverage_section(doc, data, _wc_key, "Workers Compensation Coverage")
     if "commercial_auto" in coverages:
         generate_coverage_section(doc, data, "commercial_auto", "Commercial Auto Coverage")
     # Sort umbrella layers by attachment point before rendering
@@ -3547,6 +3547,8 @@ def generate_proposal(data: dict, output_path: str) -> str:
         generate_coverage_section(doc, data, "garage_keepers", "Garage Keepers Coverage")
     if "wind_deductible_buydown" in coverages:
         generate_coverage_section(doc, data, "wind_deductible_buydown", "Wind Deductible Buy Down Coverage")
+    if "enviro_pack" in coverages:
+        generate_coverage_section(doc, data, "enviro_pack", "Enviro Pack Coverage")
     
     # Part 3: Coverage Recommendations (before signature pages)
     generate_coverage_recommendations(doc)

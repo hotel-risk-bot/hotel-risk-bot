@@ -596,8 +596,8 @@
             <div class="upload-area" id="upload-area">
                 <div class="icon">&#128196;</div>
                 <p><strong>Drag &amp; drop files here</strong> or click to browse</p>
-                <p class="hint">Accepts PDF (quotes) and Excel (SOV) files &mdash; up to 50MB total</p>
-                <input type="file" id="file-input" multiple accept=".pdf,.xlsx,.xls,.csv" style="display:none">
+                <p class="hint">Accepts PDF (quotes), Excel (SOV), and image files (JPG, PNG) &mdash; up to 50MB total</p>
+                <input type="file" id="file-input" multiple accept=".pdf,.xlsx,.xls,.csv,.jpg,.jpeg,.png" style="display:none">
             </div>
             <div class="file-list" id="file-list"></div>
         </div>
@@ -687,6 +687,7 @@
                         <option value="garage_keepers">Garage Keepers</option>
                         <option value="inland_marine">Inland Marine</option>
                         <option value="wind_deductible_buydown">Wind Deductible Buy Down</option>
+                        <option value="enviro_pack">Enviro Pack</option>
                     </select>
                     <input type="text" id="add-coverage-carrier" placeholder="Carrier name (optional)" style="padding:0.4rem 0.75rem; border:1px solid var(--gray-300); border-radius:var(--radius); font-size:0.85rem; width:200px;">
                     <button onclick="addCoverage()" style="padding:0.5rem 1rem; background:var(--hub-electric); color:white; border:none; border-radius:var(--radius); cursor:pointer; font-size:0.85rem;">+ Add Coverage</button>
@@ -848,7 +849,7 @@ fileInput.addEventListener('change', () => handleFiles(fileInput.files));
 function handleFiles(files) {
     for (const f of files) {
         const ext = f.name.split('.').pop().toLowerCase();
-        if (!['pdf', 'xlsx', 'xls', 'csv'].includes(ext)) continue;
+        if (!['pdf', 'xlsx', 'xls', 'csv', 'jpg', 'jpeg', 'png'].includes(ext)) continue;
         uploadedFiles.push(f);
     }
     renderFileList();
@@ -866,10 +867,12 @@ function renderFileList() {
         const ext = f.name.split('.').pop().toLowerCase();
         let badge = 'badge-pdf';
         let label = 'PDF';
-        if (ext === 'xlsx' || ext === 'xls') { badge = 'badge-excel'; label = 'Excel'; }
+        let icon = '📄';
+        if (ext === 'xlsx' || ext === 'xls') { badge = 'badge-excel'; label = 'Excel'; icon = '📊'; }
+        else if (['jpg', 'jpeg', 'png'].includes(ext)) { badge = 'badge-pdf'; label = 'Image'; icon = '🖼️'; }
         const size = (f.size / 1024).toFixed(0) + ' KB';
         return `<div class="file-item">
-            <span class="file-icon">${ext === 'pdf' ? '📄' : '📊'}</span>
+            <span class="file-icon">${icon}</span>
             <span class="file-name">${f.name}</span>
             <span class="file-badge ${badge}">${label}</span>
             <span class="file-meta">${size}</span>
@@ -1067,6 +1070,7 @@ const COV_DISPLAY = {
     garage_keepers: 'Garage Keepers',
     inland_marine: 'Inland Marine',
     wind_deductible_buydown: 'Wind Deductible Buy Down',
+    enviro_pack: 'Enviro Pack',
 };
 
 function addCoverage() {
@@ -1214,9 +1218,9 @@ function renderCoverageFields(key, cov) {
 
     // Deductibles
     const deductibles = cov.deductibles || [];
+    html += `<h3 class="section-toggle${deductibles.length > 0 ? ' open' : ''}" onclick="toggleSection(this)">Deductibles (${deductibles.length})</h3>`;
+    html += `<div class="section-content"${deductibles.length > 0 ? '' : ' style="display:none"'}>`;
     if (deductibles.length > 0) {
-        html += `<h3 class="section-toggle open" onclick="toggleSection(this)">Deductibles (${deductibles.length})</h3>`;
-        html += `<div class="section-content">`;
         html += `<table class="data-table"><thead><tr><th>Type</th><th>Amount</th><th></th></tr></thead><tbody>`;
         deductibles.forEach((ded, i) => {
             const desc = typeof ded === 'string' ? ded : (ded.type || ded.description || '');
@@ -1227,8 +1231,10 @@ function renderCoverageFields(key, cov) {
                 <td><button class="btn btn-sm btn-danger" onclick="removeCovDed('${key}',${i})">✕</button></td>
             </tr>`;
         });
-        html += `</tbody></table></div>`;
+        html += `</tbody></table>`;
     }
+    html += `<button class="btn btn-sm btn-outline" onclick="addCovDed('${key}')" style="margin-top:0.5rem">+ Add Deductible</button>`;
+    html += `</div>`;
 
     // Forms & Endorsements
     const forms = cov.forms_endorsements || [];
@@ -1250,26 +1256,28 @@ function renderCoverageFields(key, cov) {
 
     // Additional Coverages / Sublimits
     const addlCov = cov.additional_coverages || [];
+    html += `<h3 class="section-toggle" onclick="toggleSection(this)">Sublimits &amp; Extensions (${addlCov.length})</h3>`;
+    html += `<div class="section-content" style="display:none">`;
     if (addlCov.length > 0) {
-        html += `<h3 class="section-toggle" onclick="toggleSection(this)">Sublimits &amp; Extensions (${addlCov.length})</h3>`;
-        html += `<div class="section-content" style="display:none">`;
         html += `<table class="data-table"><thead><tr><th>Coverage</th><th>Limit</th><th>Deductible</th><th></th></tr></thead><tbody>`;
         addlCov.forEach((ac, i) => {
             html += `<tr>
-                <td><input value="${escHtml(ac.coverage || ac.name || '')}" onchange="updateAddlCov('${key}',${i},'coverage',this.value)"></td>
+                <td><input value="${escHtml(ac.description || ac.coverage || ac.name || '')}" onchange="updateAddlCov('${key}',${i},'description',this.value)"></td>
                 <td><input value="${escHtml(String(ac.limit || ''))}" onchange="updateAddlCov('${key}',${i},'limit',this.value)"></td>
                 <td><input value="${escHtml(String(ac.deductible || ''))}" onchange="updateAddlCov('${key}',${i},'deductible',this.value)"></td>
                 <td><button class="btn btn-sm btn-danger" onclick="removeAddlCov('${key}',${i})">✕</button></td>
             </tr>`;
         });
-        html += `</tbody></table></div>`;
+        html += `</tbody></table>`;
     }
+    html += `<button class="btn btn-sm btn-outline" onclick="addAddlCov('${key}')" style="margin-top:0.5rem">+ Add Sublimit</button>`;
+    html += `</div>`;
 
     // Subjectivities
     const subj = cov.subjectivities || [];
+    html += `<h3 class="section-toggle" onclick="toggleSection(this)">Subjectivities (${subj.length})</h3>`;
+    html += `<div class="section-content" style="display:none">`;
     if (subj.length > 0) {
-        html += `<h3 class="section-toggle" onclick="toggleSection(this)">Subjectivities (${subj.length})</h3>`;
-        html += `<div class="section-content" style="display:none">`;
         subj.forEach((s, i) => {
             const text = typeof s === 'string' ? s : (s.description || s.text || JSON.stringify(s));
             html += `<div style="display:flex; gap:0.5rem; margin-bottom:0.25rem;">
@@ -1278,8 +1286,9 @@ function renderCoverageFields(key, cov) {
                 <button class="btn btn-sm btn-danger" onclick="removeSubj('${key}',${i})">✕</button>
             </div>`;
         });
-        html += `</div>`;
     }
+    html += `<button class="btn btn-sm btn-outline" onclick="addSubj('${key}')" style="margin-top:0.5rem">+ Add Subjectivity</button>`;
+    html += `</div>`;
 
     return html;
 }
@@ -1321,6 +1330,11 @@ function removeCovDed(key, idx) {
     extractedData.coverages[key].deductibles.splice(idx, 1);
     renderCoverages();
 }
+function addCovDed(key) {
+    if (!extractedData.coverages[key].deductibles) extractedData.coverages[key].deductibles = [];
+    extractedData.coverages[key].deductibles.push({ type: '', amount: '' });
+    renderCoverages();
+}
 
 function updateForm(key, idx, field, value) {
     const f = extractedData.coverages[key].forms_endorsements[idx];
@@ -1347,12 +1361,22 @@ function removeAddlCov(key, idx) {
     extractedData.coverages[key].additional_coverages.splice(idx, 1);
     renderCoverages();
 }
+function addAddlCov(key) {
+    if (!extractedData.coverages[key].additional_coverages) extractedData.coverages[key].additional_coverages = [];
+    extractedData.coverages[key].additional_coverages.push({ description: '', limit: '', deductible: '' });
+    renderCoverages();
+}
 
 function updateSubj(key, idx, value) {
     extractedData.coverages[key].subjectivities[idx] = value;
 }
 function removeSubj(key, idx) {
     extractedData.coverages[key].subjectivities.splice(idx, 1);
+    renderCoverages();
+}
+function addSubj(key) {
+    if (!extractedData.coverages[key].subjectivities) extractedData.coverages[key].subjectivities = [];
+    extractedData.coverages[key].subjectivities.push('');
     renderCoverages();
 }
 
@@ -1640,18 +1664,14 @@ function syncVisualToData() {
     extractedData.client_info.effective_date = document.getElementById('edit-effective-date').value;
 
     // Sync expiring premiums into the data structure for the generator
+    // The generator reads from 'expiring_premiums' directly, so ensure values are numeric
     if (extractedData.expiring_premiums && Object.keys(extractedData.expiring_premiums).length > 0) {
         const ep = extractedData.expiring_premiums;
-        const hasAnyExpiring = Object.values(ep).some(v => parseFloat(v) > 0);
-        if (hasAnyExpiring) {
-            // Populate expiring_premiums in the format the generator expects
-            if (!extractedData.expiring_premiums_data) extractedData.expiring_premiums_data = {};
-            for (const [key, val] of Object.entries(ep)) {
-                if (parseFloat(val) > 0) {
-                    extractedData.expiring_premiums_data[key] = parseFloat(val);
-                }
-            }
+        for (const [key, val] of Object.entries(ep)) {
+            ep[key] = parseFloat(val) || 0;
         }
+        // Also populate expiring_premiums_data for backward compatibility with web_app.py mapping
+        extractedData.expiring_premiums_data = {...ep};
     }
 
     // Update JSON editor

@@ -364,14 +364,19 @@ def upload_files(session_id):
         if not f.filename:
             continue
         ext = Path(f.filename).suffix.lower()
-        if ext not in (".pdf", ".xlsx", ".xls", ".csv"):
+        if ext not in (".pdf", ".xlsx", ".xls", ".csv", ".jpg", ".jpeg", ".png"):
             continue
 
         safe_name = f"{uuid.uuid4().hex[:8]}_{f.filename}"
         save_path = os.path.join(session["session_dir"], safe_name)
         f.save(save_path)
 
-        file_type = "pdf" if ext == ".pdf" else "excel"
+        if ext == ".pdf":
+            file_type = "pdf"
+        elif ext in (".jpg", ".jpeg", ".png"):
+            file_type = "image"
+        else:
+            file_type = "excel"
         file_info = {
             "filename": f.filename,
             "path": save_path,
@@ -430,6 +435,31 @@ def _run_extraction(session_id):
                     logger.info(f"  -> {len(text)} chars extracted")
                 else:
                     logger.warning(f"No text from {file_info['filename']}")
+            elif file_info["type"] == "image":
+                # Convert image to text via GPT Vision
+                logger.info(f"Processing image file: {file_info['filename']}")
+                try:
+                    import base64
+                    with open(file_info["path"], "rb") as img_f:
+                        img_b64 = base64.b64encode(img_f.read()).decode("utf-8")
+                    ext = Path(file_info["filename"]).suffix.lower()
+                    mime = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+                    from openai import OpenAI
+                    client = OpenAI()
+                    resp = client.chat.completions.create(
+                        model="gpt-4.1-mini",
+                        messages=[{"role": "user", "content": [
+                            {"type": "text", "text": "Extract ALL text from this insurance document image. Preserve structure, numbers, and formatting."},
+                            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{img_b64}", "detail": "high"}}
+                        ]}],
+                        max_tokens=4000
+                    )
+                    img_text = resp.choices[0].message.content
+                    if img_text:
+                        all_pdf_texts.append({"filename": file_info["filename"], "text": img_text})
+                        logger.info(f"  -> {len(img_text)} chars extracted from image")
+                except Exception as e:
+                    logger.warning(f"Image extraction failed for {file_info['filename']}: {e}")
             elif file_info["type"] == "excel" and not file_info.get("is_sov"):
                 logger.info(f"Extracting Excel: {file_info['filename']}")
                 data = extractor.extract_excel_data(file_info["path"])
@@ -578,6 +608,15 @@ def generate_doc(session_id):
         if gen_data.get("expiring_premiums_data"):
             gen_data["expiring_premiums"] = gen_data["expiring_premiums_data"]
             logger.info(f"Mapped expiring premiums: {gen_data['expiring_premiums']}")
+        
+        # Normalize workers_compensation -> workers_comp for generator compatibility
+        covs = gen_data.get("coverages", {})
+        if "workers_compensation" in covs and "workers_comp" not in covs:
+            covs["workers_comp"] = covs.pop("workers_compensation")
+        # Also normalize in expiring_premiums
+        ep = gen_data.get("expiring_premiums", {})
+        if isinstance(ep, dict) and "workers_compensation" in ep and "workers_comp" not in ep:
+            ep["workers_comp"] = ep.pop("workers_compensation")
 
         generate_proposal(gen_data, docx_path)
 
