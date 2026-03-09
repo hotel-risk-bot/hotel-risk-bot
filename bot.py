@@ -81,6 +81,16 @@ except Exception as _proposal_err:
     HAS_PROPOSAL = False
     logging.getLogger(__name__).warning(f"Proposal module import failed: {_proposal_err}")
 
+try:
+    from loss_run_organizer import (
+        scheduled_organize, organize_loss_runs, send_organize_summary,
+        tracker_get_client, tracker_get_all,
+    )
+    HAS_LOSS_ORGANIZER = True
+except ImportError as _lr_err:
+    HAS_LOSS_ORGANIZER = False
+    logging.getLogger(__name__).warning(f"Loss run organizer import failed: {_lr_err}")
+
 # ── Configuration (from environment variables) ────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 AIRTABLE_PAT = os.environ.get("AIRTABLE_PAT", "")
@@ -1990,6 +2000,109 @@ def scheduled_afternoon_debrief():
         logger.info(f"Afternoon debrief result: {success}")
     except Exception as e:
         logger.error(f"Scheduled afternoon debrief error: {e}")
+
+
+# ── Loss Run Organizer Commands ───────────────────────────────────────────
+
+async def lossruns_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show current loss runs for a client. Usage: /lossruns [client name]"""
+    if not HAS_LOSS_ORGANIZER:
+        await update.message.reply_text("Loss run organizer module is not available.")
+        return
+
+    query = " ".join(context.args).strip() if context.args else ""
+
+    if not query:
+        # Show all entries
+        entries = tracker_get_all()
+        if not entries:
+            await update.message.reply_text("No loss runs tracked yet. Drop PDFs in the inbox folder and run /organize.")
+            return
+
+        # Group by client
+        clients = {}
+        for e in entries:
+            client = e.get("Client", "Unknown")
+            if client not in clients:
+                clients[client] = []
+            clients[client].append(e)
+
+        lines = ["📋 *Loss Run Tracker*\n"]
+        for client, runs in sorted(clients.items()):
+            lines.append(f"\n*{_tg_escape(client)}*")
+            for r in runs:
+                lines.append(
+                    f"  • {_tg_escape(r.get('Policy Type', '?'))} \| "
+                    f"{_tg_escape(r.get('Carrier', '?'))} \| "
+                    f"Val: {_tg_escape(r.get('Valuation Date', '?'))}"
+                )
+
+        text = "\n".join(lines)
+        await update.message.reply_text(text, parse_mode="MarkdownV2")
+    else:
+        # Search specific client
+        entries = tracker_get_client(query)
+        if not entries:
+            await update.message.reply_text(f"No loss runs found for '{query}'.")
+            return
+
+        lines = [f"📋 *Loss Runs: {_tg_escape(query)}*\n"]
+        for r in entries:
+            lines.append(
+                f"• *{_tg_escape(r.get('Policy Type', '?'))}*\n"
+                f"  Carrier: {_tg_escape(r.get('Carrier', '?'))}\n"
+                f"  Valuation: {_tg_escape(r.get('Valuation Date', '?'))}\n"
+                f"  File: {_tg_escape(r.get('File Name', '?'))}"
+            )
+
+        text = "\n".join(lines)
+        await update.message.reply_text(text, parse_mode="MarkdownV2")
+
+
+async def organize_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Manually trigger loss run organization. Usage: /organize"""
+    if not HAS_LOSS_ORGANIZER:
+        await update.message.reply_text("Loss run organizer module is not available.")
+        return
+
+    await update.message.reply_text("🔄 Scanning inbox for loss runs...")
+
+    try:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(None, organize_loss_runs)
+
+        if results.get("error"):
+            await update.message.reply_text(f"⚠️ Error: {results['error']}")
+            return
+
+        if results["processed"] == 0:
+            await update.message.reply_text("No new loss runs found in inbox.")
+            return
+
+        lines = [f"✅ Organized {results['processed']} loss run(s):\n"]
+        for item in results.get("success", []):
+            lines.append(
+                f"• {item['client']}\n"
+                f"  {item['policy_type']} | {item['carrier']} | {item['valuation_date']}"
+            )
+
+        if results.get("errors"):
+            lines.append(f"\n⚠️ {len(results['errors'])} error(s):")
+            for err in results["errors"][:5]:
+                lines.append(f"  • {err}")
+
+        await update.message.reply_text("\n".join(lines))
+
+    except Exception as e:
+        logger.error(f"Organize command error: {e}")
+        await update.message.reply_text(f"Error during organization: {str(e)[:200]}")
+
+
+def _tg_escape(text):
+    """Escape Telegram MarkdownV2 special characters."""
+    special = r'_*[]()~`>#+-=|{}.!'
+    return ''.join(f'\\{c}' if c in special else c for c in str(text))
 # Ã¢ÂÂÃ¢ÂÂ Fallback Message Handler Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2146,6 +2259,14 @@ def main():
     else:
         logger.warning("Proposal generator module not available")
 
+    # Loss run organizer commands
+    if HAS_LOSS_ORGANIZER:
+        app.add_handler(CommandHandler("lossruns", lossruns_command))
+        app.add_handler(CommandHandler("organize", organize_command))
+        logger.info("Loss run organizer module loaded")
+    else:
+        logger.warning("Loss run organizer module not available")
+
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     app.add_error_handler(error_handler)
@@ -2174,6 +2295,17 @@ def main():
                     name="Afternoon Debrief",
                     replace_existing=True,
                 )
+
+                # Loss run organizer - runs every 4 hours during business hours
+                if HAS_LOSS_ORGANIZER:
+                    scheduler.add_job(
+                        scheduled_organize,
+                        CronTrigger(hour="8,12,16", minute=30, timezone="US/Eastern"),
+                        id="loss_run_organizer",
+                        name="Loss Run Organizer",
+                        replace_existing=True,
+                    )
+                    logger.info("Loss run organizer scheduled: 8:30AM, 12:30PM, 4:30PM EST")
 
                 scheduler.start()
                 logger.info("Scheduler started: Morning briefing at 7AM EST, Debrief at 4PM EST")
