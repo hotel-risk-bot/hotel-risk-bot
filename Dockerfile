@@ -11,7 +11,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Cache bust - change this value to force fresh COPY
+ARG CACHE_BUST=2026-03-09-v3
+
+# Copy application code (fresh, not cached)
 COPY . .
 
 # Make entrypoint executable
