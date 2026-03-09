@@ -609,6 +609,8 @@ def organize_loss_runs(accounts_folder_id=None):
     """
     # Read env vars at runtime (not import time) to ensure Railway vars are available
     inbox_id = os.environ.get("LOSS_RUN_INBOX_FOLDER_ID", "").strip()
+    logger.info(f"LOSS_RUN_INBOX_FOLDER_ID = '{inbox_id[:8]}...' (len={len(inbox_id)})")
+    logger.info(f"All env keys with LOSS: {[k for k in os.environ if 'LOSS' in k]}")
     if not inbox_id:
         logger.error("LOSS_RUN_INBOX_FOLDER_ID not set")
         return {"error": "Inbox folder not configured", "processed": 0}
