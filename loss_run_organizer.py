@@ -69,6 +69,11 @@ POLICY_TYPES = {
     "liquor liability": "Liquor Liability",
 }
 
+def _get_tracker_sheet_id():
+    """Get tracker sheet ID at runtime."""
+    return os.environ.get("LOSS_RUN_TRACKER_SHEET_ID", "").strip()
+
+
 # Tracker sheet headers
 TRACKER_HEADERS = [
     "Client", "Policy Type", "Carrier", "Valuation Date",
@@ -80,12 +85,13 @@ TRACKER_HEADERS = [
 
 def _get_access_token():
     """Get Google API access token with Drive + Sheets scope."""
-    if not GOOGLE_SERVICE_ACCOUNT_JSON:
+    sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    if not sa_json:
         logger.error("GOOGLE_SERVICE_ACCOUNT_JSON not set")
         return None
 
     try:
-        creds = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+        creds = json.loads(sa_json)
     except json.JSONDecodeError:
         logger.error("Invalid GOOGLE_SERVICE_ACCOUNT_JSON format")
         return None
@@ -421,7 +427,8 @@ def _sheets_headers():
 
 def tracker_initialize():
     """Ensure the tracker sheet has headers."""
-    if not LOSS_RUN_TRACKER_SHEET_ID:
+    sheet_id = os.environ.get("LOSS_RUN_TRACKER_SHEET_ID", "").strip()
+    if not sheet_id:
         logger.warning("LOSS_RUN_TRACKER_SHEET_ID not set - tracker disabled")
         return False
 
@@ -430,7 +437,8 @@ def tracker_initialize():
         return False
 
     # Check if headers exist
-    url = f"https://sheets.googleapis.com/v4/spreadsheets/{LOSS_RUN_TRACKER_SHEET_ID}/values/Sheet1!A1:H1"
+    sid = _get_tracker_sheet_id()
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/Sheet1!A1:H1"
     try:
         resp = http_requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
@@ -439,7 +447,7 @@ def tracker_initialize():
             # Write headers
             body = {"values": [TRACKER_HEADERS]}
             url = (
-                f"https://sheets.googleapis.com/v4/spreadsheets/{LOSS_RUN_TRACKER_SHEET_ID}"
+                f"https://sheets.googleapis.com/v4/spreadsheets/{sid}"
                 f"/values/Sheet1!A1:H1?valueInputOption=USER_ENTERED"
             )
             resp = http_requests.put(url, headers=headers, json=body, timeout=15)
@@ -453,7 +461,7 @@ def tracker_initialize():
 
 def tracker_add_entry(client, policy_type, carrier, valuation_date, filename, drive_link, year_folder):
     """Add or update an entry in the tracker sheet."""
-    if not LOSS_RUN_TRACKER_SHEET_ID:
+    if not os.environ.get("LOSS_RUN_TRACKER_SHEET_ID", "").strip():
         return False
 
     headers = _sheets_headers()
@@ -465,7 +473,7 @@ def tracker_add_entry(client, policy_type, carrier, valuation_date, filename, dr
 
     # First, check if there's an existing row for this client + policy type to update
     try:
-        url = f"https://sheets.googleapis.com/v4/spreadsheets/{LOSS_RUN_TRACKER_SHEET_ID}/values/Sheet1!A:H"
+        url = f"https://sheets.googleapis.com/v4/spreadsheets/{_get_tracker_sheet_id()}/values/Sheet1!A:H"
         resp = http_requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
         all_rows = resp.json().get("values", [])
@@ -481,7 +489,7 @@ def tracker_add_entry(client, policy_type, carrier, valuation_date, filename, dr
                         # Update this row
                         range_str = f"Sheet1!A{i}:H{i}"
                         url = (
-                            f"https://sheets.googleapis.com/v4/spreadsheets/{LOSS_RUN_TRACKER_SHEET_ID}"
+                            f"https://sheets.googleapis.com/v4/spreadsheets/{_get_tracker_sheet_id()}"
                             f"/values/{range_str}?valueInputOption=USER_ENTERED"
                         )
                         resp = http_requests.put(url, headers=headers, json={"values": [row]}, timeout=15)
@@ -494,7 +502,7 @@ def tracker_add_entry(client, policy_type, carrier, valuation_date, filename, dr
 
         # No existing entry — append new row
         url = (
-            f"https://sheets.googleapis.com/v4/spreadsheets/{LOSS_RUN_TRACKER_SHEET_ID}"
+            f"https://sheets.googleapis.com/v4/spreadsheets/{_get_tracker_sheet_id()}"
             f"/values/Sheet1!A:H:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS"
         )
         resp = http_requests.post(url, headers=headers, json={"values": [row]}, timeout=15)
@@ -509,7 +517,7 @@ def tracker_add_entry(client, policy_type, carrier, valuation_date, filename, dr
 
 def tracker_get_all():
     """Get all entries from the tracker sheet."""
-    if not LOSS_RUN_TRACKER_SHEET_ID:
+    if not os.environ.get("LOSS_RUN_TRACKER_SHEET_ID", "").strip():
         return []
 
     headers = _sheets_headers()
@@ -517,7 +525,7 @@ def tracker_get_all():
         return []
 
     try:
-        url = f"https://sheets.googleapis.com/v4/spreadsheets/{LOSS_RUN_TRACKER_SHEET_ID}/values/Sheet1!A:H"
+        url = f"https://sheets.googleapis.com/v4/spreadsheets/{_get_tracker_sheet_id()}/values/Sheet1!A:H"
         resp = http_requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
         rows = resp.json().get("values", [])
@@ -599,13 +607,14 @@ def organize_loss_runs(accounts_folder_id=None):
 
     Returns a summary dict with counts and details.
     """
-    inbox_id = LOSS_RUN_INBOX_FOLDER_ID
+    # Read env vars at runtime (not import time) to ensure Railway vars are available
+    inbox_id = os.environ.get("LOSS_RUN_INBOX_FOLDER_ID", "").strip()
     if not inbox_id:
         logger.error("LOSS_RUN_INBOX_FOLDER_ID not set")
         return {"error": "Inbox folder not configured", "processed": 0}
 
     if not accounts_folder_id:
-        accounts_folder_id = os.environ.get("ACCOUNTS_FOLDER_ID", "")
+        accounts_folder_id = os.environ.get("ACCOUNTS_FOLDER_ID", "").strip()
     if not accounts_folder_id:
         logger.error("ACCOUNTS_FOLDER_ID not set")
         return {"error": "Accounts folder not configured", "processed": 0}
