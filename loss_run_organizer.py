@@ -190,7 +190,7 @@ def drive_list_files(folder_id, mime_type=None):
         logger.error("DIAGNOSTIC: No auth headers available")
         return []
 
-    # DIAGNOSTIC: Check if we can even see the folder metadata
+    # DIAGNOSTIC: Check folder access
     try:
         folder_resp = http_requests.get(
             f"https://www.googleapis.com/drive/v3/files/{folder_id}",
@@ -199,16 +199,13 @@ def drive_list_files(folder_id, mime_type=None):
         if folder_resp.status_code == 200:
             folder_data = folder_resp.json()
             logger.info(f"DIAGNOSTIC: Successfully accessed folder: {folder_data.get('name')} ({folder_id})")
-            logger.info(f"DIAGNOSTIC: Folder owners: {folder_data.get('owners')}")
         else:
-            logger.error(f"DIAGNOSTIC: Failed to access folder metadata. Status: {folder_resp.status_code}, Body: {folder_resp.text}")
+            logger.error(f"DIAGNOSTIC: Failed to access folder metadata. Status: {folder_resp.status_code}")
     except Exception as e:
         logger.error(f"DIAGNOSTIC: Exception checking folder: {e}")
 
+    # Broad query to find all files in the folder first
     q = f"'{folder_id}' in parents and trashed = false"
-    if mime_type:
-        q += f" and mimeType = '{mime_type}'"
-
     logger.info(f"DIAGNOSTIC: Querying Drive with: {q}")
 
     files = []
@@ -231,7 +228,7 @@ def drive_list_files(folder_id, mime_type=None):
         )
         
         if resp.status_code != 200:
-            logger.error(f"DIAGNOSTIC: File list request failed. Status: {resp.status_code}, Body: {resp.text}")
+            logger.error(f"DIAGNOSTIC: File list request failed. Status: {resp.status_code}")
             break
             
         data = resp.json()
@@ -244,6 +241,10 @@ def drive_list_files(folder_id, mime_type=None):
         page_token = data.get("nextPageToken")
         if not page_token:
             break
+
+    # If mime_type was requested, filter manually (case-insensitive)
+    if mime_type:
+        files = [f for f in files if f.get("mimeType") == mime_type or f.get("name", "").lower().endswith(".pdf")]
 
     return files
 
