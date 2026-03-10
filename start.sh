@@ -7,7 +7,7 @@ python bot.py &
 BOT_PID=$!
 
 echo "Starting web app with gunicorn..."
-gunicorn web_app:app --bind 0.0.0.0:${PORT:-8080} --workers 1 --timeout 120 --graceful-timeout 30
+gunicorn web_app:app --bind 0.0.0.0:${PORT:-8080} --workers 1 --timeout 600 --graceful-timeout 60
 
 # If gunicorn exits, also kill the bot
 kill $BOT_PID 2>/dev/null

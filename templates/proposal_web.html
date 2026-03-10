@@ -945,12 +945,13 @@ btnExtract.addEventListener('click', async () => {
             } else if (statusData.status === 'error') {
                 throw new Error(statusData.error || 'Extraction failed');
             }
-            // Update loading message with elapsed time
+            // Update loading message with elapsed time and server progress
             const elapsed = pollCount * 5;
             const mins = Math.floor(elapsed / 60);
             const secs = elapsed % 60;
             const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-            showLoading('Extracting insurance data with AI...', `Processing... ${timeStr} elapsed`);
+            const progressMsg = statusData.progress || 'Processing...';
+            showLoading('Extracting insurance data with AI...', `${progressMsg} (${timeStr} elapsed)`);
         }
         if (!extractResult) throw new Error('Extraction timed out after 10 minutes');
 

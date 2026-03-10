@@ -49,7 +49,11 @@ def _get_openai_client():
                 "OPENAI_API_KEY environment variable not set. "
                 "Please add it to your Railway environment variables."
             )
-        _client = OpenAI(api_key=api_key)
+        import httpx
+        _client = OpenAI(
+            api_key=api_key,
+            timeout=httpx.Timeout(600.0, connect=30.0)  # 10 min for large extractions
+        )
     return _client
 
 
@@ -190,7 +194,7 @@ def _score_page(page_text: str) -> float:
     return score
 
 
-def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 200000) -> str:
+def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 100000) -> str:
     """
     Smart PDF text extraction that prioritizes quote summary pages
     over forms/endorsements boilerplate.
@@ -922,7 +926,7 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
     combined_text = "\n".join(all_text)
 
     # Final safety truncation (should rarely be needed with smart extraction)
-    max_chars = 200000
+    max_chars = 150000
     if len(combined_text) > max_chars:
         logger.warning(f"Combined text truncated from {len(combined_text)} to {max_chars} chars")
         combined_text = combined_text[:max_chars]
@@ -1316,7 +1320,7 @@ class ProposalExtractor:
         """
         # Combine all text sources with FAIR BUDGET ALLOCATION
         # Ensures every file gets represented even when total exceeds max_chars
-        max_chars = 200000
+        max_chars = 150000
         all_items = []
         for item in pdf_texts:
             header = f"\n{'='*60}\nFILE: {item['filename']}\n{'='*60}\n"

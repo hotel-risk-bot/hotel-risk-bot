@@ -674,6 +674,8 @@ def _run_extraction(session_id):
         # Step 1: Extract text from ALL files first (fast, no GPT calls)
         all_pdf_texts = []
         all_excel_data = []
+        total_files = len([f for f in session["files"] if not f.get("is_sov")])
+        processed = 0
         for file_info in session["files"]:
             if file_info["type"] == "pdf":
                 logger.info(f"Extracting text from PDF: {file_info['filename']}")
@@ -681,8 +683,12 @@ def _run_extraction(session_id):
                 if text:
                     all_pdf_texts.append({"filename": file_info["filename"], "text": text})
                     logger.info(f"  -> {len(text)} chars extracted")
+                    processed += 1
+                    session["extract_progress"] = f"Extracted {processed}/{total_files} files"
+                    _set_session(session_id, session)
                 else:
                     logger.warning(f"No text from {file_info['filename']}")
+                    processed += 1
             elif file_info["type"] == "image":
                 # Convert image to text via GPT Vision
                 logger.info(f"Processing image file: {file_info['filename']}")
@@ -721,6 +727,8 @@ def _run_extraction(session_id):
             return
 
         # Step 2: Single combined GPT call for ALL files at once
+        session["extract_progress"] = "Analyzing with AI... this may take 1-3 minutes"
+        _set_session(session_id, session)
         logger.info(f"Sending {len(all_pdf_texts)} PDFs + {len(all_excel_data)} Excel files to GPT in single call")
         merged_data = extractor.structure_insurance_data(
             all_pdf_texts, all_excel_data, session["client_name"]
@@ -790,7 +798,8 @@ def extract_status(session_id):
     status = session.get("status", "unknown")
 
     if status == "extracting":
-        return jsonify({"status": "extracting"})
+        progress = session.get("extract_progress", "Processing files...")
+        return jsonify({"status": "extracting", "progress": progress})
 
     if status == "error":
         error_msg = session.get("extract_error", "Unknown error")
