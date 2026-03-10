@@ -92,7 +92,7 @@ except ImportError as _lr_err:
     logging.getLogger(__name__).warning(f"Loss run organizer import failed: {_lr_err}")
 
 # ── Configuration (from environment variables) ────────────────────────────
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
 AIRTABLE_PAT = os.environ.get("AIRTABLE_PAT", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
