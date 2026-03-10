@@ -1545,9 +1545,36 @@ function previewPremiumChange(key, value, proposed) {
     pctEl.style.color = color;
 }
 
+// ─── Title Case Normalization ───
+function toTitleCase(str) {
+    if (!str) return '';
+    // If the string is all uppercase or all lowercase, normalize to title case
+    // Preserve mixed-case strings that look intentional (e.g., "McDonald's")
+    if (str === str.toUpperCase() || str === str.toLowerCase()) {
+        return str.toLowerCase().replace(/(?:^|\s|[-/])\S/g, c => c.toUpperCase());
+    }
+    return str;
+}
+
+function normalizeAddress(addr) {
+    if (!addr) return '';
+    if (addr !== addr.toUpperCase()) return addr;
+    // Title-case the address but keep state abbreviations and unit numbers uppercase
+    let result = addr.toLowerCase().replace(/(?:^|\s|[-/])\S/g, c => c.toUpperCase());
+    // Fix common address abbreviations back to uppercase
+    result = result.replace(/\b(Ave|St|Blvd|Dr|Rd|Ln|Ct|Pl|Plz|Hwy|Pkwy|Cir|Nw|Ne|Sw|Se|Us)\b/g, m => m.toUpperCase());
+    return result;
+}
+
 // ─── Locations ───
 function renderLocations() {
     const locs = extractedData.locations || [];
+    // Normalize ALL CAPS text in location data
+    locs.forEach(loc => {
+        if (loc.name && loc.name === loc.name.toUpperCase()) loc.name = toTitleCase(loc.name);
+        if (loc.address && loc.address === loc.address.toUpperCase()) loc.address = normalizeAddress(loc.address);
+        if (loc.city && loc.city === loc.city.toUpperCase()) loc.city = toTitleCase(loc.city);
+    });
     document.getElementById('loc-count').textContent = locs.length;
     const tbody = document.getElementById('locations-body');
     tbody.innerHTML = locs.map((loc, i) => `<tr>
@@ -1644,7 +1671,23 @@ document.getElementById('btn-generate').addEventListener('click', async () => {
 
         hideLoading();
         document.getElementById('download-filename').textContent = genData.filename;
-        document.getElementById('btn-download').href = genData.download_url;
+        
+        // Use base64 blob download to avoid session expiry issues
+        if (genData.docx_base64) {
+            const byteChars = atob(genData.docx_base64);
+            const byteNumbers = new Array(byteChars.length);
+            for (let i = 0; i < byteChars.length; i++) {
+                byteNumbers[i] = byteChars.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const blob = new Blob([byteArray], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+            const blobUrl = URL.createObjectURL(blob);
+            const dlBtn = document.getElementById('btn-download');
+            dlBtn.href = blobUrl;
+            dlBtn.download = genData.filename;
+        } else {
+            document.getElementById('btn-download').href = genData.download_url;
+        }
         showToast('Proposal generated!');
         goToStep(3);
 

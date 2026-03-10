@@ -625,10 +625,16 @@ def generate_doc(session_id):
         session["docx_filename"] = docx_filename
         _set_session(session_id, session)
 
+        # Return the DOCX as base64 inline so download works even if session expires
+        import base64
+        with open(docx_path, "rb") as df:
+            docx_b64 = base64.b64encode(df.read()).decode("utf-8")
+
         return jsonify({
             "status": "complete",
             "filename": docx_filename,
             "download_url": f"/api/download/{session_id}",
+            "docx_base64": docx_b64,
         })
 
     except Exception as e:

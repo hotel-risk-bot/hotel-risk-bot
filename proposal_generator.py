@@ -1170,8 +1170,12 @@ def _proper_case(name):
     if s.isupper() or s.islower():
         s = s.title()
     # Fix common abbreviations that should stay uppercase
-    for abbr in ["LLC", "LP", "LLP", "INC", "DBA", "II", "III", "IV"]:
-        s = s.replace(abbr.title(), abbr)
+    for abbr in ["LLC", "LP", "LLP", "INC", "DBA", "II", "III", "IV",
+                 "NW", "NE", "SW", "SE", "US", "CT", "NJ", "PA", "NY",
+                 "FL", "TX", "CA", "VA", "MD", "GA", "NC", "SC", "OH"]:
+        # Use word boundary replacement to avoid partial matches
+        import re
+        s = re.sub(r'\b' + abbr.title() + r'\b', abbr, s)
     return s
 
 
@@ -2234,6 +2238,15 @@ def generate_locations(doc, data):
                     })
                     seen_addr_keys.add(addr_key)
     
+    # Normalize ALL CAPS text in location data to title case
+    for ml in master_locations:
+        if ml["name"] and ml["name"] == ml["name"].upper() and len(ml["name"]) > 2:
+            ml["name"] = _proper_case(ml["name"])
+        if ml["address"] and ml["address"] == ml["address"].upper():
+            ml["address"] = _proper_case(ml["address"])
+        if ml["city"] and ml["city"] == ml["city"].upper() and len(ml["city"]) > 2:
+            ml["city"] = _proper_case(ml["city"])
+    
     if master_locations:
         CHECK = "\u2713"  # Unicode checkmark
         DASH = "\u2014"   # Em-dash for missing coverage (rendered in RED)
@@ -2415,7 +2428,13 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         total_other = 0
         for i, loc in enumerate(sov_locs, 1):
             name = loc.get("dba") or loc.get("hotel_flag") or loc.get("corporate_name", "")
-            addr = f"{loc.get('address', '')}, {loc.get('city', '')}, {loc.get('state', '')}"
+            if name and name == name.upper() and len(name) > 2:
+                name = _proper_case(name)
+            _addr = loc.get('address', '')
+            _city = loc.get('city', '')
+            if _addr and _addr == _addr.upper(): _addr = _proper_case(_addr)
+            if _city and _city == _city.upper() and len(_city) > 2: _city = _proper_case(_city)
+            addr = f"{_addr}, {_city}, {loc.get('state', '')}"
             loc_label = f"{name}\n{addr}" if name else addr
             other_val = loc.get("other_value", 0) or 0
             total_other += other_val
