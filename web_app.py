@@ -398,23 +398,23 @@ def drive_diagnostic():
         results["error"] = "GOOGLE_SERVICE_ACCOUNT_JSON not set"
         return jsonify(results), 500
 
-    # Step 2: Parse service account JSON
+    # Step 2: Parse service account JSON using the same robust parser as loss_run_organizer
     try:
-        import re as _re
-        sa_creds = json.loads(sa_json_raw)
-        results["steps"].append("JSON parsed directly")
-    except json.JSONDecodeError:
-        try:
-            fixed = _re.sub(
-                r'"((?:[^"\\]|\\.)*)"',
-                lambda m: '"' + m.group(1).replace('\n', '\\n').replace('\r', '') + '"',
-                sa_json_raw, flags=_re.DOTALL
-            )
-            sa_creds = json.loads(fixed)
-            results["steps"].append("JSON parsed after newline fix")
-        except Exception as e2:
-            results["error"] = f"Cannot parse service account JSON: {e2}"
+        from loss_run_organizer import _parse_service_account_json
+        sa_creds = _parse_service_account_json(sa_json_raw)
+        if sa_creds:
+            results["steps"].append("JSON parsed via loss_run_organizer parser")
+        else:
+            # Show first/last 100 chars for debugging
+            results["sa_json_first_100"] = sa_json_raw[:100]
+            results["sa_json_last_100"] = sa_json_raw[-100:]
+            results["error"] = "loss_run_organizer._parse_service_account_json returned None"
             return jsonify(results), 500
+    except Exception as e:
+        results["sa_json_first_100"] = sa_json_raw[:100]
+        results["sa_json_last_100"] = sa_json_raw[-100:]
+        results["error"] = f"Parser import/call failed: {e}"
+        return jsonify(results), 500
 
     results["client_email"] = sa_creds.get("client_email", "MISSING")
 
