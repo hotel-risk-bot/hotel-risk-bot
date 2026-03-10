@@ -1314,29 +1314,59 @@ class ProposalExtractor:
             excel_data: List of dicts with 'filename' and 'data' keys
             client_name: Name of the client/insured
         """
-        # Combine all text sources
-        all_text_parts = []
+        # Combine all text sources with FAIR BUDGET ALLOCATION
+        # Ensures every file gets represented even when total exceeds max_chars
+        max_chars = 200000
+        all_items = []
         for item in pdf_texts:
-            all_text_parts.append(
-                f"\n{'='*60}\nFILE: {item['filename']}\n{'='*60}\n{item['text']}"
-            )
+            header = f"\n{'='*60}\nFILE: {item['filename']}\n{'='*60}\n"
+            all_items.append({"header": header, "text": item["text"], "filename": item["filename"]})
         for item in excel_data:
-            all_text_parts.append(
-                f"\n{'='*60}\nFILE (Excel): {item['filename']}\n{'='*60}\n{item['data']}"
-            )
+            header = f"\n{'='*60}\nFILE (Excel): {item['filename']}\n{'='*60}\n"
+            all_items.append({"header": header, "text": item["data"], "filename": item["filename"]})
 
-        if not all_text_parts:
+        if not all_items:
             return {"error": "No text extracted from any documents."}
 
-        combined_text = "\n".join(all_text_parts)
-
-        # Safety truncation
-        max_chars = 200000
-        if len(combined_text) > max_chars:
-            logger.warning(
-                f"Document text truncated from {len(combined_text)} to {max_chars} chars"
-            )
-            combined_text = combined_text[:max_chars]
+        # Calculate total and check if truncation is needed
+        total_chars = sum(len(it["header"]) + len(it["text"]) for it in all_items)
+        if total_chars > max_chars:
+            # Fair allocation: give each file a proportional budget, but ensure
+            # every file gets at least 20K chars (or its full text if shorter)
+            n_files = len(all_items)
+            min_per_file = min(20000, max_chars // n_files)
+            # First pass: allocate minimum to each, then distribute remainder
+            remaining = max_chars
+            budgets = []
+            for it in all_items:
+                full_len = len(it["header"]) + len(it["text"])
+                budgets.append(min(full_len, min_per_file))
+                remaining -= budgets[-1]
+            # Second pass: distribute remaining budget proportionally to files that need more
+            needs_more = [(i, len(it["header"]) + len(it["text"]) - budgets[i])
+                          for i, it in enumerate(all_items) if len(it["header"]) + len(it["text"]) > budgets[i]]
+            if needs_more and remaining > 0:
+                total_need = sum(need for _, need in needs_more)
+                for i, need in needs_more:
+                    extra = int(remaining * need / total_need) if total_need > 0 else 0
+                    full_len = len(all_items[i]["header"]) + len(all_items[i]["text"])
+                    budgets[i] = min(full_len, budgets[i] + extra)
+            
+            # Build combined text with per-file budgets
+            parts = []
+            for i, it in enumerate(all_items):
+                text_budget = budgets[i] - len(it["header"])
+                truncated_text = it["text"][:max(0, text_budget)]
+                parts.append(it["header"] + truncated_text)
+                if len(it["text"]) > text_budget:
+                    logger.warning(f"File '{it['filename']}' truncated from {len(it['text'])} to {text_budget} chars")
+                else:
+                    logger.info(f"File '{it['filename']}': {len(it['text'])} chars (full)")
+            combined_text = "\n".join(parts)
+            logger.info(f"Fair budget allocation: {total_chars} total chars -> {len(combined_text)} chars across {n_files} files")
+        else:
+            combined_text = "\n".join(it["header"] + it["text"] for it in all_items)
+            logger.info(f"All files fit within budget: {total_chars} chars across {len(all_items)} files")
 
         logger.info(f"Sending {len(combined_text)} chars to GPT for extraction")
 
