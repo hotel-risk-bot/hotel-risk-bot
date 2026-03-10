@@ -558,6 +558,20 @@ def drive_diagnostic():
     return jsonify(results)
 
 
+@app.route("/api/organize")
+def organize_endpoint():
+    """Trigger loss run organization from the web process (bypasses bot subprocess)."""
+    try:
+        from loss_run_organizer import organize_loss_runs
+        logger.info("[ORGANIZE-WEB] Starting organize_loss_runs from web endpoint")
+        results = organize_loss_runs()
+        logger.info(f"[ORGANIZE-WEB] Results: {json.dumps(results, default=str)[:2000]}")
+        return jsonify(results)
+    except Exception as e:
+        logger.error(f"[ORGANIZE-WEB] Exception: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/session", methods=["POST"])
 def create_session():
     """Create a new proposal session."""
