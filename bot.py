@@ -2077,7 +2077,15 @@ async def organize_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if results["processed"] == 0:
-            await update.message.reply_text("No new loss runs found in inbox.")
+            if results.get("errors"):
+                lines = [f"⚠️ Found {len(results['errors'])} file(s) but all failed to process:\n"]
+                for err in results["errors"][:5]:
+                    lines.append(f"  • {err[:100]}")
+                if len(results["errors"]) > 5:
+                    lines.append(f"  ... and {len(results['errors']) - 5} more")
+                await update.message.reply_text("\n".join(lines))
+            else:
+                await update.message.reply_text("No new loss runs found in inbox.")
             return
 
         lines = [f"✅ Organized {results['processed']} loss run(s):\n"]
