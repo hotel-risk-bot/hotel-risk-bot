@@ -642,12 +642,14 @@ def upload_files(session_id):
         }
 
         # Check if Excel file is an SOV
+        file_info["is_sov"] = False
         if file_type == "excel" and ext == ".xlsx":
             try:
-                if is_sov_file(save_path):
-                    file_info["is_sov"] = True
-            except Exception:
-                file_info["is_sov"] = False
+                sov_check = is_sov_file(save_path)
+                logger.info(f"SOV check for {f.filename}: {sov_check}")
+                file_info["is_sov"] = sov_check
+            except Exception as e:
+                logger.warning(f"SOV check failed for {f.filename}: {e}")
 
         session["files"].append(file_info)
         uploaded.append({

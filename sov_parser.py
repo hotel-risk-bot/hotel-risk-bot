@@ -176,7 +176,8 @@ def _find_header_row(ws) -> Optional[int]:
     Scan the worksheet to find the header row by looking for rows
     that contain multiple known SOV column keywords.
     """
-    for row_idx in range(1, min(ws.max_row + 1, 30)):  # Check first 30 rows
+    max_row = ws.max_row or 30  # max_row can be None in read_only mode
+    for row_idx in range(1, min(max_row + 1, 30)):  # Check first 30 rows
         row_values = []
         for cell in ws[row_idx]:
             if cell.value:
@@ -597,15 +598,19 @@ def aggregate_locations(sov_data: dict) -> dict:
 def is_sov_file(file_path: str) -> bool:
     """
     Quick check to determine if an .xlsx file looks like an SOV spreadsheet.
+    Note: Uses data_only=True without read_only=True because read_only mode
+    can cause issues with ws.max_row and cell iteration on some files.
     """
     try:
-        wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
+        wb = openpyxl.load_workbook(file_path, data_only=True)
         ws = wb.active
         header_row = _find_header_row(ws)
         wb.close()
-        return header_row is not None
+        result = header_row is not None
+        logger.info(f"is_sov_file({file_path}): header_row={header_row}, result={result}")
+        return result
     except Exception as e:
-        logger.warning(f"Error checking SOV file: {e}")
+        logger.warning(f"Error checking SOV file {file_path}: {e}")
         return False
 
 
