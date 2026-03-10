@@ -2276,12 +2276,12 @@ def main():
         async def post_init(application):
             """Start the scheduler after the event loop is running."""
             try:
-                scheduler = AsyncIOScheduler(timezone="US/Eastern")
+                scheduler = AsyncIOScheduler(timezone="America/New_York")
 
                 # Morning briefing at 7:00 AM EST
                 scheduler.add_job(
                     scheduled_morning_briefing,
-                    CronTrigger(hour=7, minute=0, timezone="US/Eastern"),
+                    CronTrigger(hour=7, minute=0, timezone="America/New_York"),
                     id="morning_briefing",
                     name="Morning Briefing",
                     replace_existing=True,
@@ -2290,7 +2290,7 @@ def main():
                 # Afternoon debrief at 4:00 PM EST
                 scheduler.add_job(
                     scheduled_afternoon_debrief,
-                    CronTrigger(hour=16, minute=0, timezone="US/Eastern"),
+                    CronTrigger(hour=16, minute=0, timezone="America/New_York"),
                     id="afternoon_debrief",
                     name="Afternoon Debrief",
                     replace_existing=True,
@@ -2300,7 +2300,7 @@ def main():
                 if HAS_LOSS_ORGANIZER:
                     scheduler.add_job(
                         scheduled_organize,
-                        CronTrigger(hour="8,12,16", minute=30, timezone="US/Eastern"),
+                        CronTrigger(hour="8,12,16", minute=30, timezone="America/New_York"),
                         id="loss_run_organizer",
                         name="Loss Run Organizer",
                         replace_existing=True,
