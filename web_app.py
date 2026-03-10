@@ -333,7 +333,11 @@ def _merge_extraction_results(existing, new_data):
 
 def _enrich_with_sov(extracted_data, sov_data):
     """Enrich extracted data with SOV information (DBA, locations, etc.)."""
+    logger.info(f"_enrich_with_sov called. sov_data type={type(sov_data).__name__}, "
+                f"has_error={'error' in sov_data if sov_data else 'N/A'}, "
+                f"num_locations={len(sov_data.get('locations', [])) if sov_data else 0}")
     if not sov_data or "error" in sov_data:
+        logger.warning(f"_enrich_with_sov: skipping - sov_data is {'empty/None' if not sov_data else 'has error: ' + str(sov_data.get('error'))}")
         return
 
     # Store SOV data
@@ -364,6 +368,11 @@ def _enrich_with_sov(extracted_data, sov_data):
         }
         sov_locations.append(loc_entry)
 
+    # REPLACE GPT-extracted locations with SOV locations (SOV is authoritative for property data)
+    logger.info(f"_enrich_with_sov: replacing {len(extracted_data.get('locations', []))} GPT locations "
+                f"with {len(sov_locations)} SOV locations")
+    for i, sl in enumerate(sov_locations[:3]):
+        logger.info(f"  SOV loc {i+1}: name='{sl.get('name', '')}', tiv={sl.get('tiv', 0)}, addr='{sl.get('address', '')}'")
     extracted_data["locations"] = sov_locations
     extracted_data["sov_totals"] = sov_data.get("totals", {})
 
@@ -744,8 +753,15 @@ def _run_extraction(session_id):
         _normalize_coverages(merged_data)
 
         # Enrich with SOV data
+        has_sov = session.get("sov_data") is not None
+        logger.info(f"SOV enrichment check: has_sov={has_sov}, "
+                    f"sov_locations={len(session['sov_data'].get('locations', [])) if has_sov else 0}, "
+                    f"gpt_locations={len(merged_data.get('locations', []))}")
         if session.get("sov_data"):
             _enrich_with_sov(merged_data, session["sov_data"])
+            logger.info(f"After enrichment: {len(merged_data.get('locations', []))} locations, "
+                        f"first loc name='{merged_data.get('locations', [{}])[0].get('name', '')}', "
+                        f"first loc tiv={merged_data.get('locations', [{}])[0].get('tiv', 0)}")
 
         session["extracted_data"] = merged_data
         session["status"] = "extracted"
