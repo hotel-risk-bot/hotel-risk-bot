@@ -751,6 +751,11 @@ def generate_premium_summary(doc, data):
         "garage_keepers": "Garage Keepers",
         "enviro_pack": "Enviro Pack",
         "wind_deductible_buydown": "Wind Deductible Buy Down",
+        "earthquake": "Earthquake",
+        "pollution": "Pollution Liability",
+        "abuse_molestation": "Sexual Abuse & Molestation",
+        "active_assailant": "Active Assailant",
+        "deductible_buydown": "Deductible Buy Down",
     }
     
     if has_expiring:
@@ -1142,6 +1147,11 @@ def generate_subjectivities(doc, data):
         "garage_keepers": "Garage Keepers",
         "enviro_pack": "Enviro Pack",
         "wind_deductible_buydown": "Wind Deductible Buy Down",
+        "earthquake": "Earthquake",
+        "pollution": "Pollution Liability",
+        "abuse_molestation": "Sexual Abuse & Molestation",
+        "active_assailant": "Active Assailant",
+        "deductible_buydown": "Deductible Buy Down",
     }
     
     has_subjectivities = False
@@ -1467,7 +1477,7 @@ def generate_information_summary(doc, data):
             # Determine type from description, hotel_flag, or occupancy
             desc = (loc.get("description", "") or loc.get("hotel_flag", "") or
                     loc.get("occupancy", "") or loc.get("dba", "") or "").lower()
-            if any(kw in desc for kw in ["hotel", "motel", "inn", "suite", "lodge", "resort", "hampton", "holiday", "best western", "marriott", "hilton", "ihg", "wyndham", "choice", "comfort", "quality", "candlewood", "towneplace", "springhill"]):
+            if any(kw in desc for kw in ["hotel", "motel", "inn", "suite", "lodge", "resort", "hampton", "holiday", "best western", "marriott", "hilton", "ihg", "wyndham", "choice", "comfort", "quality", "candlewood", "towneplace", "springhill", "hyatt", "latitude", "fairfield", "courtyard", "residence", "doubletree", "embassy", "homewood", "home2", "tru by", "avid", "la quinta", "sonesta", "days inn", "super 8", "ramada", "microtel", "wingate", "baymont", "americinn", "country inn"]):
                 hotel_count += 1
             elif "office" in desc or "corporate" in desc:
                 office_count += 1
@@ -1498,7 +1508,7 @@ def generate_information_summary(doc, data):
                 if not addr or _addr_already_seen(addr):
                     continue
                 seen_loc_addrs.append(addr)
-                if any(kw in classification for kw in ["hotel", "motel", "inn", "suite", "lodge", "resort"]):
+                if any(kw in classification for kw in ["hotel", "motel", "inn", "suite", "lodge", "resort", "hampton", "best western", "hyatt", "springhill", "latitude", "fairfield", "courtyard", "doubletree", "embassy", "homewood", "home2", "sonesta", "days inn", "super 8", "ramada", "la quinta"]):
                     hotel_count += 1
                 elif "office" in classification or "building" in classification:
                     office_count += 1
@@ -3150,6 +3160,11 @@ def generate_carrier_rating(doc, data):
         "garage_keepers": "Garage Keepers",
         "enviro_pack": "Enviro Pack",
         "wind_deductible_buydown": "Wind Deductible Buy Down",
+        "earthquake": "Earthquake",
+        "pollution": "Pollution Liability",
+        "abuse_molestation": "Sexual Abuse & Molestation",
+        "active_assailant": "Active Assailant",
+        "deductible_buydown": "Deductible Buy Down",
     }
     
     for key, display_name in coverage_names.items():
@@ -3519,8 +3534,21 @@ def generate_proposal(data: dict, output_path: str) -> str:
                                 return int(n.replace(',', ''))
                             except ValueError:
                                 pass
-            # If no underlying info, use premium as rough proxy (higher premium = lower layer usually)
-            return cov_data.get("total_premium", 0) if isinstance(cov_data, dict) else 0
+            # Check if underlying_insurance has any entries with $1,000,000 limits
+            # This is the most reliable indicator: primary excess sits on top of $1M primary policies
+            if underlying:
+                for u in underlying:
+                    if isinstance(u, dict):
+                        limits_str = str(u.get("limits", "") or "")
+                        if "1,000,000" in limits_str or "1000000" in limits_str:
+                            return 1000000  # Primary excess layer
+            
+            # If no underlying info, use premium as proxy (higher premium = lower/primary layer usually)
+            prem = cov_data.get("total_premium", 0) or cov_data.get("premium", 0) or 0
+            if isinstance(cov_data, dict) and prem > 0:
+                # Invert so higher premium sorts first (lower attachment point)
+                return 10000000 - prem
+            return 50000000  # Unknown layers sort last
         
         # Sort umbrella keys by attachment point (ascending = 1st layer first)
         _umb_sorted = sorted(_umb_keys, key=lambda k: _parse_attachment_point(coverages.get(k, {})))
@@ -3568,6 +3596,16 @@ def generate_proposal(data: dict, output_path: str) -> str:
         generate_coverage_section(doc, data, "wind_deductible_buydown", "Wind Deductible Buy Down Coverage")
     if "enviro_pack" in coverages:
         generate_coverage_section(doc, data, "enviro_pack", "Enviro Pack Coverage")
+    if "earthquake" in coverages:
+        generate_coverage_section(doc, data, "earthquake", "Earthquake Coverage")
+    if "pollution" in coverages:
+        generate_coverage_section(doc, data, "pollution", "Pollution Liability Coverage")
+    if "abuse_molestation" in coverages:
+        generate_coverage_section(doc, data, "abuse_molestation", "Sexual Abuse & Molestation Coverage")
+    if "active_assailant" in coverages:
+        generate_coverage_section(doc, data, "active_assailant", "Active Assailant Coverage")
+    if "deductible_buydown" in coverages:
+        generate_coverage_section(doc, data, "deductible_buydown", "Deductible Buy Down Coverage")
     
     # Part 3: Coverage Recommendations (before signature pages)
     generate_coverage_recommendations(doc)
