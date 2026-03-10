@@ -218,6 +218,7 @@ def drive_list_files(folder_id, mime_type=None):
             "pageSize": 100,
             "supportsAllDrives": True,
             "includeItemsFromAllDrives": True,
+            "corpora": "allDrives",
         }
         if page_token:
             params["pageToken"] = page_token
