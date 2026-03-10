@@ -734,6 +734,8 @@ def generate_premium_summary(doc, data):
         "umbrella": "Umbrella / Excess",
         "umbrella_layer_2": "2nd Excess Layer",
         "umbrella_layer_3": "3rd Excess Layer",
+        "excess_liability": "Excess Liability",
+        "excess": "Excess Liability",
         "workers_comp": "Workers Compensation",
         "workers_compensation": "Workers Compensation",
         "commercial_auto": "Commercial Auto",
@@ -1130,6 +1132,8 @@ def generate_subjectivities(doc, data):
         "umbrella": "Umbrella / Excess",
         "umbrella_layer_2": "2nd Excess Layer",
         "umbrella_layer_3": "3rd Excess Layer",
+        "excess_liability": "Excess Liability",
+        "excess": "Excess Liability",
         "workers_comp": "Workers Compensation",
         "workers_compensation": "Workers Compensation",
         "commercial_auto": "Commercial Auto",
@@ -3143,6 +3147,8 @@ def generate_carrier_rating(doc, data):
         "umbrella": "Umbrella / Excess",
         "umbrella_layer_2": "2nd Excess Layer",
         "umbrella_layer_3": "3rd Excess Layer",
+        "excess_liability": "Excess Liability",
+        "excess": "Excess Liability",
         "workers_comp": "Workers Compensation",
         "workers_compensation": "Workers Compensation",
         "commercial_auto": "Commercial Auto",
@@ -3484,6 +3490,18 @@ def generate_proposal(data: dict, output_path: str) -> str:
         generate_coverage_section(doc, data, _wc_key, "Workers Compensation Coverage")
     if "commercial_auto" in coverages:
         generate_coverage_section(doc, data, "commercial_auto", "Commercial Auto Coverage")
+    # Normalize any excess_liability / excess variants into umbrella layer slots
+    _excess_aliases = ["excess_liability", "excess", "excess_layer_2", "excess_layer_3",
+                       "2nd_excess", "second_excess", "3rd_excess", "third_excess"]
+    for _alias in _excess_aliases:
+        if _alias in coverages:
+            if "umbrella" not in coverages:
+                coverages["umbrella"] = coverages.pop(_alias)
+            elif "umbrella_layer_2" not in coverages:
+                coverages["umbrella_layer_2"] = coverages.pop(_alias)
+            elif "umbrella_layer_3" not in coverages:
+                coverages["umbrella_layer_3"] = coverages.pop(_alias)
+    
     # Sort umbrella layers by attachment point before rendering
     # The extractor may assign layers in PDF order, not by actual layer structure
     _umb_keys = [k for k in ["umbrella", "umbrella_layer_2", "umbrella_layer_3"] if k in coverages]

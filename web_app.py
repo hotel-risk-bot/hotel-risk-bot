@@ -805,6 +805,25 @@ def generate_doc(session_id):
         ep = gen_data.get("expiring_premiums", {})
         if isinstance(ep, dict) and "workers_compensation" in ep and "workers_comp" not in ep:
             ep["workers_comp"] = ep.pop("workers_compensation")
+        
+        # Normalize excess_liability / excess variants -> umbrella layer keys
+        # The GPT extractor may return excess layers with various key names
+        _excess_aliases = ["excess_liability", "excess", "excess_layer_2", "excess_layer_3",
+                           "2nd_excess", "second_excess", "3rd_excess", "third_excess"]
+        for alias in _excess_aliases:
+            if alias in covs:
+                # Map to the next available umbrella layer slot
+                if "umbrella" not in covs:
+                    covs["umbrella"] = covs.pop(alias)
+                    logger.info(f"Normalized {alias} -> umbrella")
+                elif "umbrella_layer_2" not in covs:
+                    covs["umbrella_layer_2"] = covs.pop(alias)
+                    logger.info(f"Normalized {alias} -> umbrella_layer_2")
+                elif "umbrella_layer_3" not in covs:
+                    covs["umbrella_layer_3"] = covs.pop(alias)
+                    logger.info(f"Normalized {alias} -> umbrella_layer_3")
+                else:
+                    logger.warning(f"All umbrella slots full, cannot map {alias}")
 
         generate_proposal(gen_data, docx_path)
 
