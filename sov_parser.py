@@ -486,7 +486,13 @@ def aggregate_locations(sov_data: dict) -> dict:
     """
     Aggregate building-level SOV rows into location-level summaries.
     Many SOVs list multiple buildings per location (e.g., Days Inn has 4 buildings).
-    This groups them by building_num (location identifier) and sums values.
+    
+    Grouping strategy:
+    1. If each row has a unique address, each row is its own location (no aggregation)
+    2. If location_num values are unique, each row is its own location (no aggregation)
+    3. If location_num values repeat (multiple buildings per location), group by
+       location_num and sum values across buildings
+    
     Returns a new sov_data dict with aggregated locations and updated totals.
     """
     if "error" in sov_data:
@@ -496,12 +502,30 @@ def aggregate_locations(sov_data: dict) -> dict:
     if not raw_locations:
         return sov_data
     
-    from collections import OrderedDict
+    from collections import OrderedDict, Counter
+    
+    # Strategy 1: Check if addresses are unique — strongest signal that each row is a location
+    addresses = [loc.get("address", "").strip().upper() for loc in raw_locations]
+    non_empty_addrs = [a for a in addresses if a]
+    addrs_unique = len(non_empty_addrs) == len(set(non_empty_addrs)) and len(non_empty_addrs) > 1
+    
+    # Strategy 2: Check if location_num values are unique
+    loc_nums = [loc.get("location_num", 0) for loc in raw_locations]
+    loc_num_counts = Counter(loc_nums)
+    loc_nums_unique = all(c == 1 for c in loc_num_counts.values()) and len(loc_nums) > 1
+    
+    if addrs_unique or loc_nums_unique:
+        # Each row is a unique location — no aggregation needed
+        logger.info(f"SOV has {len(raw_locations)} unique locations (no aggregation needed)")
+        result = dict(sov_data)
+        result["locations_raw"] = raw_locations
+        return result
+    
+    # Strategy 3: location_num values repeat — aggregate by location_num
     agg = OrderedDict()
     
     for loc in raw_locations:
-        # Use building_num as the location grouping key (this is the location number in AmRisc SOVs)
-        key = loc.get("building_num", loc.get("location_num", 0))
+        key = loc.get("location_num", loc.get("building_num", 0))
         if key not in agg:
             agg[key] = {
                 "location_num": key,
