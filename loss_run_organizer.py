@@ -83,6 +83,52 @@ TRACKER_HEADERS = [
 
 # ── Google API Auth ───────────────────────────────────────────────────────
 
+def _parse_service_account_json(raw):
+    """Parse service account JSON, handling Railway env var mangling."""
+    if not raw:
+        return None
+    raw = raw.strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    try:
+        fixed = re.sub(
+            r'"((?:[^"\\]|\\.)*?)"',
+            lambda m: '"' + m.group(1).replace('\n', '\\n').replace('\r', '') + '"',
+            raw,
+            flags=re.DOTALL
+        )
+        return json.loads(fixed)
+    except Exception:
+        pass
+    try:
+        lines = raw.split('\n')
+        rebuilt = []
+        in_pk = False
+        for line in lines:
+            s = line.strip()
+            if '"private_key"' in s:
+                in_pk = True
+                rebuilt.append(s)
+            elif in_pk:
+                if (s.startswith('"') and not s.startswith('"-----')) or s in ('}', '},'):
+                    in_pk = False
+                    rebuilt.append(s)
+                else:
+                    if rebuilt:
+                        rebuilt[-1] = rebuilt[-1].rstrip() + '\\n' + s
+                    else:
+                        rebuilt.append(s)
+            else:
+                rebuilt.append(s)
+        rejoined = ' '.join(rebuilt)
+        return json.loads(rejoined)
+    except Exception as e:
+        logger.error(f"All JSON parse attempts failed: {e}")
+        return None
+
+
 def _get_access_token():
     """Get Google API access token with Drive + Sheets scope."""
     sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
@@ -90,11 +136,15 @@ def _get_access_token():
         logger.error("GOOGLE_SERVICE_ACCOUNT_JSON not set")
         return None
 
-    try:
-        creds = json.loads(sa_json)
-    except json.JSONDecodeError:
-        logger.error("Invalid GOOGLE_SERVICE_ACCOUNT_JSON format")
+    creds = _parse_service_account_json(sa_json)
+    if not creds:
+        logger.error("Could not parse GOOGLE_SERVICE_ACCOUNT_JSON")
         return None
+
+    # Ensure private_key has proper newline characters
+    pk = creds.get("private_key", "")
+    if pk and '\n' not in pk and '\\n' in pk:
+        creds["private_key"] = pk.replace('\\n', '\n')
 
     now = int(time.time())
     payload = {
@@ -105,7 +155,11 @@ def _get_access_token():
         "exp": now + 3600,
     }
 
-    signed_jwt = jwt.encode(payload, creds["private_key"], algorithm="RS256")
+    try:
+        signed_jwt = jwt.encode(payload, creds["private_key"], algorithm="RS256")
+    except Exception as e:
+        logger.error(f"JWT signing failed: {e}")
+        return None
 
     resp = http_requests.post(
         "https://oauth2.googleapis.com/token",

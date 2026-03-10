@@ -10,6 +10,8 @@ Uses Google Sheets API v4 with a service account.
 import os
 import json
 import logging
+import re
+import time
 from datetime import datetime, date
 
 import requests as http_requests
@@ -34,20 +36,75 @@ NEW_BUSINESS_HEADERS = ["Date Added", "Client", "Description", "N/R", "Est Reven
 LEADS_HEADERS = ["Date Added", "Client", "Contact", "Source", "Description", "Est Revenue", "Status", "Notes"]
 
 
+def _parse_service_account_json(raw):
+    """Parse service account JSON, handling Railway env var mangling."""
+    if not raw:
+        return None
+    raw = raw.strip()
+
+    # Attempt 1: Direct parse
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # Attempt 2: Fix real newlines inside JSON string values
+    try:
+        fixed = re.sub(
+            r'"((?:[^"\\]|\\.)*?)"',
+            lambda m: '"' + m.group(1).replace('\n', '\\n').replace('\r', '') + '"',
+            raw,
+            flags=re.DOTALL
+        )
+        return json.loads(fixed)
+    except Exception:
+        pass
+
+    # Attempt 3: Line-by-line reconstruction
+    try:
+        lines = raw.split('\n')
+        rebuilt = []
+        in_pk = False
+        for line in lines:
+            s = line.strip()
+            if '"private_key"' in s:
+                in_pk = True
+                rebuilt.append(s)
+            elif in_pk:
+                if (s.startswith('"') and not s.startswith('"-----')) or s in ('}', '},'):
+                    in_pk = False
+                    rebuilt.append(s)
+                else:
+                    if rebuilt:
+                        rebuilt[-1] = rebuilt[-1].rstrip() + '\\n' + s
+                    else:
+                        rebuilt.append(s)
+            else:
+                rebuilt.append(s)
+        rejoined = ' '.join(rebuilt)
+        return json.loads(rejoined)
+    except Exception as e:
+        logger.error(f"All JSON parse attempts failed: {e}")
+        return None
+
+
 def _get_access_token():
     """Get Google API access token from service account credentials."""
     import jwt
-    import time
 
     if not GOOGLE_SERVICE_ACCOUNT_JSON:
         logger.error("GOOGLE_SERVICE_ACCOUNT_JSON not set")
         return None
 
-    try:
-        creds = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
-    except json.JSONDecodeError:
-        logger.error("Invalid GOOGLE_SERVICE_ACCOUNT_JSON format")
+    creds = _parse_service_account_json(GOOGLE_SERVICE_ACCOUNT_JSON)
+    if not creds:
+        logger.error("Could not parse GOOGLE_SERVICE_ACCOUNT_JSON")
         return None
+
+    # Ensure private_key has proper newline characters
+    pk = creds.get("private_key", "")
+    if pk and '\n' not in pk and '\\n' in pk:
+        creds["private_key"] = pk.replace('\\n', '\n')
 
     now = int(time.time())
     payload = {
@@ -58,7 +115,11 @@ def _get_access_token():
         "exp": now + 3600,
     }
 
-    signed_jwt = jwt.encode(payload, creds["private_key"], algorithm="RS256")
+    try:
+        signed_jwt = jwt.encode(payload, creds["private_key"], algorithm="RS256")
+    except Exception as e:
+        logger.error(f"JWT signing failed: {e}")
+        return None
 
     resp = http_requests.post(
         "https://oauth2.googleapis.com/token",
@@ -317,153 +378,58 @@ def get_completed_tasks_today() -> list:
         # Check if completed today based on notes timestamp
         if today_str in notes or today_str2 in notes or "today" in notes.lower():
             tasks.append({
+                "priority": row[0] if len(row) > 0 else "",
+                "due_date": row[1] if len(row) > 1 else "",
                 "client": row[2] if len(row) > 2 else "",
                 "task": row[3] if len(row) > 3 else "",
+                "status": row[4] if len(row) > 4 else "",
                 "category": row[5] if len(row) > 5 else "",
+                "notes": row[6] if len(row) > 6 else "",
             })
     return tasks
 
 
-# ── New Business ─────────────────────────────────────────────────────────
+# ── New Business & Leads ──────────────────────────────────────────────────
 
-def add_new_business(client: str, description: str, nr: str = "N",
-                     est_revenue: str = "", status: str = "Pipeline",
-                     am: str = "Stefan", notes: str = "") -> bool:
+def add_new_business(client: str, description: str, nr: str = "New",
+                      est_revenue: str = "", status: str = "Active",
+                      am: str = "", notes: str = "") -> bool:
     """Add a new business opportunity to the New Business tab."""
-    _ensure_tab_exists(NEW_BUSINESS_TAB, NEW_BUSINESS_HEADERS)
-
     date_added = date.today().strftime("%Y-%m-%d")
     row = [date_added, client, description, nr, est_revenue, status, am, notes]
     return _sheets_append(f"'{NEW_BUSINESS_TAB}'!A:H", [row])
 
 
 def get_new_business() -> list:
-    """Get all new business entries."""
-    _ensure_tab_exists(NEW_BUSINESS_TAB, NEW_BUSINESS_HEADERS)
+    """Get all new business opportunities."""
     rows = _sheets_get(f"'{NEW_BUSINESS_TAB}'!A:H")
     if not rows or len(rows) < 2:
         return []
+    return rows[1:]
 
-    items = []
-    for i, row in enumerate(rows[1:], start=1):
-        if not row or not any(cell.strip() for cell in row if cell):
-            continue
-        items.append({
-            "num": i,
-            "date_added": row[0] if len(row) > 0 else "",
-            "client": row[1] if len(row) > 1 else "",
-            "description": row[2] if len(row) > 2 else "",
-            "nr": row[3] if len(row) > 3 else "",
-            "est_revenue": row[4] if len(row) > 4 else "",
-            "status": row[5] if len(row) > 5 else "",
-            "am": row[6] if len(row) > 6 else "",
-            "notes": row[7] if len(row) > 7 else "",
-        })
-    return items
-
-
-# ── Leads ────────────────────────────────────────────────────────────────
 
 def add_lead(client: str, contact: str = "", source: str = "",
              description: str = "", est_revenue: str = "",
-             notes: str = "") -> bool:
+             status: str = "Active", notes: str = "") -> bool:
     """Add a new lead to the Leads tab."""
-    _ensure_tab_exists(LEADS_TAB, LEADS_HEADERS)
-
     date_added = date.today().strftime("%Y-%m-%d")
-    row = [date_added, client, contact, source, description, est_revenue, "New", notes]
+    row = [date_added, client, contact, source, description, est_revenue, status, notes]
     return _sheets_append(f"'{LEADS_TAB}'!A:H", [row])
 
 
 def get_leads() -> list:
     """Get all leads."""
-    _ensure_tab_exists(LEADS_TAB, LEADS_HEADERS)
     rows = _sheets_get(f"'{LEADS_TAB}'!A:H")
     if not rows or len(rows) < 2:
         return []
-
-    items = []
-    for i, row in enumerate(rows[1:], start=1):
-        if not row or not any(cell.strip() for cell in row if cell):
-            continue
-        items.append({
-            "num": i,
-            "date_added": row[0] if len(row) > 0 else "",
-            "client": row[1] if len(row) > 1 else "",
-            "contact": row[2] if len(row) > 2 else "",
-            "source": row[3] if len(row) > 3 else "",
-            "description": row[4] if len(row) > 4 else "",
-            "est_revenue": row[5] if len(row) > 5 else "",
-            "status": row[6] if len(row) > 6 else "",
-            "notes": row[7] if len(row) > 7 else "",
-        })
-    return items
+    return rows[1:]
 
 
-# ── Renewals Tab (read from sheet, populated by daily sync) ──────────────
-
-def get_renewals_from_sheet() -> list:
-    """Get renewals from the Renewals tab."""
-    rows = _sheets_get(f"'{RENEWALS_TAB}'!A:G")
-    if not rows or len(rows) < 2:
-        return []
-
-    items = []
-    for row in rows[1:]:
-        if not row or not any(cell.strip() for cell in row if cell):
-            continue
-        items.append({
-            "opportunity_name": row[0] if len(row) > 0 else "",
-            "dba": row[1] if len(row) > 1 else "",
-            "days_until": row[2] if len(row) > 2 else "",
-            "effective_date": row[3] if len(row) > 3 else "",
-            "market_status": row[4] if len(row) > 4 else "",
-            "type": row[5] if len(row) > 5 else "",
-            "am": row[6] if len(row) > 6 else "",
-        })
-    return items
-
-
-def update_renewals_tab(renewals_data: list) -> bool:
-    """Replace the Renewals tab data with fresh data from Airtable.
-    renewals_data is a list of dicts with keys matching the column headers.
-    """
-    # Clear existing data (keep header)
-    headers = _sheets_headers()
-    if not headers:
-        return False
-
-    # Get current data to know how many rows to clear
-    current = _sheets_get(f"'{RENEWALS_TAB}'!A:G")
-    if current and len(current) > 1:
-        clear_url = (
-            f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}/values/"
-            f"'{RENEWALS_TAB}'!A2:G{len(current) + 10}:clear"
-        )
-        try:
-            http_requests.post(clear_url, headers=headers, json={}, timeout=15)
-        except Exception as e:
-            logger.error(f"Error clearing renewals: {e}")
-
-    # Write new data
-    if renewals_data:
-        rows = []
-        for r in renewals_data:
-            rows.append([
-                r.get("opportunity_name", ""),
-                r.get("dba", ""),
-                str(r.get("days_until", "")),
-                r.get("effective_date", ""),
-                r.get("market_status", ""),
-                r.get("type", ""),
-                r.get("am", ""),
-            ])
-        return _sheets_append(f"'{RENEWALS_TAB}'!A:G", rows)
-    return True
-
-
-def initialize_sheets():
-    """Ensure all required tabs exist with proper headers."""
-    _ensure_tab_exists(NEW_BUSINESS_TAB, NEW_BUSINESS_HEADERS)
-    _ensure_tab_exists(LEADS_TAB, LEADS_HEADERS)
-    logger.info("Google Sheets tabs initialized")
+def initialize_sheets() -> bool:
+    """Initialize all required tabs in the spreadsheet."""
+    success = True
+    success &= _ensure_tab_exists(ACTIVE_TASKS_TAB, ACTIVE_TASKS_HEADERS)
+    success &= _ensure_tab_exists(COMPLETED_TASKS_TAB, COMPLETED_TASKS_HEADERS)
+    success &= _ensure_tab_exists(NEW_BUSINESS_TAB, NEW_BUSINESS_HEADERS)
+    success &= _ensure_tab_exists(LEADS_TAB, LEADS_HEADERS)
+    return success
