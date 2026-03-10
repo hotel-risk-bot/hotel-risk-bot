@@ -216,9 +216,6 @@ def drive_list_files(folder_id, mime_type=None):
             "q": q,
             "fields": "nextPageToken, files(id, name, mimeType, modifiedTime, webViewLink)",
             "pageSize": 100,
-            "supportsAllDrives": True,
-            "includeItemsFromAllDrives": True,
-            "corpora": "allDrives",
         }
         if page_token:
             params["pageToken"] = page_token
