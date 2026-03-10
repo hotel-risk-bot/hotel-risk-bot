@@ -43,8 +43,8 @@ def _start_bot_subprocess():
     logger.info("Starting Telegram bot subprocess: %s", bot_script)
     _bot_process = subprocess.Popen(
         [sys.executable, bot_script],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stdout=None,
+        stderr=None,
         env=os.environ.copy(),
     )
     logger.info("Telegram bot subprocess started (pid=%s)", _bot_process.pid)
@@ -376,6 +376,140 @@ def _enrich_with_sov(extracted_data, sov_data):
 def index():
     """Serve the main web interface."""
     return render_template("proposal_web.html")
+
+
+@app.route("/api/drive-diagnostic")
+def drive_diagnostic():
+    """Diagnostic endpoint to test Google Drive API access directly."""
+    import time as _time
+    results = {"timestamp": datetime.now().isoformat(), "steps": []}
+
+    # Step 1: Check env vars
+    inbox_id = os.environ.get("LOSS_RUN_INBOX_FOLDER_ID", "").strip()
+    sa_json_raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    results["inbox_folder_id"] = inbox_id
+    results["sa_json_present"] = bool(sa_json_raw)
+    results["sa_json_length"] = len(sa_json_raw)
+
+    if not inbox_id:
+        results["error"] = "LOSS_RUN_INBOX_FOLDER_ID not set"
+        return jsonify(results), 500
+    if not sa_json_raw:
+        results["error"] = "GOOGLE_SERVICE_ACCOUNT_JSON not set"
+        return jsonify(results), 500
+
+    # Step 2: Parse service account JSON
+    try:
+        import re as _re
+        sa_creds = json.loads(sa_json_raw)
+        results["steps"].append("JSON parsed directly")
+    except json.JSONDecodeError:
+        try:
+            fixed = _re.sub(
+                r'"((?:[^"\\]|\\.)*)"',
+                lambda m: '"' + m.group(1).replace('\n', '\\n').replace('\r', '') + '"',
+                sa_json_raw, flags=_re.DOTALL
+            )
+            sa_creds = json.loads(fixed)
+            results["steps"].append("JSON parsed after newline fix")
+        except Exception as e2:
+            results["error"] = f"Cannot parse service account JSON: {e2}"
+            return jsonify(results), 500
+
+    results["client_email"] = sa_creds.get("client_email", "MISSING")
+
+    # Step 3: Get access token
+    try:
+        import jwt as _jwt
+        pk = sa_creds.get("private_key", "")
+        if pk and '\n' not in pk and '\\n' in pk:
+            sa_creds["private_key"] = pk.replace('\\n', '\n')
+        now = int(_time.time())
+        payload = {
+            "iss": sa_creds["client_email"],
+            "scope": "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets",
+            "aud": "https://oauth2.googleapis.com/token",
+            "iat": now, "exp": now + 3600,
+        }
+        signed_jwt = _jwt.encode(payload, sa_creds["private_key"], algorithm="RS256")
+        import requests as _req
+        token_resp = _req.post("https://oauth2.googleapis.com/token", data={
+            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            "assertion": signed_jwt,
+        }, timeout=15)
+        token_resp.raise_for_status()
+        access_token = token_resp.json()["access_token"]
+        results["steps"].append(f"Got access token (len={len(access_token)})")
+    except Exception as e:
+        results["error"] = f"Auth failed: {e}"
+        return jsonify(results), 500
+
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    # Step 4: Check folder metadata
+    try:
+        import requests as _req
+        folder_resp = _req.get(
+            f"https://www.googleapis.com/drive/v3/files/{inbox_id}",
+            headers=headers, params={"fields": "id,name,mimeType"}, timeout=15
+        )
+        results["folder_metadata_status"] = folder_resp.status_code
+        if folder_resp.status_code == 200:
+            results["folder_metadata"] = folder_resp.json()
+            results["steps"].append(f"Folder accessible: {folder_resp.json().get('name')}")
+        else:
+            results["folder_metadata_error"] = folder_resp.text
+            results["steps"].append(f"Folder access failed: {folder_resp.status_code}")
+    except Exception as e:
+        results["steps"].append(f"Folder check exception: {e}")
+
+    # Step 5: List files in folder
+    try:
+        import requests as _req
+        q = f"'{inbox_id}' in parents and trashed = false"
+        list_resp = _req.get(
+            "https://www.googleapis.com/drive/v3/files",
+            headers=headers,
+            params={"q": q, "fields": "files(id,name,mimeType)", "pageSize": 100},
+            timeout=30
+        )
+        results["file_list_status"] = list_resp.status_code
+        if list_resp.status_code == 200:
+            files = list_resp.json().get("files", [])
+            results["file_count"] = len(files)
+            results["files"] = [{"name": f["name"], "mimeType": f.get("mimeType", "")} for f in files[:30]]
+            results["steps"].append(f"Listed {len(files)} files")
+        else:
+            results["file_list_error"] = list_resp.text
+            results["steps"].append(f"File list failed: {list_resp.status_code}")
+    except Exception as e:
+        results["steps"].append(f"File list exception: {e}")
+
+    # Step 6: Also try with supportsAllDrives for comparison
+    try:
+        import requests as _req
+        q2 = f"'{inbox_id}' in parents and trashed = false"
+        list_resp2 = _req.get(
+            "https://www.googleapis.com/drive/v3/files",
+            headers=headers,
+            params={
+                "q": q2, "fields": "files(id,name,mimeType)", "pageSize": 100,
+                "corpora": "allDrives", "supportsAllDrives": "true",
+                "includeItemsFromAllDrives": "true"
+            },
+            timeout=30
+        )
+        if list_resp2.status_code == 200:
+            files2 = list_resp2.json().get("files", [])
+            results["allDrives_file_count"] = len(files2)
+            results["steps"].append(f"allDrives query: {len(files2)} files")
+        else:
+            results["allDrives_error"] = list_resp2.text
+            results["steps"].append(f"allDrives query failed: {list_resp2.status_code}")
+    except Exception as e:
+        results["steps"].append(f"allDrives exception: {e}")
+
+    return jsonify(results)
 
 
 @app.route("/api/session", methods=["POST"])
