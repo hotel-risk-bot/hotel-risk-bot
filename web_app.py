@@ -24,6 +24,60 @@ from sov_parser import parse_sov, is_sov_file, aggregate_locations
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ─── Launch Telegram bot as a subprocess alongside the web app ───
+_bot_process = None
+
+def _start_bot_subprocess():
+    """Start bot.py as a subprocess if not already running.
+    This ensures the Telegram bot runs alongside gunicorn."""
+    global _bot_process
+    import subprocess
+    import sys
+    if _bot_process is not None and _bot_process.poll() is None:
+        logger.info("Bot subprocess already running (pid=%s)", _bot_process.pid)
+        return
+    bot_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.py")
+    if not os.path.exists(bot_script):
+        logger.warning("bot.py not found at %s - Telegram bot will not start", bot_script)
+        return
+    logger.info("Starting Telegram bot subprocess: %s", bot_script)
+    _bot_process = subprocess.Popen(
+        [sys.executable, bot_script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=os.environ.copy(),
+    )
+    logger.info("Telegram bot subprocess started (pid=%s)", _bot_process.pid)
+
+# Auto-start the bot when this module is loaded by gunicorn
+# Use a file-based lock to ensure only one worker starts the bot
+_BOT_LOCK_FILE = os.path.join(tempfile.gettempdir(), "hotel_risk_bot.lock")
+
+# Clean up stale lock file from previous deployments
+try:
+    os.unlink(_BOT_LOCK_FILE)
+except FileNotFoundError:
+    pass
+
+def _should_start_bot():
+    """Check if this is the first worker to start (use file lock)."""
+    try:
+        fd = os.open(_BOT_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        return True
+    except FileExistsError:
+        # Another worker already started the bot
+        return False
+
+if os.environ.get("TELEGRAM_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN"):
+    if _should_start_bot():
+        _start_bot_subprocess()
+    else:
+        logger.info("Bot subprocess already started by another worker - skipping")
+else:
+    logger.warning("No TELEGRAM_TOKEN or TELEGRAM_BOT_TOKEN found - Telegram bot will not start")
+
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max upload
 
