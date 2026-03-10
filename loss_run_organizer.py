@@ -187,11 +187,29 @@ def drive_list_files(folder_id, mime_type=None):
     """List files in a Google Drive folder."""
     headers = _auth_headers()
     if not headers:
+        logger.error("DIAGNOSTIC: No auth headers available")
         return []
+
+    # DIAGNOSTIC: Check if we can even see the folder metadata
+    try:
+        folder_resp = http_requests.get(
+            f"https://www.googleapis.com/drive/v3/files/{folder_id}",
+            headers=headers, params={"fields": "id, name, mimeType, owners"}, timeout=15
+        )
+        if folder_resp.status_code == 200:
+            folder_data = folder_resp.json()
+            logger.info(f"DIAGNOSTIC: Successfully accessed folder: {folder_data.get('name')} ({folder_id})")
+            logger.info(f"DIAGNOSTIC: Folder owners: {folder_data.get('owners')}")
+        else:
+            logger.error(f"DIAGNOSTIC: Failed to access folder metadata. Status: {folder_resp.status_code}, Body: {folder_resp.text}")
+    except Exception as e:
+        logger.error(f"DIAGNOSTIC: Exception checking folder: {e}")
 
     q = f"'{folder_id}' in parents and trashed = false"
     if mime_type:
         q += f" and mimeType = '{mime_type}'"
+
+    logger.info(f"DIAGNOSTIC: Querying Drive with: {q}")
 
     files = []
     page_token = None
@@ -201,6 +219,8 @@ def drive_list_files(folder_id, mime_type=None):
             "q": q,
             "fields": "nextPageToken, files(id, name, mimeType, modifiedTime, webViewLink)",
             "pageSize": 100,
+            "supportsAllDrives": True,
+            "includeItemsFromAllDrives": True,
         }
         if page_token:
             params["pageToken"] = page_token
@@ -209,9 +229,18 @@ def drive_list_files(folder_id, mime_type=None):
             "https://www.googleapis.com/drive/v3/files",
             headers=headers, params=params, timeout=30,
         )
-        resp.raise_for_status()
+        
+        if resp.status_code != 200:
+            logger.error(f"DIAGNOSTIC: File list request failed. Status: {resp.status_code}, Body: {resp.text}")
+            break
+            
         data = resp.json()
-        files.extend(data.get("files", []))
+        batch = data.get("files", [])
+        logger.info(f"DIAGNOSTIC: Found {len(batch)} items in this batch")
+        for f in batch:
+            logger.info(f"DIAGNOSTIC: Item found: {f.get('name')} (MIME: {f.get('mimeType')})")
+            
+        files.extend(batch)
         page_token = data.get("nextPageToken")
         if not page_token:
             break
