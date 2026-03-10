@@ -234,6 +234,52 @@ def _merge_extraction_results(existing, new_data):
                 existing_covs[cov_key] = cov_data
     merged["coverages"] = existing_covs
 
+    # Post-merge validation: detect excess LIABILITY misclassified as excess PROPERTY
+    # If excess_property has underlying_insurance referencing umbrella/GL, it's actually an umbrella layer
+    for ep_key in ["excess_property", "excess_property_2"]:
+        ep_data = existing_covs.get(ep_key)
+        if not isinstance(ep_data, dict):
+            continue
+        # Check indicators that this is actually an excess liability, not excess property
+        is_liability = False
+        # Check 1: underlying_insurance references umbrella or GL
+        underlying = ep_data.get("underlying_insurance", [])
+        for u in (underlying if isinstance(underlying, list) else []):
+            u_cov = str(u.get("coverage", "")).lower() if isinstance(u, dict) else ""
+            if any(kw in u_cov for kw in ["umbrella", "general liability", "gl", "excess"]):
+                is_liability = True
+                break
+        # Check 2: tower_structure mentions "xs primary" or "excess of" umbrella
+        tower = ep_data.get("tower_structure", [])
+        for t in (tower if isinstance(tower, list) else []):
+            t_limits = str(t.get("limits", "")).lower() if isinstance(t, dict) else ""
+            if "xs" in t_limits and "primary" in t_limits:
+                is_liability = True
+                break
+        # Check 3: carrier name or coverage description contains "excess liability"
+        carrier_str = str(ep_data.get("carrier", "")).lower()
+        # Check if there are no property-specific fields (no TIV, no building values, no coinsurance)
+        has_property_fields = bool(ep_data.get("tiv") or ep_data.get("coinsurance") or ep_data.get("valuation"))
+        if not has_property_fields and not is_liability:
+            # Additional check: look at the forms/endorsements for liability indicators
+            forms = ep_data.get("forms_endorsements", [])
+            for f in (forms if isinstance(forms, list) else []):
+                f_desc = str(f.get("description", f) if isinstance(f, dict) else f).lower()
+                if "liability" in f_desc or "umbrella" in f_desc:
+                    is_liability = True
+                    break
+        if is_liability:
+            # Move to the next available umbrella slot
+            moved = False
+            for umb_slot in ["umbrella", "umbrella_layer_2", "umbrella_layer_3"]:
+                if umb_slot not in existing_covs:
+                    existing_covs[umb_slot] = existing_covs.pop(ep_key)
+                    logger.info(f"Post-merge fix: moved {ep_key} ({ep_data.get('carrier', 'unknown')}) -> {umb_slot} (was misclassified as excess property)")
+                    moved = True
+                    break
+            if not moved:
+                logger.warning(f"Post-merge: {ep_key} appears to be excess liability but all umbrella slots are full")
+
     # Merge locations
     existing_locs = merged.get("locations", [])
     existing_addrs = {loc.get("address", "").upper() for loc in existing_locs}
