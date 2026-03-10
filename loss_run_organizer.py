@@ -88,6 +88,9 @@ def _parse_service_account_json(raw):
     if not raw:
         return None
     raw = raw.strip()
+    # Fix truncated JSON: if it starts with { but doesn't end with }, add it
+    if raw.startswith('{') and not raw.endswith('}'):
+        raw = raw + '\n}'
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
