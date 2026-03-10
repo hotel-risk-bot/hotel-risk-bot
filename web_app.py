@@ -732,25 +732,36 @@ def _run_extraction(session_id):
                     all_excel_data.append({"filename": file_info["filename"], "data": data})
 
         if not all_pdf_texts and not all_excel_data:
-            session["status"] = "error"
-            session["extract_error"] = "No data could be extracted from the uploaded files"
+            # If only SOV was uploaded (no quote PDFs), create basic data from SOV
+            if session.get("sov_data"):
+                logger.info("SOV-only upload: creating basic data from SOV without GPT")
+                merged_data = {
+                    "client_info": {"named_insured": session["client_name"]},
+                    "coverages": {},
+                    "locations": [],
+                    "named_insureds": [],
+                    "client_name": session["client_name"],
+                }
+            else:
+                session["status"] = "error"
+                session["extract_error"] = "No data could be extracted from the uploaded files"
+                _set_session(session_id, session)
+                return
+        else:
+            # Step 2: Single combined GPT call for ALL files at once
+            session["extract_progress"] = "Analyzing with AI... this may take 1-3 minutes"
             _set_session(session_id, session)
-            return
+            logger.info(f"Sending {len(all_pdf_texts)} PDFs + {len(all_excel_data)} Excel files to GPT in single call")
+            merged_data = extractor.structure_insurance_data(
+                all_pdf_texts, all_excel_data, session["client_name"]
+            )
 
-        # Step 2: Single combined GPT call for ALL files at once
-        session["extract_progress"] = "Analyzing with AI... this may take 1-3 minutes"
-        _set_session(session_id, session)
-        logger.info(f"Sending {len(all_pdf_texts)} PDFs + {len(all_excel_data)} Excel files to GPT in single call")
-        merged_data = extractor.structure_insurance_data(
-            all_pdf_texts, all_excel_data, session["client_name"]
-        )
-
-        if not merged_data or "error" in merged_data:
-            session["status"] = "error"
-            session["extract_error"] = (merged_data.get("error", "Unknown extraction error")
-                                        if merged_data else "No data extracted")
-            _set_session(session_id, session)
-            return
+            if not merged_data or "error" in merged_data:
+                session["status"] = "error"
+                session["extract_error"] = (merged_data.get("error", "Unknown extraction error")
+                                            if merged_data else "No data extracted")
+                _set_session(session_id, session)
+                return
 
         _normalize_coverages(merged_data)
 
