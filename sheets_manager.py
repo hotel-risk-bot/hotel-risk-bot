@@ -19,7 +19,7 @@ import requests as http_requests
 logger = logging.getLogger(__name__)
 
 # Google Sheets Configuration
-SPREADSHEET_ID = "1gwM3AefSzXI_7ECiQW85pGmo772fsxzGCKo-6QyID38"
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1gwM3AefSzXI_7ECiQW85pGmo772fsxzGCKo-6QyID38")
 GOOGLE_SERVICE_ACCOUNT_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 
 # Tab names

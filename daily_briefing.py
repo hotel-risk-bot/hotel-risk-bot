@@ -16,9 +16,9 @@ logger = logging.getLogger(__name__)
 
 # Airtable Configuration
 AIRTABLE_PAT = os.environ.get("AIRTABLE_PAT", "")
-SALES_BASE_ID = "appnFKEzmdLbR4CHY"
-OPPORTUNITIES_TABLE_ID = "tblMKuUsG1cosdQPN"
-POLICIES_TABLE_ID = "tbl8vZP2oHrinwVfd"
+SALES_BASE_ID = os.environ.get("SALES_BASE_ID", "appnFKEzmdLbR4CHY")
+OPPORTUNITIES_TABLE_ID = os.environ.get("OPPORTUNITIES_TABLE_ID", "tblMKuUsG1cosdQPN")
+POLICIES_TABLE_ID = os.environ.get("SALES_POLICIES_TABLE_ID", "tbl8vZP2oHrinwVfd")
 
 
 # Telegram Configuration (for sending alerts via bot too)

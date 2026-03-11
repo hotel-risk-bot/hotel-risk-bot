@@ -29,9 +29,9 @@ logger = logging.getLogger(__name__)
 
 # ── Airtable Config ──
 AIRTABLE_PAT = os.environ.get("AIRTABLE_PAT", "")
-SALES_BASE_ID = "appnFKEzmdLbR4CHY"
-POLICIES_TABLE_ID = "tbl8vZP2oHrinwVfd"
-OPPORTUNITIES_TABLE_ID = "tblMKuUsG1cosdQPN"
+SALES_BASE_ID = os.environ.get("SALES_BASE_ID", "appnFKEzmdLbR4CHY")
+POLICIES_TABLE_ID = os.environ.get("SALES_POLICIES_TABLE_ID", "tbl8vZP2oHrinwVfd")
+OPPORTUNITIES_TABLE_ID = os.environ.get("OPPORTUNITIES_TABLE_ID", "tblMKuUsG1cosdQPN")
 
 # ── HUB Colors ──
 ELECTRIC_BLUE = RGBColor(0x16, 0x7B, 0xD4)
@@ -280,7 +280,7 @@ def _resolve_broker_names(broker_record_ids: list) -> str:
     if not broker_record_ids or not AIRTABLE_PAT:
         return "—"
     names = []
-    companies_table = "tblMPEvjv6mcSwdSd"  # Companies table
+    companies_table = os.environ.get("COMPANIES_TABLE_ID", "tblMPEvjv6mcSwdSd")  # Companies table
     for rid in broker_record_ids:
         if not isinstance(rid, str) or not rid.startswith("rec"):
             continue

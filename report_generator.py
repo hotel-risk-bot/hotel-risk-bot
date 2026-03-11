@@ -24,8 +24,8 @@ import requests as http_requests
 # ── Configuration ──────────────────────────────────────────────────────────
 AIRTABLE_PAT = os.environ.get("AIRTABLE_PAT", "")
 AIRTABLE_API_URL = "https://api.airtable.com/v0"
-CONSULTING_BASE_ID = "appOVp1eJUPbNgNXM"
-POLICIES_TABLE_ID = "tblP5P6SZG1uIRaTt"
+CONSULTING_BASE_ID = os.environ.get("CONSULTING_BASE_ID", "appOVp1eJUPbNgNXM")
+POLICIES_TABLE_ID = os.environ.get("CONSULTING_POLICIES_TABLE_ID", "tblP5P6SZG1uIRaTt")
 
 # Colors
 HUB_DARK_BLUE = (0, 51, 102)

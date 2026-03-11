@@ -18,9 +18,9 @@ import requests as http_requests
 logger = logging.getLogger(__name__)
 
 AIRTABLE_PAT = os.environ.get("AIRTABLE_PAT", "")
-SALES_BASE_ID = "appnFKEzmdLbR4CHY"
-POLICIES_TABLE_ID = "tbl8vZP2oHrinwVfd"
-OPPORTUNITIES_TABLE_ID = "tblMKuUsG1cosdQPN"
+SALES_BASE_ID = os.environ.get("SALES_BASE_ID", "appnFKEzmdLbR4CHY")
+POLICIES_TABLE_ID = os.environ.get("SALES_POLICIES_TABLE_ID", "tbl8vZP2oHrinwVfd")
+OPPORTUNITIES_TABLE_ID = os.environ.get("OPPORTUNITIES_TABLE_ID", "tblMKuUsG1cosdQPN")
 
 # ── Status order and display ────────────────────────────────────────────
 

@@ -43,7 +43,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # Hardcoded fallback folder IDs (in case env vars have timing issues)
-_FALLBACK_CLIENT_LOSS_RUNS_FOLDER_ID = "1v2-Y9pKIY4_Jh3X2_ZJOCB7XdNLptS8x"
+_FALLBACK_CLIENT_LOSS_RUNS_FOLDER_ID = os.environ.get("CLIENT_LOSS_RUNS_FOLDER_ID_FALLBACK", "1v2-Y9pKIY4_Jh3X2_ZJOCB7XdNLptS8x")
 
 # Google API scopes needed
 SCOPES = "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets"

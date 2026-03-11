@@ -97,19 +97,19 @@ AIRTABLE_PAT = os.environ.get("AIRTABLE_PAT", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # Airtable Base IDs
-SALES_BASE_ID = "appnFKEzmdLbR4CHY"
-CONSULTING_BASE_ID = "appOVp1eJUPbNgNXM"
+SALES_BASE_ID = os.environ.get("SALES_BASE_ID", "appnFKEzmdLbR4CHY")
+CONSULTING_BASE_ID = os.environ.get("CONSULTING_BASE_ID", "appOVp1eJUPbNgNXM")
 
 # Consulting table IDs
-INCIDENTS_TABLE_ID = "tblK0V4q84B2hBNra"
-ACTIVITY_TABLE_ID = "tblESDnmgggtni5a3"
-LOCATIONS_TABLE_ID = "tbl6f73KwsL4OKzCJ"
-CLIENT_TABLE_ID = "tblO0GeWB6DocUA3e"
+INCIDENTS_TABLE_ID = os.environ.get("INCIDENTS_TABLE_ID", "tblK0V4q84B2hBNra")
+ACTIVITY_TABLE_ID = os.environ.get("ACTIVITY_TABLE_ID", "tblESDnmgggtni5a3")
+LOCATIONS_TABLE_ID = os.environ.get("LOCATIONS_TABLE_ID", "tbl6f73KwsL4OKzCJ")
+CLIENT_TABLE_ID = os.environ.get("CLIENT_TABLE_ID", "tblO0GeWB6DocUA3e")
 
 # Sales table IDs
-OPPORTUNITIES_TABLE_ID = "tblMKuUsG1cosdQPN"
-TASKS_TABLE_ID = "tblJVBL95e6qUJud3"
-TODO_TABLE_ID = "tbllOVUzN1oGCrEV7"
+OPPORTUNITIES_TABLE_ID = os.environ.get("OPPORTUNITIES_TABLE_ID", "tblMKuUsG1cosdQPN")
+TASKS_TABLE_ID = os.environ.get("TASKS_TABLE_ID", "tblJVBL95e6qUJud3")
+TODO_TABLE_ID = os.environ.get("TODO_TABLE_ID", "tbllOVUzN1oGCrEV7")
 
 AIRTABLE_API_URL = "https://api.airtable.com/v0"
 
