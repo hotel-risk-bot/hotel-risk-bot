@@ -1268,22 +1268,41 @@ def generate_named_insureds(doc, data):
         create_styled_table(doc, headers, rows, col_widths=[0.5, 7.0],
                            header_size=10, body_size=10)
     
-    # Additional Named Insureds
+    # Additional Named Insureds - only show if there are entries NOT already in named_insureds
+    # Since the web pipeline merges additional_named_insureds into named_insureds,
+    # this section is typically empty. Only render if there are truly new entries.
     addl_named = data.get("additional_named_insureds", [])
     if addl_named:
-        add_subsection_header(doc, "Additional Named Insureds")
-        headers = ["#", "Additional Named Insured"]
-        rows = []
-        for i, ani in enumerate(addl_named, 1):
+        # Check if any additional named insureds are NOT already in the named list
+        named_upper = {n.strip().upper() for n in named}
+        new_addl = []
+        for ani in addl_named:
             if isinstance(ani, dict):
                 name = ani.get("name", "")
                 dba = ani.get("dba", "")
                 display = f"{name} DBA {dba}" if dba else name
             else:
                 display = str(ani)
-            rows.append([str(i), display])
-        create_styled_table(doc, headers, rows, col_widths=[0.5, 7.0],
-                           header_size=10, body_size=10)
+            # Check if this entity is already in the named insureds table
+            display_upper = display.strip().upper()
+            # Also check partial matches (name without DBA)
+            name_only = (ani.get("name", "") if isinstance(ani, dict) else str(ani)).strip().upper()
+            already_present = False
+            for existing in named_upper:
+                if name_only and (name_only in existing or existing in name_only):
+                    already_present = True
+                    break
+                if display_upper and (display_upper in existing or existing in display_upper):
+                    already_present = True
+                    break
+            if not already_present:
+                new_addl.append(display)
+        if new_addl:
+            add_subsection_header(doc, "Additional Named Insureds")
+            headers = ["#", "Additional Named Insured"]
+            rows = [[str(i), d] for i, d in enumerate(new_addl, 1)]
+            create_styled_table(doc, headers, rows, col_widths=[0.5, 7.0],
+                               header_size=10, body_size=10)
     
     # Additional Insureds
     addl_insureds = data.get("additional_insureds", [])
@@ -1619,11 +1638,21 @@ def _normalize_addr(s):
     Also strips trailing zip codes."""
     import re as _re_norm
     s = s.strip().upper()
-    # Remove periods and commas first
-    s = s.replace(".", "").replace(",", "")
+    # Remove periods, commas, and dashes ("Burlington - Mount Holly" -> "Burlington Mount Holly")
+    s = s.replace(".", "").replace(",", "").replace(" - ", " ").replace("-", " ")
     # Normalize route designators: "U.S. 51" / "US 51" / "US-51" / "US HWY 51" -> "HWY 51"
     s = _re_norm.sub(r'\bUS\s*-?\s*(\d)', r'HWY \1', s)
     s = _re_norm.sub(r'\bU\s*S\s*-?\s*(\d)', r'HWY \1', s)
+    # Normalize word-level abbreviations FIRST (before suffix replacements)
+    # This handles both directions: "MOUNT" -> "MT", and ensures consistency
+    word_replacements = {
+        "MOUNT": "MT", "SAINT": "ST", "FORT": "FT",
+        "TOWNSHIP": "TWP", "COUNTY": "CTY",
+    }
+    words = s.split()
+    words = [word_replacements.get(w, w) for w in words]
+    s = " ".join(words)
+    # Normalize suffix-level replacements
     replacements = {
         " STREET": " ST", " AVENUE": " AVE", " BOULEVARD": " BLVD",
         " DRIVE": " DR", " ROAD": " RD", " LANE": " LN",

@@ -1734,14 +1734,8 @@ function syncVisualToData() {
 
 // ─── Start New ───
 function startNew() {
-    sessionId = null;
-    extractedData = null;
-    uploadedFiles = [];
-    document.getElementById('client-name').value = '';
-    document.getElementById('effective-date').value = '';
-    fileList.innerHTML = '';
-    btnExtract.disabled = true;
-    goToStep(1);
+    // Full page reload ensures latest server code is always used
+    window.location.href = window.location.pathname;
 }
 
 // ─── Helpers ───
