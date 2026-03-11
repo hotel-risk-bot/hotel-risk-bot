@@ -22,10 +22,8 @@
 
 ## UI/UX Improvements
 
-### 5. No expiring carrier/details input — OPEN (Enhancement)
-- Users can enter expiring premiums but not expiring carrier names
-- The generator supports `expiring_details` with carrier info for comparison mode
-- **Fix**: Add expiring carrier input fields next to expiring premium inputs
+### 5. ~~No expiring carrier/details input~~ ✅ RESOLVED
+- **Status**: Fixed — Added "Expiring Carrier" column to the premium comparison table in `proposal_web.html`. New `updateExpiringCarrier()` function writes to `extractedData.expiring_details[key].carrier`, which the generator already reads for comparison mode.
 
 ### 6. ~~No deductible add button~~ ✅ RESOLVED
 - **Status**: Fixed — `addCovDed()` function and "+ Add Deductible" button exist (line 1247, 1344).
@@ -44,14 +42,11 @@
 
 ## Extraction Improvements
 
-### 10. Truncation at 200K chars may lose data — OPEN (Low Priority)
-- Large multi-property SOVs can exceed 200K chars
-- **Fix**: Increase to 300K or implement smarter truncation (prioritize quote text over SOV)
+### 10. ~~Truncation at 200K chars may lose data~~ ✅ RESOLVED
+- **Status**: Fixed — Increased `max_chars` from 150K to 300K in `proposal_extractor.py` line 950.
 
-### 11. Pass 2-4 send the ENTIRE combined_text each time — OPEN (Low Priority)
-- Each focused pass sends the full document text, which is wasteful for gpt-4.1-mini
-- Could be optimized to send only relevant sections
-- **Note**: Works correctly, just costs more tokens
+### 11. ~~Pass 2-4 send the ENTIRE combined_text each time~~ ✅ RESOLVED
+- **Status**: Fixed — Added `_extract_relevant_sections()` utility method that extracts text windows around keyword matches instead of sending the full document. Each pass now defines coverage-specific keywords and gets only relevant sections, significantly reducing token usage while maintaining extraction quality.
 
 ## DOCX Generation Improvements
 

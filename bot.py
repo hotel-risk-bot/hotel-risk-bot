@@ -35,83 +35,44 @@ from telegram.ext import (
     filters,
 )
 
-try:
+# Configuration, env vars, and optional module availability flags
+from bot_config import (
+    TELEGRAM_TOKEN, AIRTABLE_PAT, TELEGRAM_CHAT_ID,
+    SALES_BASE_ID, CONSULTING_BASE_ID,
+    INCIDENTS_TABLE_ID, ACTIVITY_TABLE_ID, LOCATIONS_TABLE_ID, CLIENT_TABLE_ID,
+    OPPORTUNITIES_TABLE_ID, TASKS_TABLE_ID, TODO_TABLE_ID,
+    AIRTABLE_API_URL,
+    HAS_SCHEDULER, HAS_SHEETS, HAS_BRIEFING, HAS_MARKETING,
+    HAS_MARKETING_UPDATE, HAS_PROPOSAL, HAS_LOSS_ORGANIZER,
+)
+
+# Re-import optional modules that handlers use directly
+if HAS_SCHEDULER:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.cron import CronTrigger
-    HAS_SCHEDULER = True
-except ImportError:
-    HAS_SCHEDULER = False
-
-try:
+if HAS_SHEETS:
     from sheets_manager import (
         get_active_tasks, add_active_task, complete_task,
         get_completed_tasks_today, add_new_business, get_new_business,
         add_lead, get_leads, initialize_sheets,
     )
-    HAS_SHEETS = True
-except ImportError:
-    HAS_SHEETS = False
-
-try:
+if HAS_BRIEFING:
     from daily_briefing import (
         run_morning_briefing, run_afternoon_debrief,
         fetch_upcoming_renewals, classify_renewals,
         send_telegram_message, escape_telegram_markdown,
     )
-    HAS_BRIEFING = True
-except ImportError:
-    HAS_BRIEFING = False
-
-try:
+if HAS_MARKETING:
     from marketing_summary import get_marketing_summary
-    HAS_MARKETING = True
-except ImportError:
-    HAS_MARKETING = False
-
-try:
+if HAS_MARKETING_UPDATE:
     from marketing_update_generator import generate_marketing_update
-    HAS_MARKETING_UPDATE = True
-except ImportError:
-    HAS_MARKETING_UPDATE = False
-
-try:
+if HAS_PROPOSAL:
     from proposal_handler import get_proposal_conversation_handler, extract_standalone, generate_standalone
-    HAS_PROPOSAL = True
-except Exception as _proposal_err:
-    HAS_PROPOSAL = False
-    logging.getLogger(__name__).warning(f"Proposal module import failed: {_proposal_err}")
-
-try:
+if HAS_LOSS_ORGANIZER:
     from loss_run_organizer import (
         scheduled_organize, organize_loss_runs, send_organize_summary,
         tracker_get_client, tracker_get_all,
     )
-    HAS_LOSS_ORGANIZER = True
-except ImportError as _lr_err:
-    HAS_LOSS_ORGANIZER = False
-    logging.getLogger(__name__).warning(f"Loss run organizer import failed: {_lr_err}")
-
-# ── Configuration (from environment variables) ────────────────────────────
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
-AIRTABLE_PAT = os.environ.get("AIRTABLE_PAT", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-
-# Airtable Base IDs
-SALES_BASE_ID = os.environ.get("SALES_BASE_ID", "appnFKEzmdLbR4CHY")
-CONSULTING_BASE_ID = os.environ.get("CONSULTING_BASE_ID", "appOVp1eJUPbNgNXM")
-
-# Consulting table IDs
-INCIDENTS_TABLE_ID = os.environ.get("INCIDENTS_TABLE_ID", "tblK0V4q84B2hBNra")
-ACTIVITY_TABLE_ID = os.environ.get("ACTIVITY_TABLE_ID", "tblESDnmgggtni5a3")
-LOCATIONS_TABLE_ID = os.environ.get("LOCATIONS_TABLE_ID", "tbl6f73KwsL4OKzCJ")
-CLIENT_TABLE_ID = os.environ.get("CLIENT_TABLE_ID", "tblO0GeWB6DocUA3e")
-
-# Sales table IDs
-OPPORTUNITIES_TABLE_ID = os.environ.get("OPPORTUNITIES_TABLE_ID", "tblMKuUsG1cosdQPN")
-TASKS_TABLE_ID = os.environ.get("TASKS_TABLE_ID", "tblJVBL95e6qUJud3")
-TODO_TABLE_ID = os.environ.get("TODO_TABLE_ID", "tbllOVUzN1oGCrEV7")
-
-AIRTABLE_API_URL = "https://api.airtable.com/v0"
 
 
 def sanitize_for_pdf(text: str) -> str:

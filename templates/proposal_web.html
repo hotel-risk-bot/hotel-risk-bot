@@ -1400,15 +1400,20 @@ function renderExpiringPremiums() {
     if (!extractedData.expiring_premiums) {
         extractedData.expiring_premiums = {};
     }
+    if (!extractedData.expiring_details) {
+        extractedData.expiring_details = {};
+    }
     const ep = extractedData.expiring_premiums;
-    
+    const ed = extractedData.expiring_details;
+
     let html = '<table class="data-table"><thead><tr>';
-    html += '<th style="width:30%">Coverage</th>';
-    html += '<th style="width:20%">Carrier</th>';
-    html += '<th style="width:15%">Proposed Premium</th>';
-    html += '<th style="width:15%">Expiring Premium</th>';
-    html += '<th style="width:10%">$ Change</th>';
-    html += '<th style="width:10%">% Change</th>';
+    html += '<th style="width:22%">Coverage</th>';
+    html += '<th style="width:15%">Proposed Carrier</th>';
+    html += '<th style="width:13%">Proposed Premium</th>';
+    html += '<th style="width:15%">Expiring Carrier</th>';
+    html += '<th style="width:13%">Expiring Premium</th>';
+    html += '<th style="width:11%">$ Change</th>';
+    html += '<th style="width:11%">% Change</th>';
     html += '</tr></thead><tbody>';
     
     // Separate main and optional coverages
@@ -1434,17 +1439,23 @@ function renderExpiringPremiums() {
         const changeColor = dollarChange > 0 ? 'var(--danger)' : dollarChange < 0 ? 'var(--success)' : 'var(--gray-700)';
         const changeSign = dollarChange > 0 ? '+' : '';
         
+        const expiringCarrier = (ed[key] && ed[key].carrier) ? ed[key].carrier : '';
+
         html += `<tr>`;
         html += `<td><strong>${displayName}</strong></td>`;
         html += `<td style="font-size:0.85rem; color:var(--gray-700);">${escHtml(cov.carrier || '')}</td>`;
-        html += `<td><input type="text" value="${formatNum(proposed)}" 
+        html += `<td><input type="text" value="${formatNum(proposed)}"
                     style="width:100%; padding:0.4rem; border:1px solid var(--gray-300); border-radius:4px; text-align:right; font-size:0.85rem;"
-                    onchange="updateProposedPremium('${key}', this.value)" 
+                    onchange="updateProposedPremium('${key}', this.value)"
                     onkeyup="previewProposedChange('${key}', this)"></td>`;
-        html += `<td><input type="text" value="${expiring > 0 ? formatNum(expiring) : ''}" 
-                    placeholder="Enter expiring" 
+        html += `<td><input type="text" value="${escHtml(expiringCarrier)}"
+                    placeholder="Expiring carrier"
+                    style="width:100%; padding:0.4rem; border:1px solid var(--gray-300); border-radius:4px; font-size:0.85rem;"
+                    onchange="updateExpiringCarrier('${key}', this.value)"></td>`;
+        html += `<td><input type="text" value="${expiring > 0 ? formatNum(expiring) : ''}"
+                    placeholder="Enter expiring"
                     style="width:100%; padding:0.4rem; border:1px solid var(--gray-300); border-radius:4px; text-align:right; font-size:0.85rem;"
-                    onchange="updateExpiringPremium('${key}', this.value)" 
+                    onchange="updateExpiringPremium('${key}', this.value)"
                     onkeyup="previewPremiumChange('${key}', this.value, ${proposed})"></td>`;
         html += `<td style="text-align:right; color:${changeColor}; font-weight:600; font-size:0.85rem;" id="ep-dollar-${key}">${expiring > 0 ? changeSign + '$' + formatNum(Math.abs(dollarChange)) : '\u2014'}</td>`;
         html += `<td style="text-align:right; color:${changeColor}; font-weight:600; font-size:0.85rem;" id="ep-pct-${key}">${expiring > 0 ? changeSign + pctChange.toFixed(1) + '%' : '\u2014'}</td>`;
@@ -1529,6 +1540,13 @@ function updateExpiringPremium(key, value) {
     extractedData.expiring_premiums[key] = num;
     // Re-render to update totals
     renderExpiringPremiums();
+}
+
+function updateExpiringCarrier(key, value) {
+    if (!extractedData.expiring_details) extractedData.expiring_details = {};
+    if (!extractedData.expiring_details[key]) extractedData.expiring_details[key] = {};
+    extractedData.expiring_details[key].carrier = value.trim();
+    document.getElementById('json-editor').value = JSON.stringify(extractedData, null, 2);
 }
 
 function previewPremiumChange(key, value, proposed) {

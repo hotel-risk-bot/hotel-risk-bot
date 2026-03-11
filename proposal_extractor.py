@@ -947,7 +947,7 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
     combined_text = "\n".join(all_text)
 
     # Final safety truncation (should rarely be needed with smart extraction)
-    max_chars = 150000
+    max_chars = 300000
     if len(combined_text) > max_chars:
         logger.warning(f"Combined text truncated from {len(combined_text)} to {max_chars} chars")
         combined_text = combined_text[:max_chars]
@@ -1561,6 +1561,62 @@ class ProposalExtractor:
             logger.error(f"GPT extraction failed: {e}")
             return {"error": f"AI extraction failed: {e}"}
 
+    @staticmethod
+    def _extract_relevant_sections(combined_text: str, keywords: list, context_chars: int = 8000) -> str:
+        """Extract sections of text surrounding keyword matches to reduce token usage.
+
+        Instead of sending the entire document to GPT for focused passes,
+        extract windows of text around relevant keywords. Falls back to
+        truncated full text if no keywords match.
+        """
+        text_lower = combined_text.lower()
+        # Find all keyword positions
+        positions = set()
+        for kw in keywords:
+            start = 0
+            kw_lower = kw.lower()
+            while True:
+                idx = text_lower.find(kw_lower, start)
+                if idx == -1:
+                    break
+                positions.add(idx)
+                start = idx + 1
+
+        if not positions:
+            # No keyword matches — fall back to first + last portions of text
+            max_len = context_chars * 2
+            if len(combined_text) <= max_len:
+                return combined_text
+            return combined_text[:context_chars] + "\n\n[...]\n\n" + combined_text[-context_chars:]
+
+        # Build windows around each match position, merge overlapping windows
+        half = context_chars // 2
+        windows = []
+        for pos in sorted(positions):
+            win_start = max(0, pos - half)
+            win_end = min(len(combined_text), pos + half)
+            windows.append((win_start, win_end))
+
+        # Merge overlapping windows
+        merged = [windows[0]]
+        for ws, we in windows[1:]:
+            prev_s, prev_e = merged[-1]
+            if ws <= prev_e:
+                merged[-1] = (prev_s, max(prev_e, we))
+            else:
+                merged.append((ws, we))
+
+        # Extract and join sections
+        sections = []
+        for ws, we in merged:
+            sections.append(combined_text[ws:we])
+
+        result = "\n\n[...]\n\n".join(sections)
+        # Cap at reasonable size
+        if len(result) > context_chars * 4:
+            result = result[:context_chars * 4]
+        return result
+
     def _pass2_forms_extraction(self, data: dict, combined_text: str) -> dict:
         """Pass 2: Focused extraction of forms & endorsements for coverages that have too few.
         Uses gpt-4.1-mini for speed since this is a focused extraction task."""
@@ -1602,6 +1658,15 @@ class ProposalExtractor:
             carrier = cov.get("carrier", "unknown")
             display = coverage_display.get(cov_key, cov_key)
             
+            # Use smart text selection to reduce token usage
+            forms_keywords = [
+                "forms schedule", "endorsement schedule", "forms list",
+                "CP 00", "CG 00", "CG 21", "IL 00", "NASC", "NXLL", "CSXC",
+                "form number", "endorsement", carrier.split()[0] if carrier else "",
+                display.lower()
+            ]
+            relevant_text = self._extract_relevant_sections(combined_text, forms_keywords, context_chars=10000)
+
             prompt = f"""Extract EVERY form number and endorsement from this insurance document for the {display} coverage issued by {carrier}.
 
 Rules:
@@ -1616,7 +1681,7 @@ Return a JSON object with exactly one key:
 {{"forms_endorsements": [{{"form_number": "...", "description": "..."}}]}}
 
 DOCUMENT TEXT:
-{combined_text}"""
+{relevant_text}"""
             
             try:
                 response = _get_openai_client().chat.completions.create(
@@ -1666,6 +1731,15 @@ DOCUMENT TEXT:
         
         logger.info(f"Pass 3 (addresses): GL has only {dp_count} designated premises (threshold={MIN_ADDRESSES_THRESHOLD}), running focused extraction")
         
+        # Use smart text selection for address-related content
+        address_keywords = [
+            "CG 21 44", "NXLL 110", "designated premises", "schedule of hazards",
+            "schedule of locations", "covered premises", "insured locations",
+            "location address", "schedule of classes", "Hotels/Motels",
+            "class code", "exposure basis", "Gross Sales"
+        ]
+        relevant_text = self._extract_relevant_sections(combined_text, address_keywords, context_chars=8000)
+
         prompt = f"""From this General Liability insurance document, extract ALL physical street addresses that represent covered locations.
 
 Look for addresses in:
@@ -1686,7 +1760,7 @@ Return a JSON object:
   "schedule_of_classes": [{{"location": "Loc 1", "address": "Street", "city": "City", "state": "ST", "brand_dba": "Hotel name if shown", "classification": "Hotels/Motels", "class_code": "XXXXX", "exposure_basis": "Gross Sales", "exposure": "$X", "premium": "$X"}}]}}
 
 DOCUMENT TEXT:
-{combined_text}"""
+{relevant_text}"""
         
         try:
             response = _get_openai_client().chat.completions.create(
@@ -1739,6 +1813,17 @@ DOCUMENT TEXT:
         
         logger.info(f"Pass 4 (sublimits): Property has only {len(ac) if ac else 0} sublimits, running focused extraction")
         
+        # Use smart text selection for sublimit-related content
+        sublimit_keywords = [
+            "sublimit", "extension of coverage", "additional coverage",
+            "coverage extension", "supplemental", "flood", "earthquake",
+            "equipment breakdown", "ordinance or law", "spoilage",
+            "business income", "debris removal", "pollutant cleanup",
+            "utility services", "sewer", "drain backup", "mold", "fungi",
+            "ingress", "egress", "contingent business"
+        ]
+        relevant_text = self._extract_relevant_sections(combined_text, sublimit_keywords, context_chars=10000)
+
         prompt = f"""From this Property insurance document, extract ALL sublimits of liability, extensions of coverage, and additional coverages.
 
 Look for sections titled:
@@ -1787,7 +1872,7 @@ Return a JSON object:
 {{"additional_coverages": [{{"description": "Coverage name", "limit": "$X or Excluded", "deductible": "$X or N/A"}}]}}
 
 DOCUMENT TEXT:
-{combined_text}"""
+{relevant_text}"""
         
         try:
             response = _get_openai_client().chat.completions.create(
