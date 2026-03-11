@@ -42,6 +42,9 @@ LOSS_RUN_TRACKER_SHEET_ID = os.environ.get("LOSS_RUN_TRACKER_SHEET_ID", "")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
+# Hardcoded fallback folder IDs (in case env vars have timing issues)
+_FALLBACK_CLIENT_LOSS_RUNS_FOLDER_ID = "1v2-Y9pKIY4_Jh3X2_ZJOCB7XdNLptS8x"
+
 # Google API scopes needed
 SCOPES = "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets"
 
@@ -88,6 +91,15 @@ TRACKER_HEADERS = [
 
 # ── Client Name Normalization ────────────────────────────────────────────
 
+# Common suffixes to strip for matching
+_STRIP_SUFFIXES = [
+    "llc", "inc", "corp", "corporation", "company", "co",
+    "ltd", "lp", "lllp", "pllc", "pc", "pa",
+    "dba", "management", "mgmt", "hospitality", "hotel", "hotels",
+    "group", "properties", "enterprises", "enterprise",
+    "real estate", "investments", "investors",
+]
+
 def _normalize_client_name(name):
     """
     Normalize a client name for comparison purposes.
@@ -100,9 +112,68 @@ def _normalize_client_name(name):
     n = name.strip().lower()
     # Remove common punctuation that varies between sources
     n = n.replace(",", "").replace(".", "").replace("'", "").replace('"', '')
+    # Remove anything after "dba" for matching purposes
+    if " dba " in n:
+        n = n.split(" dba ")[0].strip()
+    # Remove semicolons and everything after (e.g., "Kautilya Management LLC; Vinit")
+    if ";" in n:
+        n = n.split(";")[0].strip()
     # Collapse multiple spaces
     n = re.sub(r'\s+', ' ', n).strip()
     return n
+
+
+def _extract_core_name(name):
+    """
+    Extract the core business name by removing common legal suffixes.
+    Used for fuzzy matching when exact normalized match fails.
+    E.g., 'Dalwadi Hospitality Management LLC' -> 'dalwadi'
+    """
+    n = _normalize_client_name(name)
+    if not n:
+        return ""
+    # Remove common suffixes iteratively
+    words = n.split()
+    core_words = []
+    for w in words:
+        if w not in _STRIP_SUFFIXES:
+            core_words.append(w)
+    return " ".join(core_words).strip()
+
+
+def _client_names_match(name1, name2):
+    """
+    Determine if two client names refer to the same entity.
+    Uses multiple strategies:
+    1. Exact normalized match
+    2. Core name containment
+    3. First significant word match (for cases like 'DALWADI HOSPITALITY' vs 'Dalwadi Hospitality Management LLC')
+    """
+    norm1 = _normalize_client_name(name1)
+    norm2 = _normalize_client_name(name2)
+
+    # Exact normalized match
+    if norm1 == norm2:
+        return True
+
+    # One contains the other
+    if norm1 in norm2 or norm2 in norm1:
+        return True
+
+    # Core name match
+    core1 = _extract_core_name(name1)
+    core2 = _extract_core_name(name2)
+    if core1 and core2 and (core1 == core2 or core1 in core2 or core2 in core1):
+        return True
+
+    # First significant word match (for company groups like Kautilya, Dalwadi, etc.)
+    # Only if the first word is distinctive enough (> 4 chars)
+    words1 = core1.split() if core1 else []
+    words2 = core2.split() if core2 else []
+    if words1 and words2 and len(words1[0]) > 4 and words1[0] == words2[0]:
+        return True
+
+    return False
 
 
 # ── Google API Auth ───────────────────────────────────────────────────────
@@ -318,6 +389,7 @@ def drive_find_or_create_folder_normalized(client_name, parent_id):
     Find an existing client subfolder using normalized name matching,
     or create a new one. This prevents duplicates like
     'Pride Management Inc.' vs 'Pride Management, Inc.'
+    or 'DALWADI HOSPITALITY' vs 'Dalwadi Hospitality Management, LLC'
     """
     headers = _auth_headers()
     if not headers:
@@ -338,24 +410,24 @@ def drive_find_or_create_folder_normalized(client_name, parent_id):
     resp.raise_for_status()
     folders = resp.json().get("files", [])
 
-    # Normalize the incoming client name for comparison
-    norm_client = _normalize_client_name(client_name)
-
+    # Try to find a match using our smart matching
     best_match = None
     best_score = 0
 
     for folder in folders:
-        norm_folder = _normalize_client_name(folder["name"])
+        if _client_names_match(client_name, folder["name"]):
+            # Calculate a score to prefer the best match
+            norm_client = _normalize_client_name(client_name)
+            norm_folder = _normalize_client_name(folder["name"])
 
-        # Exact normalized match
-        if norm_client == norm_folder:
-            return folder["id"], folder["name"]
+            # Exact normalized match gets highest score
+            if norm_client == norm_folder:
+                logger.info(f"Exact match: '{client_name}' -> '{folder['name']}'")
+                return folder["id"], folder["name"]
 
-        # Containment match (one name contains the other)
-        if norm_client in norm_folder or norm_folder in norm_client:
-            # Score by how close the lengths are (prefer closer matches)
+            # Score by similarity
             score = min(len(norm_client), len(norm_folder)) / max(len(norm_client), len(norm_folder), 1)
-            if score > best_score and score > 0.6:
+            if score > best_score:
                 best_score = score
                 best_match = folder
 
@@ -363,10 +435,14 @@ def drive_find_or_create_folder_normalized(client_name, parent_id):
         logger.info(f"Matched client '{client_name}' to existing folder '{best_match['name']}' (score={best_score:.2f})")
         return best_match["id"], best_match["name"]
 
-    # No match — create new folder with the client name as-is
-    logger.info(f"No matching folder for '{client_name}' — creating new one")
-    new_id = drive_create_folder(client_name, parent_id)
-    return new_id, client_name
+    # No match — create new folder with a clean version of the client name
+    clean_name = client_name.strip()
+    # Title-case if all uppercase
+    if clean_name == clean_name.upper() and len(clean_name) > 5:
+        clean_name = clean_name.title()
+    logger.info(f"No matching folder for '{client_name}' — creating '{clean_name}'")
+    new_id = drive_create_folder(clean_name, parent_id)
+    return new_id, clean_name
 
 
 def drive_move_file(file_id, new_parent_id, new_name=None):
@@ -417,6 +493,28 @@ def drive_get_web_link(file_id):
 
 
 # ── Text Extraction ──────────────────────────────────────────────────────
+
+def _is_garbled_text(text):
+    """
+    Detect if extracted text is garbled (e.g., '/j0 /j0 /j0' patterns
+    from PDFs with custom font encoding that standard extractors can't decode).
+    """
+    if not text or len(text.strip()) < 50:
+        return True
+
+    # Count the ratio of recognizable words vs gibberish
+    # Garbled text typically has lots of /j0, /0, /1 patterns
+    garble_pattern = re.findall(r'/[a-z]?\d+', text)
+    if len(garble_pattern) > len(text) / 10:
+        return True
+
+    # Check if text has very few actual English words
+    words = re.findall(r'[a-zA-Z]{3,}', text)
+    if len(words) < 10 and len(text) > 200:
+        return True
+
+    return False
+
 
 def _extract_text_from_pdf(file_bytes, filename):
     """Extract text from all pages of a PDF."""
@@ -471,16 +569,19 @@ def extract_loss_run_metadata(file_bytes, filename):
     lower_name = filename.lower()
     if lower_name.endswith(".pdf"):
         text = _extract_text_from_pdf(file_bytes, filename)
+        # If text is garbled or too short, use OCR fallback
+        if _is_garbled_text(text):
+            logger.info(f"Garbled/insufficient text for {filename} ({len(text)} chars), using OCR")
+            return _extract_via_ocr(file_bytes, filename)
     elif lower_name.endswith((".xlsx", ".xls")):
         text = _extract_text_from_excel(file_bytes, filename)
     else:
         logger.warning(f"Unsupported file type: {filename}")
         return None
 
-    # If text extraction got very little content, try OCR for PDFs
-    if len(text.strip()) < 200 and lower_name.endswith(".pdf"):
-        logger.info(f"Low text extraction for {filename}, attempting OCR fallback")
-        return _extract_via_ocr(file_bytes, filename)
+    if not text or len(text.strip()) < 50:
+        logger.warning(f"No text extracted from {filename}")
+        return None
 
     # Ask GPT to extract metadata including policy years
     prompt = f"""You are analyzing an insurance loss run document. This document may contain MULTIPLE policy terms/periods across different pages.
@@ -543,19 +644,39 @@ If you cannot determine a field, use "Unknown" for strings, "1900-01-01" for dat
 
 
 def _extract_via_ocr(pdf_bytes, filename):
-    """OCR fallback using GPT Vision for scanned PDFs."""
+    """OCR fallback using GPT Vision for scanned/garbled PDFs."""
     try:
         from pdf2image import convert_from_bytes
         import base64
 
-        images = convert_from_bytes(pdf_bytes, first_page=1, last_page=2, dpi=150, fmt="jpeg")
+        # Convert up to 3 pages for better coverage
+        images = convert_from_bytes(pdf_bytes, first_page=1, last_page=3, dpi=150, fmt="jpeg")
         if not images:
+            logger.warning(f"pdf2image returned no images for {filename}")
             return None
 
-        # Convert first page to base64
-        buf = io.BytesIO()
-        images[0].save(buf, format="JPEG", quality=70)
-        img_b64 = base64.b64encode(buf.getvalue()).decode()
+        # Build image content for GPT Vision (send up to 2 pages)
+        image_content = []
+        image_content.append({"type": "text", "text": (
+            "These are pages from a scanned insurance loss run document. Extract:\n"
+            "1. Client Name (the insured/policyholder, NOT the insurance company or agent)\n"
+            "2. Policy Type (Property, Liability, Workers Comp, Umbrella, Auto, EPLI, etc.)\n"
+            "3. Carrier (insurance company that issued the loss run)\n"
+            "4. Valuation Date (report date / as of date, format as YYYY-MM-DD)\n"
+            "5. Policy Years (earliest start year to latest end year as YY-YY, e.g. 21-24)\n\n"
+            f"Original filename: {filename}\n\n"
+            'Return ONLY valid JSON: {"client_name": "...", "policy_type": "...", "carrier": "...", "valuation_date": "YYYY-MM-DD", "policy_years": "YY-YY"}\n'
+            'If you cannot determine a field, use "Unknown" for strings, "1900-01-01" for date, or "00-00" for policy_years.'
+        )})
+
+        for i, img in enumerate(images[:2]):
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=70)
+            img_b64 = base64.b64encode(buf.getvalue()).decode()
+            image_content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{img_b64}", "detail": "low"}
+            })
 
         resp = http_requests.post(
             "https://api.openai.com/v1/chat/completions",
@@ -565,26 +686,11 @@ def _extract_via_ocr(pdf_bytes, filename):
             },
             json={
                 "model": "gpt-4.1-mini",
-                "messages": [{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": (
-                            "This is a scanned insurance loss run document. Extract:\n"
-                            "1. Client Name (the insured)\n"
-                            "2. Policy Type (Property, Liability, Workers Comp, Umbrella, Auto, etc.)\n"
-                            "3. Carrier (insurance company)\n"
-                            "4. Valuation Date (as YYYY-MM-DD)\n"
-                            "5. Policy Years (earliest start year to latest end year as YY-YY, e.g. 21-24)\n\n"
-                            f"Original filename: {filename}\n\n"
-                            'Return ONLY valid JSON: {"client_name": "...", "policy_type": "...", "carrier": "...", "valuation_date": "YYYY-MM-DD", "policy_years": "YY-YY"}'
-                        )},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}", "detail": "low"}},
-                    ],
-                }],
+                "messages": [{"role": "user", "content": image_content}],
                 "temperature": 0.0,
                 "max_tokens": 500,
             },
-            timeout=60,
+            timeout=90,
         )
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
@@ -594,7 +700,10 @@ def _extract_via_ocr(pdf_bytes, filename):
             metadata["policy_type"] = _normalize_policy_type(metadata.get("policy_type", "Unknown"))
             if "policy_years" not in metadata:
                 metadata["policy_years"] = "00-00"
+            logger.info(f"OCR extracted metadata for {filename}: {metadata}")
             return metadata
+    except ImportError:
+        logger.error("pdf2image not installed - OCR fallback unavailable")
     except Exception as e:
         logger.error(f"OCR extraction failed for {filename}: {e}")
 
@@ -696,10 +805,9 @@ def tracker_add_entry(client, policy_type, carrier, valuation_date, filename, dr
         all_rows = resp.json().get("values", [])
 
         # Look for existing entry (same client + policy type) — update if this valuation is newer
-        norm_client = _normalize_client_name(client)
         for i, existing_row in enumerate(all_rows[1:], start=2):  # skip header
             if len(existing_row) >= 2:
-                if (_normalize_client_name(existing_row[0]) == norm_client and
+                if (_client_names_match(existing_row[0], client) and
                         existing_row[1].strip().lower() == policy_type.strip().lower()):
                     # Found match — check if new valuation is more recent
                     existing_val = existing_row[3] if len(existing_row) > 3 else ""
@@ -760,8 +868,7 @@ def tracker_get_all():
 def tracker_get_client(client_name):
     """Get tracker entries for a specific client."""
     all_entries = tracker_get_all()
-    norm = _normalize_client_name(client_name)
-    return [e for e in all_entries if _normalize_client_name(e.get("Client", "")) == norm]
+    return [e for e in all_entries if _client_names_match(e.get("Client", ""), client_name)]
 
 
 # ── Main Organizer Logic ─────────────────────────────────────────────────
@@ -779,14 +886,13 @@ def organize_loss_runs(accounts_folder_id=None):
         logger.error("LOSS_RUN_INBOX_FOLDER_ID not set")
         return {"error": "Inbox folder not configured", "processed": 0}
 
-    # Use CLIENT_LOSS_RUNS_FOLDER_ID as the destination
+    # Use CLIENT_LOSS_RUNS_FOLDER_ID as the destination (with hardcoded fallback)
     dest_folder_id = os.environ.get("CLIENT_LOSS_RUNS_FOLDER_ID", "").strip()
     if not dest_folder_id:
-        # Fallback to ACCOUNTS_FOLDER_ID for backward compatibility
-        dest_folder_id = accounts_folder_id or os.environ.get("ACCOUNTS_FOLDER_ID", "").strip()
-    if not dest_folder_id:
-        logger.error("CLIENT_LOSS_RUNS_FOLDER_ID not set")
-        return {"error": "Destination folder not configured", "processed": 0}
+        dest_folder_id = _FALLBACK_CLIENT_LOSS_RUNS_FOLDER_ID
+        logger.warning(f"CLIENT_LOSS_RUNS_FOLDER_ID not in env, using hardcoded fallback: {dest_folder_id}")
+
+    logger.info(f"Destination folder: {dest_folder_id}")
 
     # Initialize tracker
     tracker_initialize()
