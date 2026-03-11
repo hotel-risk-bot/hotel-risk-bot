@@ -1358,6 +1358,20 @@ def _build_review_summary(data):
         "cyber": "Cyber",
         "flood": "Flood",
         "earthquake": "Earthquake",
+        "enviro_pack": "Enviro Pack",
+        "terrorism": "Terrorism / TRIA",
+        "equipment_breakdown": "Equipment Breakdown",
+        "liquor_liability": "Liquor Liability",
+        "innkeepers_liability": "Innkeepers Liability",
+        "environmental": "Environmental / Pollution",
+        "workplace_violence": "Workplace Violence",
+        "pollution": "Pollution Liability",
+        "abuse_molestation": "Sexual Abuse & Molestation",
+        "active_assailant": "Active Assailant",
+        "inland_marine": "Inland Marine",
+        "garage_keepers": "Garage Keepers",
+        "wind_deductible_buydown": "Wind Deductible Buy Down",
+        "deductible_buydown": "Deductible Buy Down",
     }
     for key, cov in coverages.items():
         if isinstance(cov, dict) and cov.get("carrier"):

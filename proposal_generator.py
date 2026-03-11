@@ -770,7 +770,14 @@ def generate_premium_summary(doc, data):
     total_taxes_fees = 0
     
     # Collect all coverage keys that appear in either proposed or expiring
+    # Deduplicate workers_comp/workers_compensation — use whichever key has data
     all_keys = list(coverage_names.keys())
+    _has_wc = "workers_comp" in coverages or "workers_comp" in expiring
+    _has_wc_long = "workers_compensation" in coverages or "workers_compensation" in expiring
+    if _has_wc and _has_wc_long:
+        all_keys = [k for k in all_keys if k != "workers_compensation"]  # prefer short key
+    elif _has_wc_long and not _has_wc:
+        all_keys = [k for k in all_keys if k != "workers_comp"]  # keep only long key
     
     # Combine proposed umbrella layers into a single total for comparison
     # when expiring has a single combined umbrella premium
