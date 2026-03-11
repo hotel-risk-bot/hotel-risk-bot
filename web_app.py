@@ -442,7 +442,12 @@ def drive_diagnostic():
     # Step 1: Check env vars
     inbox_id = os.environ.get("LOSS_RUN_INBOX_FOLDER_ID", "").strip()
     sa_json_raw = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    client_loss_runs_id = os.environ.get("CLIENT_LOSS_RUNS_FOLDER_ID", "").strip()
+    accounts_id = os.environ.get("ACCOUNTS_FOLDER_ID", "").strip()
     results["inbox_folder_id"] = inbox_id
+    results["client_loss_runs_folder_id"] = client_loss_runs_id or "NOT SET"
+    results["accounts_folder_id"] = accounts_id or "NOT SET"
+    results["dest_folder_used"] = client_loss_runs_id if client_loss_runs_id else (accounts_id if accounts_id else "NONE")
     results["sa_json_present"] = bool(sa_json_raw)
     results["sa_json_length"] = len(sa_json_raw)
 
