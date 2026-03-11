@@ -875,7 +875,7 @@ IMPORTANT:
 - Only include coverage sections that appear in the documents
 - Extract EVERY form number and endorsement exactly as written
 - Include form dates (e.g., "06/07" in "CP 00 10 06/07")
-- For total_premium: This MUST be the all-in out-the-door number. Look for "Total Package Cost", "Total Cost of Policy", "Total Policy Cost", "Total Policy Premium", "Total Due", "Grand Total", "Total Amount Due", "Total Estimated Cost", or any final total line. It includes base premium + broker fees + surplus lines tax + stamping fee + fire marshal tax + inspection fees + FSLSO fees + EMPA surcharge + any other taxes/fees/surcharges. If no single total line exists, calculate total_premium = premium + taxes_fees. CRITICAL: total_premium must ALWAYS be >= premium. If the quote shows separate line items for taxes and fees, ADD them ALL to the base premium to get total_premium. For example if GL premium is $163,832 and there are surplus lines taxes of $5,414, stamping fee of $328, broker fee of $3,000, and inspection fee of $252, then taxes_fees = $8,994 and total_premium = $163,832 + $8,994 = $172,826. NEVER use the base premium as total_premium when taxes/fees exist
+- For total_premium: This MUST be the all-in out-the-door number. Look for "Total Package Cost", "Total Cost of Policy", "Total Policy Cost", "Total Policy Premium", "Total Due", "Grand Total", "Total Amount Due", "Total Estimated Cost", or any final total line. It includes base premium + broker fees + surplus lines tax + stamping fee + fire marshal tax + inspection fees + FSLSO fees + EMPA surcharge + any other taxes/fees/surcharges. If no single total line exists, calculate total_premium = premium + taxes_fees. CRITICAL: total_premium must ALWAYS be >= premium. If the quote shows separate line items for taxes and fees, ADD them ALL to the base premium to get total_premium. For example if GL premium is $163,832 and there are surplus lines taxes of $5,414, stamping fee of $328, broker fee of $3,000, and inspection fee of $252, then taxes_fees = $8,994 and total_premium = $163,832 + $8,994 = $172,826. NEVER use the base premium as total_premium when taxes/fees exist. DOUBLE-CHECK: After extracting premium and total_premium, verify that total_premium = premium + ALL individual tax/fee line items. List each tax/fee item and add them up. If your calculated total doesn't match the document's stated total, use the document's stated total. If the document shows a clear "Total" or "Grand Total" line, use that exact number for total_premium
 - For GL policies that include BOTH General Liability AND Liquor Liability in a single package: The "premium" field should be the combined package premium (GL + Liquor), and "total_premium" should be the Total Package Cost (premium + broker fee + surplus lines tax + stamping fee). For example if GL premium is $408,733, Liquor is $10,287, Total Package Premium is $419,020, and Total Package Cost is $442,471, then premium=$419,020 and total_premium=$442,471
 - For GL gl_deductible: Extract the per-occurrence deductible if one exists. Look for "Deductible Per Occurrence", "Deductible Liability", "$X,000 Deductible Per Occurrence Including Loss Adjustment Expense", or similar. Include the full description (e.g., "$5,000 Per Occurrence Including Loss Adjustment Expense"). If no GL deductible, set to "$0" or "None".
 - For GL defense_basis: Look for "Defense Basis" or whether defense costs are "In Addition to Limits" or "Within Limits of Liability".
@@ -1028,22 +1028,47 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
             logger.warning("Property has no additional_coverages (sublimits) extracted — may need manual review")
 
         # Validate and fix total_premium for each coverage
+        def _to_num(val):
+            if isinstance(val, (int, float)):
+                return float(val)
+            if isinstance(val, str):
+                try:
+                    return float(val.replace(",", "").replace("$", ""))
+                except (ValueError, TypeError):
+                    return 0.0
+            return 0.0
+
         for key, cov in data.get("coverages", {}).items():
-            premium = cov.get("premium", 0) or 0
-            taxes_fees = cov.get("taxes_fees", 0) or 0
-            total_premium = cov.get("total_premium", 0) or 0
-            
-            # Ensure numeric types
-            if isinstance(premium, str):
-                try: premium = float(str(premium).replace(",", "").replace("$", ""))
-                except: premium = 0
-            if isinstance(taxes_fees, str):
-                try: taxes_fees = float(str(taxes_fees).replace(",", "").replace("$", ""))
-                except: taxes_fees = 0
-            if isinstance(total_premium, str):
-                try: total_premium = float(str(total_premium).replace(",", "").replace("$", ""))
-                except: total_premium = 0
-            
+            premium = _to_num(cov.get("premium", 0))
+            taxes_fees = _to_num(cov.get("taxes_fees", 0))
+            total_premium = _to_num(cov.get("total_premium", 0))
+            surplus_lines_tax = _to_num(cov.get("surplus_lines_tax", 0))
+            stamping_fee = _to_num(cov.get("stamping_fee", 0))
+            tria_premium = _to_num(cov.get("tria_premium", 0))
+
+            # Store cleaned numeric values back
+            cov["premium"] = premium
+            cov["taxes_fees"] = taxes_fees
+            cov["total_premium"] = total_premium
+
+            # Cross-check: for GL, sum schedule_of_classes premiums vs reported premium
+            if key == "general_liability" and cov.get("schedule_of_classes"):
+                soc_total = 0
+                for cls in cov["schedule_of_classes"]:
+                    if isinstance(cls, dict):
+                        cls_prem = _to_num(cls.get("premium", 0))
+                        soc_total += cls_prem
+                if soc_total > 0 and premium > 0:
+                    diff = abs(soc_total - premium)
+                    if diff > 1:  # Allow $1 rounding
+                        logger.warning(f"  GL schedule_of_classes premium sum ({soc_total}) != "
+                                     f"reported premium ({premium}), diff={diff}")
+                        # If the schedule total is closer to total_premium, GPT may have
+                        # confused premium with total_premium
+                        if abs(soc_total - total_premium) < abs(soc_total - premium) and soc_total < total_premium:
+                            logger.info(f"  GL: schedule sum {soc_total} is closer to total_premium {total_premium}, "
+                                       f"likely correct extraction")
+
             # Fallback: if total_premium is less than premium, recalculate
             if total_premium < premium and taxes_fees > 0:
                 corrected = premium + taxes_fees
@@ -1056,6 +1081,12 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
                 total_premium = cov["total_premium"]
                 logger.info(f"  {key}: total_premium was 0, set to premium + taxes_fees = {total_premium}")
             
+            # Additional check: if taxes_fees is 0 but total_premium > premium, derive taxes_fees
+            if taxes_fees == 0 and total_premium > premium and premium > 0:
+                cov["taxes_fees"] = total_premium - premium
+                taxes_fees = cov["taxes_fees"]
+                logger.info(f"  {key}: derived taxes_fees = {taxes_fees} from total_premium - premium")
+
             logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, premium={premium}, "
                        f"taxes_fees={taxes_fees}, total_premium={total_premium}")
 

@@ -82,7 +82,9 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max upload
 
 # File-backed session storage to survive across workers/restarts
-UPLOAD_DIR = os.environ.get("UPLOAD_DIR", tempfile.mkdtemp(prefix="proposal_web_"))
+# Use a STABLE directory path so sessions survive Railway redeploys within the same container
+_default_upload_dir = os.path.join(tempfile.gettempdir(), "proposal_web_uploads")
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR", _default_upload_dir)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 SESSION_FILE = os.path.join(UPLOAD_DIR, "_sessions.json")
 logger.info(f"Upload directory: {UPLOAD_DIR}")
@@ -396,15 +398,23 @@ def _enrich_with_sov(extracted_data, sov_data):
     gl_cov = coverages.get("general_liability", {})
     sov_locs = sov_data.get("locations", [])
     if gl_cov and sov_locs:
+        import re
+        sov_lookup = {}
+        sov_addr_lookup = {}  # address-based lookup for matching GL locations to SOV
+        for loc in sov_locs:
+            loc_num = loc.get("location_num", loc.get("building_num", 0))
+            if loc_num:
+                sov_lookup[str(loc_num)] = loc
+            # Build address-based lookup (normalize for fuzzy matching)
+            addr = (loc.get("address", "") or "").strip().lower()
+            if addr:
+                # Normalize common abbreviations
+                addr_norm = re.sub(r'\b(road|rd|street|st|avenue|ave|drive|dr|boulevard|blvd|highway|hwy|lane|ln|pike|pk)\b', '', addr)
+                addr_norm = re.sub(r'[^a-z0-9]', '', addr_norm)
+                sov_addr_lookup[addr_norm] = loc
+
         classes = gl_cov.get("schedule_of_classes", [])
         if classes:
-            import re
-            sov_lookup = {}
-            for loc in sov_locs:
-                loc_num = loc.get("location_num", loc.get("building_num", 0))
-                if loc_num:
-                    sov_lookup[str(loc_num)] = loc
-
             for cls_entry in classes:
                 if not isinstance(cls_entry, dict):
                     continue
@@ -423,6 +433,68 @@ def _enrich_with_sov(extracted_data, sov_data):
                                     cls_entry["address"] = f"{addr}, {city}, {state}" if city else addr
                             if not cls_entry.get("brand_dba"):
                                 cls_entry["brand_dba"] = sov_loc.get("dba", "") or sov_loc.get("hotel_flag", "")
+
+        # Enrich named_insureds from SOV corporate entities for GL-covered locations
+        # ONLY pull named insureds for locations that appear on the liability quote
+        gl_location_nums = set()
+        gl_addresses_norm = set()
+        # Collect GL location identifiers from schedule_of_classes and designated_premises
+        for cls_entry in gl_cov.get("schedule_of_classes", []):
+            if isinstance(cls_entry, dict):
+                loc_str = str(cls_entry.get("location", ""))
+                loc_match = re.search(r"(\d+)", loc_str)
+                if loc_match:
+                    gl_location_nums.add(loc_match.group(1))
+                # Also track by address
+                cls_addr = (cls_entry.get("address", "") or "").strip().lower()
+                if cls_addr:
+                    cls_addr_norm = re.sub(r'\b(road|rd|street|st|avenue|ave|drive|dr|boulevard|blvd|highway|hwy|lane|ln|pike|pk)\b', '', cls_addr)
+                    cls_addr_norm = re.sub(r'[^a-z0-9]', '', cls_addr_norm)
+                    gl_addresses_norm.add(cls_addr_norm)
+        for dp in gl_cov.get("designated_premises", []):
+            dp_str = str(dp).strip().lower()
+            dp_norm = re.sub(r'\b(road|rd|street|st|avenue|ave|drive|dr|boulevard|blvd|highway|hwy|lane|ln|pike|pk)\b', '', dp_str)
+            dp_norm = re.sub(r'[^a-z0-9]', '', dp_norm)
+            gl_addresses_norm.add(dp_norm)
+
+        # Match GL locations to SOV locations and collect corporate entities
+        existing_named = {ni.get("name", "").strip().lower() if isinstance(ni, dict) else str(ni).strip().lower()
+                         for ni in extracted_data.get("named_insureds", [])}
+        new_named_insureds = []
+        seen_entities = set()
+
+        for loc in sov_locs:
+            loc_num = str(loc.get("location_num", loc.get("building_num", 0)))
+            loc_addr = (loc.get("address", "") or "").strip().lower()
+            loc_addr_norm = re.sub(r'\b(road|rd|street|st|avenue|ave|drive|dr|boulevard|blvd|highway|hwy|lane|ln|pike|pk)\b', '', loc_addr)
+            loc_addr_norm = re.sub(r'[^a-z0-9]', '', loc_addr_norm)
+
+            # Check if this SOV location is on the GL quote
+            is_gl_location = (loc_num in gl_location_nums) or (loc_addr_norm in gl_addresses_norm)
+            if not is_gl_location:
+                continue
+
+            # Get corporate entity name from SOV
+            corp_name = (loc.get("corporate_name") or loc.get("client_name") or "").strip()
+            dba_name = (loc.get("dba") or loc.get("hotel_flag") or "").strip()
+
+            if corp_name and corp_name.lower() not in seen_entities and corp_name.lower() not in existing_named:
+                new_named_insureds.append({
+                    "name": corp_name,
+                    "dba": dba_name,
+                    "relationship": "Named Insured (from SOV)"
+                })
+                seen_entities.add(corp_name.lower())
+                logger.info(f"  SOV named insured enrichment: '{corp_name}' (DBA: '{dba_name}') "
+                           f"from GL location {loc_num} / {loc.get('address', '')}")
+
+        if new_named_insureds:
+            existing_list = extracted_data.get("named_insureds", [])
+            extracted_data["named_insureds"] = existing_list + new_named_insureds
+            logger.info(f"  Added {len(new_named_insureds)} named insureds from SOV for GL locations "
+                       f"(total now: {len(extracted_data['named_insureds'])})")
+        else:
+            logger.info("  No new named insureds to add from SOV (none matched GL locations or all already present)")
 
 
 # ─── Routes ───
