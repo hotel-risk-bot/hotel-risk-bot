@@ -293,20 +293,20 @@ def _merge_extraction_results(existing, new_data):
             existing_addrs.add(addr)
     merged["locations"] = existing_locs
 
-    # Merge named insureds
+    # Merge named insureds (with fuzzy deduplication)
     existing_named = merged.get("named_insureds", [])
     if not isinstance(existing_named, list):
         existing_named = [existing_named] if existing_named else []
     def _ni_name(ni):
         if isinstance(ni, dict):
-            return ni.get("name", "").strip().upper()
-        return str(ni).strip().upper()
-    seen_names = {_ni_name(ni) for ni in existing_named}
+            return ni.get("name", "").strip()
+        return str(ni).strip()
+    existing_name_strings = [_ni_name(ni) for ni in existing_named]
     for ni in new_data.get("named_insureds", []):
         name_key = _ni_name(ni)
-        if name_key and name_key not in seen_names:
+        if name_key and not _is_duplicate_named_insured(name_key, existing_name_strings):
             existing_named.append(ni)
-            seen_names.add(name_key)
+            existing_name_strings.append(name_key)
     merged["named_insureds"] = existing_named
 
     # Merge additional_named_insureds from carrier quote into named_insureds
@@ -319,12 +319,12 @@ def _merge_extraction_results(existing, new_data):
         logger.info(f"Merging {len(additional_named)} additional_named_insureds from carrier quote")
         for ani in additional_named:
             ani_name = _ni_name(ani)
-            if ani_name and ani_name not in seen_names:
+            if ani_name and not _is_duplicate_named_insured(ani_name, existing_name_strings):
                 # Mark as from carrier quote (primary source)
                 if isinstance(ani, dict):
                     ani["relationship"] = ani.get("relationship", "Additional Named Insured")
                 existing_named.append(ani)
-                seen_names.add(ani_name)
+                existing_name_strings.append(ani_name)
                 logger.info(f"  Added additional named insured from carrier quote: {ani_name}")
         merged["named_insureds"] = existing_named
         # Also preserve the raw list for reference
@@ -353,6 +353,67 @@ def _merge_extraction_results(existing, new_data):
     merged["payment_options"] = existing_pay
 
     return merged
+
+
+def _normalize_entity_name(name):
+    """Normalize entity name for deduplication.
+    Strips punctuation, normalizes whitespace, lowercases.
+    'OM Belleville, LLC' and 'OM Belleville LLC' -> 'om belleville llc'
+    'Westhampton Hospitality LLC' and 'Westampton Hospitality LLC' -> handled by fuzzy match
+    """
+    if not name:
+        return ""
+    import re
+    n = name.strip().lower()
+    # Remove all punctuation except spaces
+    n = re.sub(r'[^a-z0-9\s]', '', n)
+    # Normalize whitespace
+    n = re.sub(r'\s+', ' ', n).strip()
+    return n
+
+
+def _entity_names_match(name1, name2):
+    """Check if two entity names match, allowing for minor spelling differences."""
+    n1 = _normalize_entity_name(name1)
+    n2 = _normalize_entity_name(name2)
+    if not n1 or not n2:
+        return False
+    # Exact match after normalization
+    if n1 == n2:
+        return True
+    # Check if one contains the other (for partial matches like 'OM Belleville' vs 'OM Belleville LLC')
+    if n1 in n2 or n2 in n1:
+        return True
+    # Fuzzy match: allow 1-2 character differences (handles Westhampton vs Westampton)
+    if abs(len(n1) - len(n2)) <= 2:
+        # Simple edit distance check - count differing characters
+        shorter, longer = (n1, n2) if len(n1) <= len(n2) else (n2, n1)
+        if len(longer) > 5:  # Only for names long enough
+            # Check character-by-character with shift tolerance
+            diffs = 0
+            j = 0
+            for i in range(len(shorter)):
+                if j < len(longer) and shorter[i] == longer[j]:
+                    j += 1
+                else:
+                    diffs += 1
+                    # Try skipping a character in the longer string
+                    if j + 1 < len(longer) and shorter[i] == longer[j + 1]:
+                        j += 2
+                    else:
+                        j += 1
+            diffs += len(longer) - j
+            if diffs <= 2:
+                return True
+    return False
+
+
+def _is_duplicate_named_insured(new_name, existing_names_list):
+    """Check if a named insured already exists in the list (fuzzy match)."""
+    for existing in existing_names_list:
+        if _entity_names_match(new_name, existing):
+            return True
+    return False
 
 
 def _enrich_with_sov(extracted_data, sov_data):
@@ -502,10 +563,11 @@ def _enrich_with_sov(extracted_data, sov_data):
             gl_addresses_norm.add(dp_norm)
 
         # Match GL locations to SOV locations and collect corporate entities
-        existing_named = {ni.get("name", "").strip().lower() if isinstance(ni, dict) else str(ni).strip().lower()
-                         for ni in extracted_data.get("named_insureds", [])}
+        # Use fuzzy deduplication to avoid duplicates from carrier quote vs SOV
+        existing_named_names = [ni.get("name", "").strip() if isinstance(ni, dict) else str(ni).strip()
+                               for ni in extracted_data.get("named_insureds", [])]
         new_named_insureds = []
-        seen_entities = set()
+        seen_entities = []  # Use list for fuzzy matching
 
         for loc in sov_locs:
             loc_num = str(loc.get("location_num", loc.get("building_num", 0)))
@@ -522,15 +584,18 @@ def _enrich_with_sov(extracted_data, sov_data):
             corp_name = (loc.get("corporate_name") or loc.get("client_name") or "").strip()
             dba_name = (loc.get("dba") or loc.get("hotel_flag") or "").strip()
 
-            if corp_name and corp_name.lower() not in seen_entities and corp_name.lower() not in existing_named:
+            if corp_name and not _is_duplicate_named_insured(corp_name, existing_named_names) \
+               and not _is_duplicate_named_insured(corp_name, seen_entities):
                 new_named_insureds.append({
                     "name": corp_name,
                     "dba": dba_name,
                     "relationship": "Named Insured (from SOV)"
                 })
-                seen_entities.add(corp_name.lower())
+                seen_entities.append(corp_name)
                 logger.info(f"  SOV named insured enrichment: '{corp_name}' (DBA: '{dba_name}') "
                            f"from GL location {loc_num} / {loc.get('address', '')}")
+            elif corp_name:
+                logger.info(f"  SOV named insured SKIPPED (duplicate): '{corp_name}' already exists in named insureds")
 
         if new_named_insureds:
             existing_list = extracted_data.get("named_insureds", [])

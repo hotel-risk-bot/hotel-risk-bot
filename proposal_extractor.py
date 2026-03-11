@@ -1111,6 +1111,60 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
             logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, premium={premium}, "
                        f"taxes_fees={taxes_fees}, total_premium={total_premium}")
 
+        # CRITICAL FIX: Override total_premium with exact values from raw PDF text
+        # GPT frequently miscalculates taxes/fees. Scan the raw text for "Total Cost of Policy",
+        # "Total Package Cost", etc. and use the exact number from the document.
+        _total_cost_patterns = [
+            (r'Total\s+Cost\s+of\s+Policy[:\s]*[\$]?\s*([\d,]+(?:\.\d{2})?)', 'Total Cost of Policy'),
+            (r'Total\s+Package\s+Cost[:\s]*[\$]?\s*([\d,]+(?:\.\d{2})?)', 'Total Package Cost'),
+            (r'Total\s+Policy\s+(?:Cost|Premium)[:\s]*[\$]?\s*([\d,]+(?:\.\d{2})?)', 'Total Policy Cost/Premium'),
+            (r'Total\s+Estimated\s+(?:Cost|Premium)[:\s]*[\$]?\s*([\d,]+(?:\.\d{2})?)', 'Total Estimated Cost'),
+            (r'Grand\s+Total[:\s]*[\$]?\s*([\d,]+(?:\.\d{2})?)', 'Grand Total'),
+        ]
+        
+        # Extract all total cost values from the raw text
+        raw_totals = []
+        for pattern, label in _total_cost_patterns:
+            matches = re.findall(pattern, combined_text, re.IGNORECASE)
+            for m in matches:
+                try:
+                    val = float(m.replace(',', ''))
+                    if val > 1000:  # Ignore trivially small values
+                        raw_totals.append((val, label))
+                        logger.info(f"  Raw text premium found: {label} = ${val:,.2f}")
+                except (ValueError, TypeError):
+                    pass
+        
+        if raw_totals:
+            # Match raw totals to coverages by finding the closest match
+            for key, cov in data.get("coverages", {}).items():
+                gpt_total = _to_num(cov.get("total_premium", 0))
+                gpt_premium = _to_num(cov.get("premium", 0))
+                if gpt_premium <= 0:
+                    continue
+                
+                # Find the raw total that's closest to GPT's total_premium but >= premium
+                best_match = None
+                best_diff = float('inf')
+                for raw_val, raw_label in raw_totals:
+                    # The raw total should be >= the base premium (it includes taxes/fees)
+                    if raw_val >= gpt_premium * 0.95:  # Allow 5% tolerance
+                        diff = abs(raw_val - gpt_total) if gpt_total > 0 else abs(raw_val - gpt_premium)
+                        # Only match if reasonably close (within 20% of premium)
+                        if diff < gpt_premium * 0.20 and diff < best_diff:
+                            best_match = (raw_val, raw_label)
+                            best_diff = diff
+                
+                if best_match and abs(best_match[0] - gpt_total) > 1:  # Only override if different
+                    old_total = gpt_total
+                    cov["total_premium"] = best_match[0]
+                    # Recalculate taxes_fees from the corrected total
+                    if gpt_premium > 0:
+                        cov["taxes_fees"] = best_match[0] - gpt_premium
+                    logger.warning(f"  PREMIUM OVERRIDE for {key}: GPT total_premium ${old_total:,.2f} "
+                                  f"-> raw text '{best_match[1]}' ${best_match[0]:,.2f} "
+                                  f"(diff: ${abs(best_match[0] - old_total):,.2f})")
+
         return data
 
     except json.JSONDecodeError as e:
