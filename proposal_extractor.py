@@ -141,6 +141,27 @@ def _score_page(page_text: str) -> float:
     text_upper = page_text.upper()
     score = 0.0
 
+    # CRITICAL PAGES: These must ALWAYS be included — give maximum boost
+    # These are schedule pages that contain essential structured data
+    _critical_page_keywords = [
+        "ADDITIONAL NAMED INSURED",
+        "SCHEDULE OF LOCATIONS",
+        "SCHEDULE OF CLASSES",
+        "SCHEDULE OF VALUES",
+        "SCHEDULE OF HAZARDS",
+        "PREMIUM DETAIL",
+        "PREMIUM BREAKDOWN",
+        "TOTAL COST OF POLICY",
+        "SCHEDULE OF UNDERLYING",
+        "DESIGNATED PREMISES",
+    ]
+    is_critical = False
+    for kw in _critical_page_keywords:
+        if kw in text_upper:
+            score += 50.0  # Massive boost — these pages are NEVER dropped
+            is_critical = True
+            break
+
     # Positive signals: quote/summary content
     for keyword in QUOTE_PAGE_KEYWORDS:
         if keyword.upper() in text_upper:
@@ -176,15 +197,15 @@ def _score_page(page_text: str) -> float:
     elif all_form_count >= 1:
         score += 3.0  # Moderate boost for pages with at least one form number
 
-    # Negative signals: boilerplate forms (but NOT forms schedule pages)
-    if not is_forms_schedule:
+    # Negative signals: boilerplate forms (but NOT forms schedule pages or critical pages)
+    if not is_forms_schedule and not is_critical:
         for keyword in BOILERPLATE_KEYWORDS:
             if keyword.upper() in text_upper:
                 score -= 3.0
 
     # Negative: very long pages with mostly prose (forms text)
-    # But NOT forms schedule pages which are tabular
-    if not is_forms_schedule and len(page_text) > 3000 and score < 2:
+    # But NOT forms schedule pages or critical pages which are tabular
+    if not is_forms_schedule and not is_critical and len(page_text) > 3000 and score < 2:
         # Check if it's mostly prose (few numbers, lots of text)
         num_count = len(re.findall(r'\d+', page_text))
         word_count = len(page_text.split())

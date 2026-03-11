@@ -19,6 +19,7 @@ from flask import Flask, request, jsonify, send_file, render_template
 
 from proposal_extractor import ProposalExtractor, extract_text_from_pdf_smart, extract_text_from_excel
 from proposal_generator import generate_proposal
+from extraction_validator import validate_extraction
 from sov_parser import parse_sov, is_sov_file, aggregate_locations
 
 logging.basicConfig(level=logging.INFO)
@@ -308,6 +309,27 @@ def _merge_extraction_results(existing, new_data):
             seen_names.add(name_key)
     merged["named_insureds"] = existing_named
 
+    # Merge additional_named_insureds from carrier quote into named_insureds
+    # These come from the "Additional Named Insureds Schedule" on the carrier quote
+    # and are the PRIMARY source for named insured data
+    additional_named = new_data.get("additional_named_insureds", [])
+    if not additional_named:
+        additional_named = merged.get("additional_named_insureds", [])
+    if additional_named:
+        logger.info(f"Merging {len(additional_named)} additional_named_insureds from carrier quote")
+        for ani in additional_named:
+            ani_name = _ni_name(ani)
+            if ani_name and ani_name not in seen_names:
+                # Mark as from carrier quote (primary source)
+                if isinstance(ani, dict):
+                    ani["relationship"] = ani.get("relationship", "Additional Named Insured")
+                existing_named.append(ani)
+                seen_names.add(ani_name)
+                logger.info(f"  Added additional named insured from carrier quote: {ani_name}")
+        merged["named_insureds"] = existing_named
+        # Also preserve the raw list for reference
+        merged["additional_named_insureds"] = additional_named
+
     # Merge additional interests
     existing_ai = merged.get("additional_interests", [])
     existing_ai_names = {ai.get("name_address", "") for ai in existing_ai}
@@ -434,7 +456,29 @@ def _enrich_with_sov(extracted_data, sov_data):
                             if not cls_entry.get("brand_dba"):
                                 cls_entry["brand_dba"] = sov_loc.get("dba", "") or sov_loc.get("hotel_flag", "")
 
-        # Enrich named_insureds from SOV corporate entities for GL-covered locations
+        # PRIORITY: Merge additional_named_insureds from GPT extraction (carrier quote)
+        # These come from the "Additional Named Insureds Schedule" on the carrier quote
+        # and are the PRIMARY source — they should already be in named_insureds from _merge_extraction_results
+        # but handle the case where they weren't merged yet (e.g., single-file extraction)
+        additional_named = extracted_data.get("additional_named_insureds", [])
+        if additional_named:
+            existing_named_list = extracted_data.get("named_insureds", [])
+            existing_named_keys = {(ni.get("name", "") if isinstance(ni, dict) else str(ni)).strip().lower()
+                                   for ni in existing_named_list}
+            added_count = 0
+            for ani in additional_named:
+                ani_name = (ani.get("name", "") if isinstance(ani, dict) else str(ani)).strip()
+                if ani_name and ani_name.lower() not in existing_named_keys:
+                    if isinstance(ani, dict):
+                        ani["relationship"] = ani.get("relationship", "Additional Named Insured")
+                    existing_named_list.append(ani)
+                    existing_named_keys.add(ani_name.lower())
+                    added_count += 1
+            if added_count:
+                extracted_data["named_insureds"] = existing_named_list
+                logger.info(f"  Added {added_count} additional named insureds from carrier quote (primary source)")
+
+        # SECONDARY: Enrich named_insureds from SOV corporate entities for GL-covered locations
         # ONLY pull named insureds for locations that appear on the liability quote
         gl_location_nums = set()
         gl_addresses_norm = set()
@@ -968,6 +1012,16 @@ def generate_doc(session_id):
 
         # Map web UI expiring premiums into the format the generator expects
         gen_data = session["extracted_data"]
+        
+        # SAFETY: Ensure sov_data is always available for the generator
+        # The web UI doesn't send sov_data back, so it must be preserved from the session
+        if not gen_data.get("sov_data") and session.get("sov_data"):
+            gen_data["sov_data"] = session["sov_data"]
+            logger.info(f"Injected sov_data from session: {len(session['sov_data'].get('locations', []))} locations")
+        elif gen_data.get("sov_data"):
+            logger.info(f"sov_data already in gen_data: {len(gen_data['sov_data'].get('locations', []))} locations")
+        else:
+            logger.warning("No sov_data available for proposal generation")
         if gen_data.get("expiring_premiums_data"):
             gen_data["expiring_premiums"] = gen_data["expiring_premiums_data"]
             logger.info(f"Mapped expiring premiums: {gen_data['expiring_premiums']}")
@@ -1000,6 +1054,15 @@ def generate_doc(session_id):
                 else:
                     logger.warning(f"All umbrella slots full, cannot map {alias}")
 
+        # Run validation checks before generating
+        validation = validate_extraction(gen_data, session.get("sov_data"))
+        if validation["corrections"]:
+            logger.info(f"Auto-corrections applied: {validation['corrections']}")
+        if validation["warnings"]:
+            logger.warning(f"Validation warnings: {validation['warnings']}")
+        if validation["errors"]:
+            logger.error(f"Validation errors: {validation['errors']}")
+        
         generate_proposal(gen_data, docx_path)
 
         session["status"] = "complete"

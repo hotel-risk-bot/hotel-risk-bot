@@ -1413,11 +1413,13 @@ def generate_information_summary(doc, data):
                         gl_loc_keys.add(key)
     liab_loc_count = len(gl_loc_keys) if gl_loc_keys else int(gl_cov.get("num_locations", 0) or 0) if isinstance(gl_cov, dict) else 0
     
-    # Calculate UNIQUE total location count by merging all sources with fuzzy matching
+    # Calculate UNIQUE total location count
+    # When SOV is available, it is the AUTHORITATIVE source for location count
+    # Only supplement with GL locations that are genuinely new (not already in SOV)
     all_unique_keys = set()
-    # Add property keys
+    # Add property keys (from SOV)
     all_unique_keys.update(_prop_unique_keys)
-    # Add liability keys (with fuzzy matching against existing)
+    # Add liability keys ONLY if they don't fuzzy-match existing property keys
     for gl_key in gl_loc_keys:
         gl_parts = gl_key.split("|")
         already_matched = False
@@ -1430,22 +1432,9 @@ def generate_information_summary(doc, data):
                     break
         if not already_matched:
             all_unique_keys.add(gl_key)
-    # Add raw locations (deduped with fuzzy matching)
-    for loc in data.get("locations", []):
-        loc_k = _loc_key(loc)
-        if loc_k == "||":
-            continue
-        loc_parts = loc_k.split("|")
-        already_matched = False
-        for existing_key in all_unique_keys:
-            ex_parts = existing_key.split("|")
-            if len(loc_parts) == 3 and len(ex_parts) == 3:
-                state_ok = (not loc_parts[2] or not ex_parts[2] or loc_parts[2] == ex_parts[2])
-                if state_ok and _fuzzy_addr_match(loc_parts[0], ex_parts[0]):
-                    already_matched = True
-                    break
-        if not already_matched:
-            all_unique_keys.add(loc_k)
+    # NOTE: Do NOT add raw GPT-extracted locations to the count.
+    # GPT often extracts mailing addresses, carrier addresses, and other non-physical
+    # addresses that inflate the location count. SOV + GL schedule are authoritative.
     total_loc_count = len(all_unique_keys) if all_unique_keys else max(prop_loc_count, liab_loc_count)
     if total_loc_count > 0:
         rows.append(["Total Number of Locations", str(total_loc_count)])
@@ -1471,6 +1460,21 @@ def generate_information_summary(doc, data):
                 return True
         return False
     
+    # Hotel brand keywords for classification
+    _hotel_keywords = [
+        "hotel", "motel", "inn", "suite", "lodge", "resort", "hampton", "holiday",
+        "best western", "marriott", "hilton", "ihg", "wyndham", "choice", "comfort",
+        "quality", "candlewood", "towneplace", "springhill", "hyatt", "latitude",
+        "fairfield", "courtyard", "residence", "doubletree", "embassy", "homewood",
+        "home2", "tru by", "avid", "la quinta", "sonesta", "days inn", "super 8",
+        "ramada", "microtel", "wingate", "baymont", "americinn", "country inn",
+        "red roof", "econo lodge", "rodeway", "clarion", "cambria", "ascend",
+        "sleep inn", "mainstay", "suburban", "woodspring", "extended stay",
+        "staybridge", "crowne plaza", "intercontinental", "kimpton", "indigo",
+        "even hotel", "atwell", "avid hotel", "candlewood suites",
+        "non-franchised", "motor lodge", "simply suites", "select",
+    ]
+
     # First: count from SOV locations (most reliable source for property types)
     if sov_data and sov_data.get("locations"):
         for loc in sov_data["locations"]:
@@ -1478,16 +1482,22 @@ def generate_information_summary(doc, data):
             if _addr_already_seen(addr):
                 continue
             seen_loc_addrs.append(addr)
-            # Determine type from description, hotel_flag, or occupancy
-            desc = (loc.get("description", "") or loc.get("hotel_flag", "") or
-                    loc.get("occupancy", "") or loc.get("dba", "") or "").lower()
-            if any(kw in desc for kw in ["hotel", "motel", "inn", "suite", "lodge", "resort", "hampton", "holiday", "best western", "marriott", "hilton", "ihg", "wyndham", "choice", "comfort", "quality", "candlewood", "towneplace", "springhill", "hyatt", "latitude", "fairfield", "courtyard", "residence", "doubletree", "embassy", "homewood", "home2", "tru by", "avid", "la quinta", "sonesta", "days inn", "super 8", "ramada", "microtel", "wingate", "baymont", "americinn", "country inn"]):
+            # Determine type: check ALL relevant fields (not just first truthy one)
+            # Combine all descriptive fields for comprehensive matching
+            all_desc_parts = [
+                (loc.get("description", "") or "").lower(),
+                (loc.get("hotel_flag", "") or "").lower(),
+                (loc.get("occupancy", "") or "").lower(),
+                (loc.get("dba", "") or "").lower(),
+            ]
+            combined_desc = " ".join(all_desc_parts)
+            if any(kw in combined_desc for kw in _hotel_keywords):
                 hotel_count += 1
-            elif "office" in desc or "corporate" in desc:
+            elif "office" in combined_desc or "corporate" in combined_desc:
                 office_count += 1
-            elif "vacant" in desc or "land" in desc:
+            elif "vacant" in combined_desc or "land" in combined_desc:
                 vacant_count += 1
-            elif "lessor" in desc or "lro" in desc:
+            elif "lessor" in combined_desc or "lro" in combined_desc:
                 lro_count += 1
             else:
                 # Default: if it has a building value, it's likely a hotel
@@ -1512,7 +1522,10 @@ def generate_information_summary(doc, data):
                 if not addr or _addr_already_seen(addr):
                     continue
                 seen_loc_addrs.append(addr)
-                if any(kw in classification for kw in ["hotel", "motel", "inn", "suite", "lodge", "resort", "hampton", "best western", "hyatt", "springhill", "latitude", "fairfield", "courtyard", "doubletree", "embassy", "homewood", "home2", "sonesta", "days inn", "super 8", "ramada", "la quinta"]):
+                # Also check brand_dba for hotel identification
+                brand_dba = (entry.get("brand_dba", "") or "").lower()
+                combined_class = classification + " " + brand_dba
+                if any(kw in combined_class for kw in _hotel_keywords):
                     hotel_count += 1
                 elif "office" in classification or "building" in classification:
                     office_count += 1
