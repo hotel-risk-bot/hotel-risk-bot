@@ -767,6 +767,145 @@ def organize_endpoint():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/cleanup-folders")
+def cleanup_folders_endpoint():
+    """Merge duplicate client folders and delete empty shells."""
+    try:
+        from loss_run_organizer import _get_access_token
+        import requests as http_req
+
+        CLIENT_LOSS_RUNS_FOLDER_ID = os.environ.get(
+            "CLIENT_LOSS_RUNS_FOLDER_ID", "1v2-Y9pKIY4_Jh3X2_ZJOCB7XdNLptS8x"
+        )
+
+        # Merge rules: aliases -> canonical
+        MERGE_GROUPS = [
+            {
+                "canonical": "Dalwadi Hospitality Management, LLC",
+                "aliases": ["DALWADI HOSPITALITY"],
+            },
+            {
+                "canonical": "Kautilya Management LLC",
+                "aliases": [
+                    "KAUTILYA MANAGMENT LLC",
+                    "Kautilya Columbus Hotel LLC",
+                    "Kautilya Hotel Group, LLC",
+                    "Kautilya Management LLC; Vinit",
+                ],
+            },
+            {
+                "canonical": "Pride Management, Inc.",
+                "aliases": ["Pride Management Inc."],
+            },
+            {
+                "canonical": "Star Owner LLC dba Hyatt Place",
+                "aliases": ["Star Owner, LLC"],
+            },
+            {
+                "canonical": "Sandalwood Hotel LLC dba America's Best Value Inn",
+                "aliases": ["Sandalwood Hotel LLC Company"],
+            },
+        ]
+
+        token = _get_access_token()
+        if not token:
+            return jsonify({"error": "Could not get access token"}), 500
+        hdrs = {"Authorization": f"Bearer {token}"}
+
+        def _list(folder_id, mime_type=None):
+            q = f"'{folder_id}' in parents and trashed = false"
+            if mime_type:
+                q += f" and mimeType = '{mime_type}'"
+            items = []
+            pt = None
+            while True:
+                p = {"q": q, "fields": "nextPageToken,files(id,name,mimeType,parents)", "pageSize": 200}
+                if pt:
+                    p["pageToken"] = pt
+                r = http_req.get("https://www.googleapis.com/drive/v3/files", headers=hdrs, params=p)
+                r.raise_for_status()
+                d = r.json()
+                items.extend(d.get("files", []))
+                pt = d.get("nextPageToken")
+                if not pt:
+                    break
+            return items
+
+        def _move(file_id, old_parent, new_parent):
+            r = http_req.patch(
+                f"https://www.googleapis.com/drive/v3/files/{file_id}",
+                headers=hdrs,
+                params={"addParents": new_parent, "removeParents": old_parent},
+            )
+            r.raise_for_status()
+
+        def _find_or_create(name, parent_id):
+            q = f"'{parent_id}' in parents and name = '{name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+            r = http_req.get("https://www.googleapis.com/drive/v3/files", headers=hdrs, params={"q": q, "fields": "files(id,name)"})
+            r.raise_for_status()
+            files = r.json().get("files", [])
+            if files:
+                return files[0]["id"]
+            r = http_req.post("https://www.googleapis.com/drive/v3/files", headers=hdrs,
+                            json={"name": name, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]})
+            r.raise_for_status()
+            return r.json()["id"]
+
+        def _move_recursive(src_id, dst_id):
+            moved = 0
+            children = _list(src_id)
+            for ch in children:
+                if ch["mimeType"] == "application/vnd.google-apps.folder":
+                    sub_dst = _find_or_create(ch["name"], dst_id)
+                    moved += _move_recursive(ch["id"], sub_dst)
+                else:
+                    _move(ch["id"], src_id, dst_id)
+                    moved += 1
+            return moved
+
+        def _delete_recursive(folder_id):
+            children = _list(folder_id)
+            for ch in children:
+                if ch["mimeType"] == "application/vnd.google-apps.folder":
+                    _delete_recursive(ch["id"])
+                else:
+                    http_req.delete(f"https://www.googleapis.com/drive/v3/files/{ch['id']}", headers=hdrs)
+            http_req.delete(f"https://www.googleapis.com/drive/v3/files/{folder_id}", headers=hdrs)
+
+        # Get all folders
+        folders = _list(CLIENT_LOSS_RUNS_FOLDER_ID, mime_type="application/vnd.google-apps.folder")
+        folder_map = {f["name"]: f["id"] for f in folders}
+        results = {"merged": [], "deleted": [], "errors": [], "final_folders": []}
+
+        for group in MERGE_GROUPS:
+            canonical_name = group["canonical"]
+            canonical_id = folder_map.get(canonical_name)
+            if not canonical_id:
+                results["errors"].append(f"Canonical folder '{canonical_name}' not found")
+                continue
+            for alias in group["aliases"]:
+                alias_id = folder_map.get(alias)
+                if not alias_id:
+                    continue
+                try:
+                    moved = _move_recursive(alias_id, canonical_id)
+                    results["merged"].append({"from": alias, "to": canonical_name, "files_moved": moved})
+                    _delete_recursive(alias_id)
+                    results["deleted"].append(alias)
+                except Exception as e:
+                    results["errors"].append(f"Error merging '{alias}': {str(e)}")
+
+        # Get final state
+        final = _list(CLIENT_LOSS_RUNS_FOLDER_ID, mime_type="application/vnd.google-apps.folder")
+        results["final_folders"] = sorted([f["name"] for f in final])
+        results["total_folders"] = len(final)
+
+        return jsonify(results)
+    except Exception as e:
+        logger.error(f"[CLEANUP] Exception: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/session", methods=["POST"])
 def create_session():
     """Create a new proposal session."""
