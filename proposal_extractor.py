@@ -563,6 +563,7 @@ CRITICAL RULES:
 17. For carrier names: Use the ISSUING carrier name (e.g., "Associated Industries Insurance Company" or "Technology Insurance Company" for AmTrust policies, "Palms Insurance Company" for Palms). Do NOT use the wholesale broker name as the carrier.
 18. Property coinsurance is MANDATORY - ALWAYS extract coinsurance percentages and monthly limitation for Business Income. Look for "Coinsurance", "Monthly Limitation", "Coinsurance & Valuation" sections. This is a critical part of every property quote.
 19. For LAYERED property programs with multiple carriers: Use "property" for the primary layer, "excess_property" for the first excess layer, and "excess_property_2" for the second excess layer. Each layer has its own carrier, limits, deductibles, forms, coinsurance, and subjectivities.
+20. COMPETING / ALTERNATIVE QUOTES FOR THE SAME COVERAGE TYPE: When the uploaded documents contain quotes from DIFFERENT carriers for the SAME coverage type (e.g., two separate property quotes from Starr and Markel, or two GL quotes from different carriers), you MUST extract ALL of them. Use the base key for the first quote (e.g., "property") and append "_alt_1", "_alt_2" etc. for additional competing quotes of the same type (e.g., "property_alt_1", "general_liability_alt_1"). Each alternative quote gets its own full coverage entry with carrier, premium, limits, forms, subjectivities, etc. — identical structure to the primary. IMPORTANT: Do NOT discard or merge competing quotes. If two different carriers each provide a property quote, both must appear in the output. Look at the FILE headers to identify separate quote documents from different carriers.
 
 Return your extraction as a JSON object with the following structure. Only include sections that are present in the documents."""
 
@@ -917,6 +918,7 @@ IMPORTANT:
 - COINSURANCE & VALUATION: For ALL property layers (primary and excess), extract the coinsurance percentage for Building, Business Income, and BPP. Also extract the Monthly Limitation for Business Income (e.g., "1/4 Monthly", "1/3 Monthly"). This is a CRITICAL field that must ALWAYS be included in property quotes. Look for "Coinsurance", "Monthly Limitation", "Coinsurance & Valuation" sections. If coinsurance is waived or 0%, still include it as "0%". Also extract the valuation basis (Replacement Cost, Actual Cash Value, Agreed Value).
 - UMBRELLA/EXCESS LAYERS: When multiple umbrella/excess liability quotes are provided (e.g., separate PDFs for different layers), extract EACH layer as a separate coverage entry. Use "umbrella" for the primary excess layer, "umbrella_layer_2" for the second excess layer ($XM xs $XM), and "umbrella_layer_3" for the third excess layer ($XM xs $XM). Each layer has its own carrier, premium, limits, forms, and subjectivities. The tower_structure field should show that layer's position. Look for "Controlling Underlying" or "Schedule of Underlying" to determine the layer position. If a quote says it sits excess of another carrier's layer, it is a higher layer.
 - CRITICAL DISTINCTION - EXCESS LIABILITY vs EXCESS PROPERTY: "Excess Liability" is NOT the same as "Excess Property". If a quote says "Excess Liability", "Excess Liability Quotation", or "XS Liability" and its Schedule of Underlying Insurance references an Umbrella or General Liability policy, it is an UMBRELLA/EXCESS LIABILITY layer — use "umbrella" or "umbrella_layer_2" or "umbrella_layer_3". Do NOT classify it as "property" or "excess_property". Excess Property layers sit excess of a primary PROPERTY policy and cover physical damage to buildings/contents. Excess Liability layers sit excess of an Umbrella or GL policy and cover bodily injury/property damage liability claims. If the underlying schedule shows an umbrella or GL carrier, it is ALWAYS an excess liability layer, never excess property.
+- COMPETING QUOTES (MULTIPLE CARRIERS FOR SAME COVERAGE): When documents contain quotes from DIFFERENT carriers for the SAME line of coverage (e.g., Starr Property quote AND Markel Property quote in separate PDFs), extract EACH as a separate coverage entry. Use the base key for the first (e.g., "property") and "_alt_1", "_alt_2" suffixes for additional competing quotes (e.g., "property_alt_1", "general_liability_alt_1"). Do NOT discard any carrier's quote. Do NOT confuse competing quotes with layered programs — layered programs have excess/xs relationships, while competing quotes are independent quotes at the same attachment point from different carriers.
 
 DOCUMENT TEXT:
 {document_text}"""
@@ -983,7 +985,16 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
             for item in covs:
                 if isinstance(item, dict):
                     cov_type = item.get("coverage_type", item.get("type", "unknown"))
-                    normalized[cov_type] = item
+                    if cov_type not in normalized:
+                        normalized[cov_type] = item
+                    else:
+                        # Competing quote — find next available alt slot
+                        for alt_n in range(1, 5):
+                            alt_key = f"{cov_type}_alt_{alt_n}"
+                            if alt_key not in normalized:
+                                normalized[alt_key] = item
+                                logger.info(f"Competing quote: {cov_type} already exists, stored as {alt_key}")
+                                break
             data["coverages"] = normalized
             logger.info(f"Normalized coverages from list ({len(covs)} items) to dict ({list(normalized.keys())})")
         elif not isinstance(covs, dict):
@@ -1508,11 +1519,21 @@ class ProposalExtractor:
             covs = data.get("coverages", {})
             if isinstance(covs, list):
                 # Convert list of coverage dicts to keyed dict
+                # Handle duplicate coverage types by promoting to _alt_N keys
                 normalized = {}
                 for item in covs:
                     if isinstance(item, dict):
                         cov_type = item.get("coverage_type", item.get("type", "unknown"))
-                        normalized[cov_type] = item
+                        if cov_type not in normalized:
+                            normalized[cov_type] = item
+                        else:
+                            # Competing quote — find next available alt slot
+                            for alt_n in range(1, 5):
+                                alt_key = f"{cov_type}_alt_{alt_n}"
+                                if alt_key not in normalized:
+                                    normalized[alt_key] = item
+                                    logger.info(f"Competing quote: {cov_type} already exists, stored as {alt_key} (carrier: {item.get('carrier', 'unknown')})")
+                                    break
                 data["coverages"] = normalized
                 covs = normalized
             elif not isinstance(covs, dict):
