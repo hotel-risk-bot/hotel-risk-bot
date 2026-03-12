@@ -1744,10 +1744,31 @@ def generate_locations(doc, data):
                                    _normalize_city(city) + "|" +
                                    state.strip().upper())
                         property_addr_keys.add(addr_key)
-        # If still no property addresses, DON'T default to all locations
-        # Only locations explicitly on the property quote get the checkmark
-        # This prevents GL-only locations from getting property checkmarks
-    
+        # If still no property addresses from schedule_of_values, try matching
+        # property coverage's location/address fields from the extraction
+        if not property_addr_keys:
+            prop_addr = prop_cov.get("address", "") or prop_cov.get("location", "") or prop_cov.get("insured_location", "")
+            if prop_addr and isinstance(prop_addr, str) and len(prop_addr.strip()) > 4:
+                parts = [p.strip() for p in prop_addr.split(",")]
+                street = parts[0] if parts else prop_addr
+                city = parts[1] if len(parts) >= 2 else ""
+                state = ""
+                if len(parts) >= 3:
+                    st_m = re.match(r'([A-Z]{2})', parts[2].strip().upper())
+                    if st_m: state = st_m.group(1)
+                addr_key = (_normalize_addr(street) + "|" +
+                           _normalize_city(city) + "|" +
+                           state.strip().upper())
+                property_addr_keys.add(addr_key)
+
+    # FALLBACK: If property coverage exists but we still have NO property addresses
+    # (no SOV uploaded, no schedule_of_values, no parseable address fields),
+    # then all locations should get the property checkmark. A property quote
+    # was uploaded — those locations are on it.
+    _property_covers_all = ("property" in coverages and not property_addr_keys)
+    if _property_covers_all:
+        logger.info("Schedule of Locations - property quote exists but no addresses extracted; defaulting all locations to property-covered")
+
     # --- Determine which addresses are on the LIABILITY policy ---
     liability_addr_keys = set()
     gl_cov = coverages.get("general_liability", {})
@@ -1908,6 +1929,8 @@ def generate_locations(doc, data):
     # Property checkmarks must be precise: only SOV/property quote locations
     def _is_on_property(addr_key):
         """Check if addr_key is in property_addr_keys. Strict match only."""
+        if _property_covers_all:
+            return True
         if addr_key in property_addr_keys:
             return True
         # Also try matching just the street portion (ignoring city differences)
