@@ -4,7 +4,7 @@ Flask-based web interface for uploading quote PDFs/SOVs, reviewing extracted dat
 editing fields, and generating branded DOCX proposals.
 
 Runs alongside the existing Telegram bot on a separate port.
-""" 
+"""
 
 import os
 import json
@@ -136,7 +136,15 @@ def _normalize_coverages(data):
         for item in covs:
             if isinstance(item, dict):
                 cov_type = item.get("coverage_type", item.get("type", "unknown"))
-                normalized[cov_type] = item
+                if cov_type not in normalized:
+                    normalized[cov_type] = item
+                else:
+                    # Competing quote — find next available alt slot
+                    for alt_n in range(1, 5):
+                        alt_key = f"{cov_type}_alt_{alt_n}"
+                        if alt_key not in normalized:
+                            normalized[alt_key] = item
+                            break
             elif isinstance(item, str):
                 normalized[item] = {}
         data["coverages"] = normalized
@@ -1372,6 +1380,13 @@ def _build_review_summary(data):
         "garage_keepers": "Garage Keepers",
         "wind_deductible_buydown": "Wind Deductible Buy Down",
         "deductible_buydown": "Deductible Buy Down",
+        "property_alt_1": "Property (Alt Quote 1)",
+        "property_alt_2": "Property (Alt Quote 2)",
+        "general_liability_alt_1": "General Liability (Alt Quote 1)",
+        "general_liability_alt_2": "General Liability (Alt Quote 2)",
+        "umbrella_alt_1": "Umbrella (Alt Quote 1)",
+        "workers_compensation_alt_1": "Workers Comp (Alt Quote 1)",
+        "cyber_alt_1": "Cyber (Alt Quote 1)",
     }
     for key, cov in coverages.items():
         if isinstance(cov, dict) and cov.get("carrier"):
