@@ -664,6 +664,13 @@ def generate_premium_summary(doc, data):
         "abuse_molestation": "Sexual Abuse & Molestation",
         "active_assailant": "Active Assailant",
         "deductible_buydown": "Deductible Buy Down",
+        "property_alt_1": "Property (Option 2)",
+        "property_alt_2": "Property (Option 3)",
+        "general_liability_alt_1": "General Liability (Option 2)",
+        "general_liability_alt_2": "General Liability (Option 3)",
+        "umbrella_alt_1": "Umbrella (Option 2)",
+        "workers_compensation_alt_1": "Workers Comp (Option 2)",
+        "cyber_alt_1": "Cyber (Option 2)",
     }
     
     if has_expiring:
@@ -1069,6 +1076,13 @@ def generate_subjectivities(doc, data):
         "abuse_molestation": "Sexual Abuse & Molestation",
         "active_assailant": "Active Assailant",
         "deductible_buydown": "Deductible Buy Down",
+        "property_alt_1": "Property (Option 2)",
+        "property_alt_2": "Property (Option 3)",
+        "general_liability_alt_1": "General Liability (Option 2)",
+        "general_liability_alt_2": "General Liability (Option 3)",
+        "umbrella_alt_1": "Umbrella (Option 2)",
+        "workers_compensation_alt_1": "Workers Comp (Option 2)",
+        "cyber_alt_1": "Cyber (Option 2)",
     }
     
     has_subjectivities = False
@@ -3149,6 +3163,13 @@ def generate_carrier_rating(doc, data):
         "abuse_molestation": "Sexual Abuse & Molestation",
         "active_assailant": "Active Assailant",
         "deductible_buydown": "Deductible Buy Down",
+        "property_alt_1": "Property (Option 2)",
+        "property_alt_2": "Property (Option 3)",
+        "general_liability_alt_1": "General Liability (Option 2)",
+        "general_liability_alt_2": "General Liability (Option 3)",
+        "umbrella_alt_1": "Umbrella (Option 2)",
+        "workers_compensation_alt_1": "Workers Comp (Option 2)",
+        "cyber_alt_1": "Cyber (Option 2)",
     }
     
     for key, display_name in coverage_names.items():
@@ -3456,12 +3477,20 @@ def generate_proposal(data: dict, output_path: str) -> str:
     coverages = data.get("coverages", {})
     if "property" in coverages:
         generate_coverage_section(doc, data, "property", "Property Coverage")
+    if "property_alt_1" in coverages:
+        generate_coverage_section(doc, data, "property_alt_1", "Property Coverage — Option 2")
+    if "property_alt_2" in coverages:
+        generate_coverage_section(doc, data, "property_alt_2", "Property Coverage — Option 3")
     if "excess_property" in coverages:
         generate_coverage_section(doc, data, "excess_property", "Excess Property Coverage — Layer 1")
     if "excess_property_2" in coverages:
         generate_coverage_section(doc, data, "excess_property_2", "Excess Property Coverage — Layer 2")
     if "general_liability" in coverages:
         generate_coverage_section(doc, data, "general_liability", "General Liability Coverage")
+    if "general_liability_alt_1" in coverages:
+        generate_coverage_section(doc, data, "general_liability_alt_1", "General Liability Coverage — Option 2")
+    if "general_liability_alt_2" in coverages:
+        generate_coverage_section(doc, data, "general_liability_alt_2", "General Liability Coverage — Option 2")
     # Support both workers_comp and workers_compensation keys
     _wc_key = "workers_comp" if "workers_comp" in coverages else ("workers_compensation" if "workers_compensation" in coverages else None)
     if _wc_key:
@@ -3602,6 +3631,15 @@ def generate_proposal(data: dict, output_path: str) -> str:
         generate_coverage_section(doc, data, "active_assailant", "Active Assailant Coverage")
     if "deductible_buydown" in coverages:
         generate_coverage_section(doc, data, "deductible_buydown", "Deductible Buy Down Coverage")
+
+    # Catch-all: generate sections for any remaining _alt_ keys not explicitly handled above
+    for cov_key in sorted(coverages.keys()):
+        if "_alt_" in cov_key and cov_key not in ("property_alt_1", "property_alt_2",
+                "general_liability_alt_1", "general_liability_alt_2"):
+            base_name = cov_key.split("_alt_")[0].replace("_", " ").title()
+            alt_num = cov_key.split("_alt_")[-1]
+            display = f"{base_name} Coverage — Option {int(alt_num) + 1}"
+            generate_coverage_section(doc, data, cov_key, display)
     
     # Part 3: Coverage Recommendations (before signature pages)
     generate_coverage_recommendations(doc)
