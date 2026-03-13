@@ -1385,6 +1385,8 @@ def _build_review_summary(data):
         "general_liability_alt_1": "General Liability (Alt Quote 1)",
         "general_liability_alt_2": "General Liability (Alt Quote 2)",
         "umbrella_alt_1": "Umbrella (Alt Quote 1)",
+        "umbrella_alt_2": "Umbrella (Alt Quote 2)",
+        "umbrella_alt_3": "Umbrella (Alt Quote 3)",
         "workers_compensation_alt_1": "Workers Comp (Alt Quote 1)",
         "cyber_alt_1": "Cyber (Alt Quote 1)",
     }
