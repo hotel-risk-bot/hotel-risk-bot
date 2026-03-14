@@ -1138,6 +1138,28 @@ def generate_named_insureds(doc, data):
         else:
             _all_shown_names.add(str(ai).strip().upper())
 
+    # Supplement named insureds from SOV corporate names (may have more entities)
+    sov_data_ni = data.get("sov_data")
+    if sov_data_ni and sov_data_ni.get("locations"):
+        for loc in sov_data_ni["locations"]:
+            corp = (loc.get("corporate_name", "") or "").strip()
+            if not corp:
+                continue
+            corp_upper = corp.strip().upper()
+            already = False
+            for existing_key in seen:
+                if corp_upper in existing_key or existing_key in corp_upper:
+                    already = True
+                    break
+            if not already:
+                seen.add(corp_upper)
+                display = _proper_case(corp)
+                dba = (loc.get("dba", "") or loc.get("hotel_flag", "") or "").strip()
+                if dba:
+                    display += f" DBA {_proper_case(dba)}"
+                named.append(display)
+
+
     _coverage_ani_rows = []
     _coverage_display_names = {
         "general_liability": "General Liability",
@@ -1221,7 +1243,28 @@ def generate_information_summary(doc, data):
         ["Expiration Date", ci.get("expiration_date", "")],
     ]
     if ci.get("sales_exposure_basis"):
-        rows.append(["Proposed Sales/Exposure Basis", ci["sales_exposure_basis"]])
+        # Recalculate proposed sales from sum of ALL GL exposures
+        _gl_cls = gl_cov.get("schedule_of_classes", []) if isinstance(gl_cov, dict) else []
+        _recalc = 0
+        import re as _re_s
+        for _e in _gl_cls:
+            if isinstance(_e, dict):
+                _exp = _e.get("exposure", "")
+                if isinstance(_exp, (int, float)):
+                    _recalc += _exp
+                elif isinstance(_exp, str):
+                    _c = _re_s.sub(r'[^\d.]', '', _exp.replace(',', ''))
+                    if _c:
+                        try: _recalc += float(_c)
+                        except ValueError: pass
+        if _recalc > 0:
+            _basis = ci["sales_exposure_basis"]
+            _upd = _re_s.sub(r'\$[\d,]+', fmt_currency(_recalc), _basis, count=1)
+            if _upd == _basis:
+                _upd = fmt_currency(_recalc) + " \u2013 " + _basis
+            rows.append(["Proposed Sales/Exposure Basis", _upd])
+        else:
+            rows.append(["Proposed Sales/Exposure Basis", ci["sales_exposure_basis"]])
     if ci.get("dba"):
         rows.insert(1, ["DBA", _proper_case(ci["dba"])])
     
@@ -1840,6 +1883,17 @@ def generate_locations(doc, data):
         logger.info(f"Schedule of Locations - GL has {len(gl_unique_loc_ids)} unique locations "
                      f"but only {len(liability_addr_keys)} address matches. Adding all property addresses.")
         liability_addr_keys.update(property_addr_keys)
+
+    # BLANKET GL RULE: In hospitality, if a GL policy exists with a carrier
+    # and schedule_of_classes entries, the GL covers ALL property locations.
+    # Schedule_of_classes is for rating/classification, not coverage limitation.
+    _gl_carrier = gl_cov.get("carrier", "") if isinstance(gl_cov, dict) else ""
+    if _gl_carrier and len(gl_classes) >= 3 and property_addr_keys:
+        if not liability_addr_keys.issuperset(property_addr_keys):
+            logger.info(f"GL blanket rule: carrier with {len(gl_classes)} schedule entries "
+                         f"-- marking all {len(property_addr_keys)} property locations as GL-covered")
+            liability_addr_keys.update(property_addr_keys)
+
     
     # --- Pre-scan designated premises to add to liability_addr_keys ---
     
@@ -3025,12 +3079,26 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         gl_loc_list = []
         gl_loc_seen = set()
         def _gl_loc_already_seen(addr_norm):
-            """Check if addr is already in gl_loc_seen using fuzzy matching."""
+            """Check if addr is already in gl_loc_seen using fuzzy matching.
+            Handles city/state format differences between GL and SOV addresses."""
             if addr_norm in gl_loc_seen:
                 return True
             for existing in gl_loc_seen:
                 if _fuzzy_addr_match(addr_norm, existing):
                     return True
+            # Compare house number + first 2 street words to handle format differences
+            # e.g. "5370 CLEARWATER CT BEAUMONT TX" vs "5370 CLEARWATER CT BEAUMONT TEXAS 77705"
+            import re as _re_dup
+            m_new = _re_dup.match(r'^(\d+)\s+(.+)', addr_norm)
+            if m_new:
+                new_num = m_new.group(1)
+                new_words = m_new.group(2).split()[:2]
+                for existing in gl_loc_seen:
+                    m_ex = _re_dup.match(r'^(\d+)\s+(.+)', existing)
+                    if m_ex and m_ex.group(1) == new_num:
+                        ex_words = m_ex.group(2).split()[:2]
+                        if new_words == ex_words:
+                            return True
             return False
         # Source 1: designated_premises array (PRIMARY - extracted by GPT)
         for dp_addr in cov.get("designated_premises", []):
