@@ -1733,7 +1733,7 @@ DOCUMENT TEXT:
     def _pass3_address_extraction(self, data: dict, combined_text: str) -> dict:
         """Pass 3: Focused extraction of covered addresses for GL.
         Uses gpt-4.1-mini for speed since this is a focused extraction task."""
-        PASS_MODEL = "gpt-4.1-mini"
+        PASS_MODEL = "gpt-4.1"      
         covs = data.get("coverages", {})
         gl = covs.get("general_liability", {})
         
@@ -1772,9 +1772,9 @@ DOCUMENT TEXT:
             "schedule of locations", "covered premises", "insured locations",
             "location address", "schedule of classes", "Hotels/Motels",
             "class code", "exposure basis", "Gross Sales", "FUT 1004", "FUT 1005",
-            "location#", "Primary"
+            "location#", "Primary", "45191", "16910", "58173", "Gross Sales", "named insured", "FUT 1007"
         ]
-        relevant_text = self._extract_relevant_sections(combined_text, address_keywords, context_chars=12000)
+        relevant_text = self._extract_relevant_sections(combined_text, address_keywords, context_chars=25000)
 
         prompt = f"""From this General Liability insurance document, extract TWO things:
 
@@ -1832,14 +1832,16 @@ DOCUMENT TEXT:
             # Also update schedule_of_classes if it was empty or incomplete
             soc = result.get("schedule_of_classes", [])
             existing_soc = gl.get("schedule_of_classes", [])
-            if soc and isinstance(soc, list) and len(soc) > len(existing_soc):
+            if soc and isinstance(soc, list) and len(soc) >= len(existing_soc):
+            # Merge: keep existing entries and add any new ones from Pass 3
+            if len(soc) > len(existing_soc):
                 gl["schedule_of_classes"] = soc
                 logger.info(f"Pass 3: Updated schedule_of_classes from {len(existing_soc)} to {len(soc)} entries")
-            
-        except Exception as e:
-            logger.error(f"Pass 3 address extraction failed: {e}")
-        
-        return data
+            else:
+                # Same count but potentially different/better data — use Pass 3 result
+                # since it used a focused prompt with larger context window
+                gl["schedule_of_classes"] = soc
+                logger.info(f"Pass 3: Replaced schedule_of_classes ({len(soc)} entries) with focused extraction result")
 
     def _pass4_sublimits_extraction(self, data: dict, combined_text: str) -> dict:
         """Pass 4: Focused extraction of property sublimits/extensions.
