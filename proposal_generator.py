@@ -1931,6 +1931,15 @@ def generate_locations(doc, data):
     # proposal_extractor.py now handles focused address extraction for GL when
     # designated_premises is empty. Liability checkmarks are only applied to
     # locations explicitly confirmed on the liability quote per Stefan's rule.
+
+    # FALLBACK: If GL quote has sparse data ("See attached for Schedule of Locations"),
+    # assume ALL property locations are GL-covered. This handles renewals where the
+    # GL quote says "See attached for Schedule of Locations" but the attachment isn't in the PDF.
+    _gl_has_sparse_data = (len(gl_classes) + len(designated_premises)) < 3
+    if _gl_has_sparse_data and property_addr_keys and sov_data and sov_data.get("locations"):
+        logger.info(f"GL has sparse location data ({len(gl_classes)} classes, {len(designated_premises)} designated_premises) "
+                   f"— assuming all {len(property_addr_keys)} property locations are GL-covered")
+        liability_addr_keys.update(property_addr_keys)
     
     # --- Build master location list ---
     # _fuzzy_addr_match is now a module-level function (used by both generate_locations and generate_information_summary)
@@ -2430,6 +2439,23 @@ def generate_locations(doc, data):
 
 def generate_coverage_section(doc, data, coverage_key, display_name):
     """Generate a coverage section (Property, GL, Umbrella, WC, Auto)."""
+    # Standard crime insuring clause names (fallback when GPT extraction is incomplete)
+    STANDARD_CRIME_CLAUSES = [
+        "Employee Theft",
+        "Forgery or Alteration",
+        "Inside the Premises - Theft of Money and Securities",
+        "Inside the Premises - Robbery or Safe Burglary of Other Property",
+        "Outside the Premises",
+        "Computer and Funds Transfer Fraud",
+        "Money Orders and Counterfeit Money",
+        "Client's Property",
+        "Identity Fraud Expense",
+        "Social Engineering Fraud",
+        "Impersonation Fraud",
+        "Erroneous Payments",
+        "Investigation Expenses",
+    ]
+
     coverages = data.get("coverages", {})
     cov = coverages.get(coverage_key)
     if not cov:
@@ -2509,7 +2535,18 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     if coverage_key == "property" and sov_data and sov_data.get("locations"):
         # Use SOV spreadsheet data for detailed Schedule of Values
         add_subsection_header(doc, "Schedule of Values")
-        sov_locs = sov_data["locations"]
+        # Prefer property SOV building-level data if available (from merged SOV)
+        if sov_data.get("_property_sov") and sov_data["_property_sov"].get("locations"):
+            _prop_sov = sov_data["_property_sov"]
+            sov_locs = _prop_sov["locations"]
+            totals = _prop_sov.get("totals", sov_data.get("totals", {}))
+        else:
+            sov_locs = sov_data["locations"]
+            # Filter to only locations with TIV > 0 for the schedule of values
+            sov_locs_with_tiv = [loc for loc in sov_locs if (loc.get("tiv", 0) or 0) > 0]
+            if sov_locs_with_tiv:
+                sov_locs = sov_locs_with_tiv
+            totals = sov_data.get("totals", {})
         # Check if any location has "other_value" data (Sign, Pool, Other)
         has_other = any(loc.get("other_value", 0) for loc in sov_locs)
         if has_other:
@@ -2550,7 +2587,6 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                     fmt_currency(loc.get("tiv", 0))
                 ])
         # Add totals row
-        totals = sov_data.get("totals", {})
         if has_other:
             rows.append([
                 "", "TOTAL",
@@ -2608,15 +2644,23 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         add_subsection_header(doc, "Insuring Clauses")
         headers = ["Insuring Clause", "Limit", "Retention"]
         rows = []
+        clause_idx = 0
         for clause in insuring_clauses:
             if isinstance(clause, dict):
+                # Use extracted description if available, otherwise use standard clause name
+                clause_name = clause.get("description", "").strip()
+                if not clause_name and clause_idx < len(STANDARD_CRIME_CLAUSES):
+                    clause_name = STANDARD_CRIME_CLAUSES[clause_idx]
                 rows.append([
-                    clause.get("description", ""),
+                    clause_name,
                     clause.get("limit", ""),
                     clause.get("retention", clause.get("deductible", ""))
                 ])
             else:
-                rows.append([str(clause), "", ""])
+                # Use standard clause name as fallback
+                clause_name = str(clause).strip() if str(clause).strip() else (STANDARD_CRIME_CLAUSES[clause_idx] if clause_idx < len(STANDARD_CRIME_CLAUSES) else "")
+                rows.append([clause_name, "", ""])
+            clause_idx += 1
         L = WD_ALIGN_PARAGRAPH.LEFT
         R = WD_ALIGN_PARAGRAPH.RIGHT
         create_styled_table(doc, headers, rows, col_widths=[4.0, 1.5, 1.5],
@@ -3018,6 +3062,50 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                         "classification": "",
                     })
         
+        # Source 4: If GL quote has sparse data ("See attached for Schedule of Locations"),
+        # fall back to all data locations (from SOV) that have liability coverage
+        if len(gl_loc_list) < 3:
+            sov_data = data.get("sov_data")
+            all_locs = data.get("locations", [])
+            if sov_data and sov_data.get("locations"):
+                for sov_loc in sov_data["locations"]:
+                    addr = sov_loc.get("address", "")
+                    if not addr or len(addr.strip()) < 5:
+                        continue
+                    addr_norm = _normalize_addr(addr)
+                    if not _gl_loc_already_seen(addr_norm):
+                        gl_loc_seen.add(addr_norm)
+                        corp = (sov_loc.get("corporate_name") or sov_loc.get("client_name") or "").strip()
+                        dba = (sov_loc.get("dba") or sov_loc.get("hotel_flag") or "").strip()
+                        # Handle "Corp LLC dba Brand" in dba field
+                        if not corp and dba and " dba " in dba.lower():
+                            import re as _re_dba
+                            parts = _re_dba.split(r'\s+dba\s+', dba, flags=_re_dba.IGNORECASE)
+                            if len(parts) == 2:
+                                corp = parts[0].strip()
+                                dba = parts[1].strip()
+                        brand = f"{corp} / {dba}" if corp and dba else (corp or dba or "")
+                        gl_loc_list.append({
+                            "address": addr.strip(),
+                            "brand": brand,
+                            "classification": "",
+                        })
+                logger.info(f"GL covered locations: added {len(gl_loc_list)} from SOV fallback")
+            elif all_locs:
+                for loc in all_locs:
+                    addr = loc.get("address", "")
+                    if not addr or len(addr.strip()) < 5:
+                        continue
+                    addr_norm = _normalize_addr(addr)
+                    if not _gl_loc_already_seen(addr_norm):
+                        gl_loc_seen.add(addr_norm)
+                        name = loc.get("name", "") or loc.get("corporate_entity", "") or ""
+                        gl_loc_list.append({
+                            "address": addr.strip(),
+                            "brand": name.strip(),
+                            "classification": "",
+                        })
+
         # Cross-reference GL locations with SOV to pull Corporate Name - DBA
         sov_data = data.get("sov_data")
         if sov_data and sov_data.get("locations"):
