@@ -411,6 +411,21 @@ def fmt_currency(amount):
     return str(amount)
 
 
+def _parse_currency(s):
+    """Parse a currency string like '$168,411' or '168411' into a float."""
+    import re
+    if isinstance(s, (int, float)):
+        return float(s)
+    if isinstance(s, str):
+        cleaned = re.sub(r'[^\d.]', '', s.replace(',', ''))
+        if cleaned:
+            try:
+                return float(cleaned)
+            except ValueError:
+                return 0
+    return 0
+
+
 # ─── Section Generators ───────────────────────────────────────
 
 def generate_cover_page(doc, data):
@@ -672,11 +687,8 @@ def generate_premium_summary(doc, data):
         "deductible_buydown": "Deductible Buy Down",
     }
     
-    # Always use simple mode — expiring comparison removed per user request
-    headers = ["Coverage", "Carrier", "Premium", "Taxes & Fees", "Total"]
-    rows = []
-    total_proposed = 0
-    total_taxes_fees = 0
+    # Determine if we have expiring data
+    has_expiring = bool(expiring) or bool(expiring_details)
 
     # Collect all coverage keys — deduplicate workers_comp/workers_compensation
     all_keys = list(coverage_names.keys())
@@ -686,10 +698,49 @@ def generate_premium_summary(doc, data):
         all_keys = [k for k in all_keys if k != "workers_compensation"]  # prefer short key
     elif _has_wc_long and not _has_wc:
         all_keys = [k for k in all_keys if k != "workers_comp"]  # keep only long key
-    
+
     # Separate optional coverages from main coverages
     optional_rows = []
-    
+    rows = []
+    total_proposed = 0
+    total_expiring = 0
+
+    # Expiring key mapping: coverage key -> expiring key (some may differ)
+    _expiring_key_map = {
+        "general_liability": ["general_liability", "gl"],
+        "workers_comp": ["workers_comp", "workers_compensation"],
+        "workers_compensation": ["workers_comp", "workers_compensation"],
+        "commercial_auto": ["commercial_auto", "auto"],
+        "equipment_breakdown": ["equipment_breakdown", "boiler_machinery"],
+    }
+
+    def _get_expiring_premium(key):
+        """Look up expiring premium for a coverage key."""
+        # First check expiring_details (has per-coverage structured data)
+        if expiring_details:
+            detail = expiring_details.get(key)
+            if isinstance(detail, dict):
+                ep = detail.get("premium") or detail.get("total_premium") or 0
+                if ep:
+                    return _parse_currency(ep) if isinstance(ep, str) else float(ep)
+            # Try alternate key names
+            for alt_key in _expiring_key_map.get(key, []):
+                detail = expiring_details.get(alt_key)
+                if isinstance(detail, dict):
+                    ep = detail.get("premium") or detail.get("total_premium") or 0
+                    if ep:
+                        return _parse_currency(ep) if isinstance(ep, str) else float(ep)
+        # Fallback: simple expiring dict
+        if expiring:
+            val = expiring.get(key)
+            if val:
+                return _parse_currency(val) if isinstance(val, str) else float(val)
+            for alt_key in _expiring_key_map.get(key, []):
+                val = expiring.get(alt_key)
+                if val:
+                    return _parse_currency(val) if isinstance(val, str) else float(val)
+        return 0
+
     for key in all_keys:
         display_name = coverage_names[key]
         cov = coverages.get(key)
@@ -704,39 +755,70 @@ def generate_premium_summary(doc, data):
             carrier_short = carrier.replace("Insurance Company", "Ins Co").replace("Specialty ", "Spec ")
         premium = cov.get("premium", 0) or 0
         total_prem = cov.get("total_premium", 0) or 0
-        taxes_fees = total_prem - premium if total_prem > premium else 0
-        
-        row_data = [
-            display_name,
-            carrier_short,
-            fmt_currency(premium) if premium else "\u2014",
-            fmt_currency(taxes_fees) if taxes_fees else "\u2014",
-            fmt_currency(total_prem) if total_prem else "\u2014",
-        ]
+        # Use total_premium as the displayed proposed premium (includes taxes/fees)
+        proposed = total_prem if total_prem else premium
+
+        if has_expiring:
+            exp_prem = _get_expiring_premium(key)
+            dollar_change = proposed - exp_prem if (proposed and exp_prem) else 0
+            pct_change = ((proposed - exp_prem) / exp_prem * 100) if exp_prem else 0
+
+            row_data = [
+                display_name,
+                carrier_short,
+                fmt_currency(exp_prem) if exp_prem else "—",
+                fmt_currency(proposed) if proposed else "—",
+                fmt_currency(dollar_change) if (proposed and exp_prem) else "—",
+                f"{pct_change:+.1f}%" if (proposed and exp_prem) else "—",
+            ]
+        else:
+            row_data = [
+                display_name,
+                carrier_short,
+                fmt_currency(proposed) if proposed else "—",
+            ]
+
         if is_optional:
             optional_rows.append(row_data)
         else:
             rows.append(row_data)
             # Exclude terrorism/TRIA from totals
             if key != "terrorism":
-                total_proposed += total_prem
-                total_taxes_fees += taxes_fees
-    
+                total_proposed += proposed
+                if has_expiring:
+                    total_expiring += _get_expiring_premium(key)
+
     # Total row
-    total_base = total_proposed - total_taxes_fees
-    rows.append([
-        "TOTAL",
-        "",
-        fmt_currency(total_base) if total_base else "\u2014",
-        fmt_currency(total_taxes_fees) if total_taxes_fees else "\u2014",
-        fmt_currency(total_proposed) if total_proposed else "\u2014",
-    ])
+    if has_expiring:
+        total_dollar = total_proposed - total_expiring if (total_proposed and total_expiring) else 0
+        total_pct = ((total_proposed - total_expiring) / total_expiring * 100) if total_expiring else 0
+        rows.append([
+            "TOTAL",
+            "",
+            fmt_currency(total_expiring) if total_expiring else "—",
+            fmt_currency(total_proposed) if total_proposed else "—",
+            fmt_currency(total_dollar) if (total_proposed and total_expiring) else "—",
+            f"{total_pct:+.1f}%" if (total_proposed and total_expiring) else "—",
+        ])
+        headers = ["Coverage", "Carrier", "Expiring\nPremium", "Proposed\nPremium", "$ Change", "% Change"]
+        col_widths = [1.4, 2.0, 1.0, 1.0, 0.9, 0.8]
+        col_alignments = [None, None, WD_ALIGN_PARAGRAPH.RIGHT,
+                          WD_ALIGN_PARAGRAPH.RIGHT, WD_ALIGN_PARAGRAPH.RIGHT,
+                          WD_ALIGN_PARAGRAPH.RIGHT]
+    else:
+        rows.append([
+            "TOTAL",
+            "",
+            fmt_currency(total_proposed) if total_proposed else "—",
+        ])
+        headers = ["Coverage", "Carrier", "Proposed Premium"]
+        col_widths = [2.0, 2.5, 1.5]
+        col_alignments = [None, None, WD_ALIGN_PARAGRAPH.RIGHT]
 
     table = create_styled_table(doc, headers, rows,
-                               col_widths=[1.5, 2.2, 1.2, 1.2, 1.2],
+                               col_widths=col_widths,
                                header_size=10, body_size=10,
-                               col_alignments=[None, None, WD_ALIGN_PARAGRAPH.RIGHT,
-                                               WD_ALIGN_PARAGRAPH.RIGHT, WD_ALIGN_PARAGRAPH.RIGHT])
+                               col_alignments=col_alignments)
     
     # Bold and shade the total row
     last_row = table.rows[-1]
@@ -763,7 +845,11 @@ def generate_premium_summary(doc, data):
         for orow in optional_rows:
             cov_name = orow[0]
             carrier_name = orow[1]
-            proposed_val = orow[4] if len(orow) > 4 else (orow[2] if len(orow) > 2 else "N/A")
+            # Proposed premium is at index 3 (with expiring) or index 2 (without)
+            if has_expiring:
+                proposed_val = orow[3] if len(orow) > 3 else "N/A"
+            else:
+                proposed_val = orow[2] if len(orow) > 2 else "N/A"
             opt_simple_rows.append([cov_name, carrier_name, proposed_val])
         
         opt_headers = ["Coverage", "Carrier", "Proposed Premium"]
@@ -1121,34 +1207,47 @@ def generate_information_summary(doc, data):
     _skip_gl_classes = {"hired auto", "non-owned auto", "loss control", "package store",
                         "category vi", "liquor", "sundry", "flat"}
     gl_loc_keys = set()
+    # Also count unique location IDENTIFIERS (e.g., "Primary", "location#3") as reliable GL count
+    _gl_loc_ids = set()
     if isinstance(gl_cov, dict):
         for entry in gl_cov.get("schedule_of_classes", []):
             if isinstance(entry, dict):
                 classification = (entry.get("classification", "") or "").lower()
                 if any(skip in classification for skip in _skip_gl_classes):
                     continue
-                addr = entry.get("address", "") or entry.get("location", "")
-                if addr and addr.strip():
-                    # Parse city/state from address if available
+                # Track unique location IDs (even if not real addresses)
+                loc_id = (entry.get("location", "") or "").strip().lower()
+                if loc_id and loc_id not in ("", "n/a", "all", "various"):
+                    _gl_loc_ids.add(loc_id)
+                addr = entry.get("address", "")
+                if addr and addr.strip() and len(addr.strip()) > 5:
+                    # Only use address if it looks like a real street address (not "Primary" or "location#3")
                     import re as _re2
-                    parts = [p.strip() for p in addr.split(",")]
-                    street = parts[0] if parts else addr
-                    city = ""
-                    state = ""
-                    if len(parts) >= 3:
-                        city = parts[1]
-                        st_m = _re2.match(r'([A-Z]{2})\s*\d*', parts[2].strip().upper())
-                        if st_m: state = st_m.group(1)
-                    elif len(parts) == 2:
-                        st_m = _re2.match(r'([A-Z]{2})\s*\d*', parts[1].strip().upper())
-                        if st_m:
-                            state = st_m.group(1)
-                        else:
+                    # Real addresses contain numbers and letters (e.g., "5370 Clearwater Court")
+                    if _re2.search(r'\d+\s+\w+', addr):
+                        parts = [p.strip() for p in addr.split(",")]
+                        street = parts[0] if parts else addr
+                        city = ""
+                        state = ""
+                        if len(parts) >= 3:
                             city = parts[1]
-                    key = (_normalize_addr(street) + "|" + _normalize_city(city) + "|" + state.strip().upper())
-                    if key != "||":
-                        gl_loc_keys.add(key)
-    liab_loc_count = len(gl_loc_keys) if gl_loc_keys else int(gl_cov.get("num_locations", 0) or 0) if isinstance(gl_cov, dict) else 0
+                            st_m = _re2.match(r'([A-Z]{2})\s*\d*', parts[2].strip().upper())
+                            if st_m: state = st_m.group(1)
+                        elif len(parts) == 2:
+                            st_m = _re2.match(r'([A-Z]{2})\s*\d*', parts[1].strip().upper())
+                            if st_m:
+                                state = st_m.group(1)
+                            else:
+                                city = parts[1]
+                        key = (_normalize_addr(street) + "|" + _normalize_city(city) + "|" + state.strip().upper())
+                        if key != "||":
+                            gl_loc_keys.add(key)
+    # Use GL location IDs count if it's higher than address-matched count (more reliable when addresses aren't extracted)
+    liab_loc_count = max(
+        len(gl_loc_keys) if gl_loc_keys else 0,
+        len(_gl_loc_ids) if _gl_loc_ids else 0,
+        int(gl_cov.get("num_locations", 0) or 0) if isinstance(gl_cov, dict) else 0
+    )
     
     # Calculate UNIQUE total location count
     # When SOV is available, it is the AUTHORITATIVE source for location count
@@ -1172,7 +1271,19 @@ def generate_information_summary(doc, data):
     # NOTE: Do NOT add raw GPT-extracted locations to the count.
     # GPT often extracts mailing addresses, carrier addresses, and other non-physical
     # addresses that inflate the location count. SOV + GL schedule are authoritative.
-    total_loc_count = len(all_unique_keys) if all_unique_keys else max(prop_loc_count, liab_loc_count)
+    # When GL uses location identifiers (Primary, location#3) instead of addresses,
+    # the GL location ID count is more reliable than gl_loc_keys (address-based count).
+    # Use the higher of: merged address count OR GL unique location IDs count
+    # (since some GL-only locations may not have matched addresses)
+    _merged_addr_count = len(all_unique_keys) if all_unique_keys else 0
+    _gl_id_count = len(_gl_loc_ids) if _gl_loc_ids else 0
+    # If GL IDs suggest more locations than we found by address matching, use GL count
+    # because the extra GL locations may have location references instead of parseable addresses
+    if _gl_id_count > _merged_addr_count:
+        # GL has locations we couldn't match by address — compute: prop unique + GL-only delta
+        total_loc_count = max(_merged_addr_count, prop_loc_count + max(0, _gl_id_count - prop_loc_count))
+    else:
+        total_loc_count = _merged_addr_count if _merged_addr_count else max(prop_loc_count, liab_loc_count)
     if total_loc_count > 0:
         rows.append(["Total Number of Locations", str(total_loc_count)])
     if prop_loc_count > 0:
@@ -1320,10 +1431,22 @@ def generate_information_summary(doc, data):
                     rows.append(["Total Insured Value (TIV)", fmt_currency(_prop_total)])
     
     # Add Umbrella / Excess total limit
+    # Include ALL umbrella/excess layer keys: primary, alt options (used as layers), and explicit layers
     _umbrella_total = 0
-    for umb_key in ["umbrella", "umbrella_layer_2", "umbrella_layer_3"]:
+    _umbrella_seen_carriers = set()  # Track carriers to avoid double-counting competing options
+    _umbrella_keys = [
+        "umbrella", "umbrella_alt_1", "umbrella_alt_2", "umbrella_alt_3",
+        "umbrella_layer_2", "umbrella_layer_3", "umbrella_layer_4",
+        "excess_liability", "excess",
+    ]
+    for umb_key in _umbrella_keys:
         umb_cov = coverages.get(umb_key, {})
         if isinstance(umb_cov, dict) and umb_cov.get("carrier"):
+            carrier_name = (umb_cov.get("carrier", "") or "").strip().lower()
+            # Skip if same carrier already counted (avoid double-counting from alias keys)
+            if carrier_name in _umbrella_seen_carriers:
+                continue
+            _umbrella_seen_carriers.add(carrier_name)
             for lim in umb_cov.get("limits", []):
                 if isinstance(lim, dict):
                     desc = (lim.get("description", "") or "").lower()
@@ -1612,10 +1735,34 @@ def generate_locations(doc, data):
                             city = parts[1]
                     liability_addr_keys.add(_normalize_addr(street) + "|" + _normalize_city(city) + "|" + state.strip().upper())
     logger.info(f"Schedule of Locations - liability_addr_keys: {liability_addr_keys}")
-    # NOTE: We do NOT default all locations to liability when GL exists.
-    # Liability checkmarks are ONLY for locations explicitly listed on the GL carrier quote
-    # (from schedule_of_classes addresses and CG2144 designated premises forms).
-    # Quotes are primary — SOVs only supplement with additional info.
+
+    # Count unique PHYSICAL locations on the GL schedule_of_classes
+    # (GL entries use identifiers like "Primary", "location#3" rather than addresses)
+    _skip_gl_loc_classes = {"hired auto", "non-owned auto", "loss control", "package store",
+                            "category vi", "sundry", "flat"}
+    gl_unique_loc_ids = set()
+    for entry in gl_classes:
+        if isinstance(entry, dict):
+            loc_id = (entry.get("location", "") or "").strip().lower()
+            classification = (entry.get("classification", "") or "").lower()
+            if any(skip in classification for skip in _skip_gl_loc_classes):
+                continue
+            # Only count entries that represent physical locations
+            if loc_id and loc_id not in ("", "n/a", "all", "various"):
+                gl_unique_loc_ids.add(loc_id)
+
+    # If GL schedule has >= as many unique locations as property, GL covers ALL property locations
+    # In this case, mark all property addresses as liability-covered
+    if gl_unique_loc_ids and len(gl_unique_loc_ids) >= len(property_addr_keys):
+        logger.info(f"Schedule of Locations - GL has {len(gl_unique_loc_ids)} unique locations "
+                     f">= {len(property_addr_keys)} property locations. Marking ALL property locations as liability-covered.")
+        liability_addr_keys.update(property_addr_keys)
+    elif gl_unique_loc_ids and len(gl_unique_loc_ids) > len(liability_addr_keys):
+        # GL has more locations than we matched — likely all property locations are GL-covered
+        # but we couldn't match addresses because GL uses "location#N" references
+        logger.info(f"Schedule of Locations - GL has {len(gl_unique_loc_ids)} unique locations "
+                     f"but only {len(liability_addr_keys)} address matches. Adding all property addresses.")
+        liability_addr_keys.update(property_addr_keys)
     
     # --- Pre-scan designated premises to add to liability_addr_keys ---
     
