@@ -1320,6 +1320,9 @@ def generate_information_summary(doc, data):
         len(designated_premises) if designated_premises else 0,
         int(gl_cov.get("num_locations", 0) or 0) if isinstance(gl_cov, dict) else 0
     )
+    # If designated_premises covers >=50% of property locations, GL likely covers all
+    if designated_premises and prop_loc_count > 0 and len(designated_premises) >= prop_loc_count * 0.5:
+        liab_loc_count = max(liab_loc_count, prop_loc_count)
     
     # Calculate UNIQUE total location count
     # When SOV is available, it is the AUTHORITATIVE source for location count
@@ -1940,6 +1943,23 @@ def generate_locations(doc, data):
         logger.info(f"GL has sparse location data ({len(gl_classes)} classes, {len(designated_premises)} designated_premises) "
                    f"— assuming all {len(property_addr_keys)} property locations are GL-covered")
         liability_addr_keys.update(property_addr_keys)
+
+    # HEURISTIC: If GL designated_premises covers majority (>=50%) of property locations,
+    # the GL likely covers ALL property locations but extraction missed some addresses.
+    if not _gl_has_sparse_data and designated_premises and property_addr_keys:
+        _dp_matched = 0
+        for dp_addr in designated_premises:
+            if isinstance(dp_addr, str) and dp_addr.strip():
+                dp_norm = _normalize_addr(dp_addr)
+                for pk in property_addr_keys:
+                    pk_addr = pk.split("|")[0] if "|" in pk else pk
+                    if _fuzzy_addr_match(dp_norm, pk_addr):
+                        _dp_matched += 1
+                        break
+        if _dp_matched >= len(property_addr_keys) * 0.5 and _dp_matched < len(property_addr_keys):
+            logger.info(f"GL designated_premises matched {_dp_matched} of {len(property_addr_keys)} property locations "
+                       f"(>=50%) -- marking all property locations as GL-covered")
+            liability_addr_keys.update(property_addr_keys)
     
     # --- Build master location list ---
     # _fuzzy_addr_match is now a module-level function (used by both generate_locations and generate_information_summary)
@@ -3062,10 +3082,11 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                         "classification": "",
                     })
         
-        # Source 4: If GL quote has sparse data ("See attached for Schedule of Locations"),
-        # fall back to all data locations (from SOV) that have liability coverage
-        if len(gl_loc_list) < 3:
-            sov_data = data.get("sov_data")
+        # Source 4: If GL covered locations list is incomplete compared to SOV,
+        # supplement with SOV locations (which have corporate names and addresses)
+        sov_data = data.get("sov_data")
+        _sov_loc_count = len(sov_data.get("locations", [])) if sov_data else 0
+        if len(gl_loc_list) < max(3, _sov_loc_count):
             all_locs = data.get("locations", [])
             if sov_data and sov_data.get("locations"):
                 for sov_loc in sov_data["locations"]:
