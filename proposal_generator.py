@@ -659,6 +659,7 @@ def generate_premium_summary(doc, data):
         "umbrella_alt_3": "Umbrella / Excess 4",
         "umbrella_layer_2": "2nd Excess Layer",
         "umbrella_layer_3": "3rd Excess Layer",
+        "umbrella_layer_4": "4th Excess Layer",
         "excess_liability": "Excess Liability",
         "excess": "Excess Liability",
         "workers_comp": "Workers Compensation",
@@ -934,6 +935,7 @@ def generate_subjectivities(doc, data):
         "umbrella_alt_3": "Umbrella / Excess 4",
         "umbrella_layer_2": "2nd Excess Layer",
         "umbrella_layer_3": "3rd Excess Layer",
+        "umbrella_layer_4": "4th Excess Layer",
         "excess_liability": "Excess Liability",
         "excess": "Excess Liability",
         "workers_comp": "Workers Compensation",
@@ -1122,10 +1124,76 @@ def generate_named_insureds(doc, data):
         create_styled_table(doc, headers, rows, col_widths=[0.5, 4.5, 2.5],
                            header_size=10, body_size=10)
     
+    # Scan ALL coverages for additional named insureds not already shown
+    # This catches per-coverage ANI lists (GL, Crime, Umbrella, etc.)
+    coverages = data.get("coverages", {})
+    _all_shown_names = set()
+    for n in named:
+        _all_shown_names.add(n.strip().upper())
+    for n in (new_addl if 'new_addl' in dir() else []):
+        _all_shown_names.add(n.strip().upper())
+    for ai in addl_insureds:
+        if isinstance(ai, dict):
+            _all_shown_names.add((ai.get("name", "") or "").strip().upper())
+        else:
+            _all_shown_names.add(str(ai).strip().upper())
+
+    _coverage_ani_rows = []
+    _coverage_display_names = {
+        "general_liability": "General Liability",
+        "crime": "Crime",
+        "umbrella": "Umbrella / Excess",
+        "workers_comp": "Workers Compensation",
+        "workers_compensation": "Workers Compensation",
+        "commercial_auto": "Commercial Auto",
+        "cyber": "Cyber",
+        "epli": "EPLI",
+    }
+    sov_locs = (data.get("sov_data") or {}).get("locations", []) if data.get("sov_data") else []
+
+    for cov_key, cov_data in coverages.items():
+        if not isinstance(cov_data, dict):
+            continue
+        cov_ani = cov_data.get("additional_named_insureds", []) or []
+        if not cov_ani:
+            cov_ani = cov_data.get("additional_insureds", []) or []
+        for ani in cov_ani:
+            if isinstance(ani, dict):
+                ani_name = ani.get("name", "") or ani.get("insured", "") or ""
+                ani_loc = ani.get("location", "") or ani.get("hotel", "") or ""
+            else:
+                ani_name = str(ani)
+                ani_loc = ""
+            if not ani_name.strip():
+                continue
+            if ani_name.strip().upper() in _all_shown_names:
+                continue
+            _all_shown_names.add(ani_name.strip().upper())
+            if not ani_loc and sov_locs:
+                ani_lower = ani_name.lower()
+                for sov_loc in sov_locs:
+                    dba = (sov_loc.get("dba", "") or sov_loc.get("hotel_flag", "") or "").lower()
+                    corp = (sov_loc.get("corporate_name", "") or "").lower()
+                    if dba and dba in ani_lower:
+                        ani_loc = f"{sov_loc.get('address', '')}, {sov_loc.get('city', '')}, {sov_loc.get('state', '')}"
+                        break
+                    elif corp and corp in ani_lower:
+                        ani_loc = f"{sov_loc.get('address', '')}, {sov_loc.get('city', '')}, {sov_loc.get('state', '')}"
+                        break
+            cov_display = _coverage_display_names.get(cov_key, cov_key.replace("_", " ").title())
+            _coverage_ani_rows.append([ani_name, ani_loc, cov_display])
+
+    if _coverage_ani_rows:
+        add_subsection_header(doc, "Additional Named Insureds by Coverage")
+        headers = ["#", "Named Insured", "Location / Hotel", "Coverage"]
+        rows = [[str(i), r[0], r[1], r[2]] for i, r in enumerate(_coverage_ani_rows, 1)]
+        create_styled_table(doc, headers, rows, col_widths=[0.4, 2.8, 2.8, 1.5],
+                           header_size=9, body_size=8)
+
     # Note box
     add_formatted_paragraph(doc, "", space_before=8)
     add_callout_box(doc, "Note: Additional named insureds may be added as required by franchise agreements or management contracts.")
-    
+
     # Additional Interests
     interests = data.get("additional_interests", [])
     if interests:
@@ -2470,18 +2538,43 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     # Limits (non-crime coverages, or crime without insuring_clauses)
     limits = cov.get("limits", [])
     if limits and not (coverage_key == "crime" and insuring_clauses):
-        add_subsection_header(doc, "Coverage Limits")
-        headers = ["Description", "Limit"]
-        rows = [[lim.get("description", "") or lim.get("type", ""), lim.get("limit", "") or lim.get("amount", "")] if isinstance(lim, dict) else [str(lim), ""] for lim in limits]
-        # Left-align headers; center Limit values for umbrella/excess
-        L = WD_ALIGN_PARAGRAPH.LEFT
-        limit_body_align = {}
-        if coverage_key in ("umbrella", "cyber", "epli", "flood", "terrorism"):
-            limit_body_align = {1: WD_ALIGN_PARAGRAPH.CENTER}
-        create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
-                           header_size=10, body_size=10,
-                           header_alignments={0: L, 1: L},
-                           col_alignments=limit_body_align)
+        # For Crime without insuring_clauses, show limits with retentions if available
+        has_retention = coverage_key == "crime" and any(
+            isinstance(lim, dict) and (lim.get("retention") or lim.get("deductible"))
+            for lim in limits
+        )
+        if has_retention:
+            add_subsection_header(doc, "Insuring Agreements / Limits of Insurance")
+            headers = ["Insuring Agreement", "Limit", "Retention"]
+            rows = []
+            for lim in limits:
+                if isinstance(lim, dict):
+                    rows.append([
+                        lim.get("description", "") or lim.get("type", ""),
+                        lim.get("limit", "") or lim.get("amount", ""),
+                        lim.get("retention", "") or lim.get("deductible", "")
+                    ])
+                else:
+                    rows.append([str(lim), "", ""])
+            L = WD_ALIGN_PARAGRAPH.LEFT
+            R = WD_ALIGN_PARAGRAPH.RIGHT
+            create_styled_table(doc, headers, rows, col_widths=[4.0, 1.5, 1.5],
+                               header_size=10, body_size=9,
+                               header_alignments={0: L, 1: R, 2: R},
+                               col_alignments={1: R, 2: R})
+        else:
+            add_subsection_header(doc, "Coverage Limits")
+            headers = ["Description", "Limit"]
+            rows = [[lim.get("description", "") or lim.get("type", ""), lim.get("limit", "") or lim.get("amount", "")] if isinstance(lim, dict) else [str(lim), ""] for lim in limits]
+            # Left-align headers; center Limit values for umbrella/excess
+            L = WD_ALIGN_PARAGRAPH.LEFT
+            limit_body_align = {}
+            if coverage_key in ("umbrella", "cyber", "epli", "flood", "terrorism"):
+                limit_body_align = {1: WD_ALIGN_PARAGRAPH.CENTER}
+            create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
+                               header_size=10, body_size=10,
+                               header_alignments={0: L, 1: L},
+                               col_alignments=limit_body_align)
     
     # Deductibles (Property)
     deductibles = cov.get("deductibles", [])
@@ -2692,6 +2785,10 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     
     # Forms & Endorsements
     forms = cov.get("forms_endorsements", [])
+    # Critical coverages MUST show forms — add placeholder if empty
+    _critical_form_coverages = {"general_liability", "crime", "umbrella", "umbrella_layer_2",
+                                 "umbrella_layer_3", "umbrella_layer_4", "workers_comp",
+                                 "workers_compensation", "commercial_auto"}
     if forms:
         add_subsection_header(doc, "Forms & Endorsements")
         headers = ["Form Number", "Description"]
@@ -2700,11 +2797,75 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         create_styled_table(doc, headers, rows, col_widths=[2.0, 5.5],
                            header_size=9, body_size=9,
                            header_alignments={0: L, 1: L})
+    elif coverage_key in _critical_form_coverages:
+        add_subsection_header(doc, "Forms & Endorsements")
+        add_formatted_paragraph(doc,
+            "Forms and endorsements schedule to be confirmed upon policy issuance. "
+            "Please refer to the carrier quote documents for the complete list of applicable forms.",
+            size=9, italic=True, color=CHARCOAL, space_after=6)
     
-    # NOTE: Sales / Exposure section removed — the Exposures table above already
-    # renders the full schedule_of_classes data including addresses, classifications,
-    # codes, rates, and exposure amounts. Having both was redundant.
-    
+    # Additional Named Insureds (per-coverage)
+    # Pull from the coverage data and cross-reference with SOV for hotel matching
+    ani_list = cov.get("additional_named_insureds", []) or []
+    # Also check additional_insureds (some extractors use this key)
+    if not ani_list:
+        ani_list = cov.get("additional_insureds", []) or []
+    if ani_list:
+        add_subsection_header(doc, "Additional Named Insureds")
+        # Cross-reference with SOV data to match insureds to hotels
+        sov_locs = (data.get("sov_data") or {}).get("locations", []) if data.get("sov_data") else []
+        headers_ani = ["#", "Additional Named Insured", "Location / Hotel"]
+        rows_ani = []
+        for idx_ani, ani in enumerate(ani_list, 1):
+            if isinstance(ani, dict):
+                ani_name = ani.get("name", "") or ani.get("insured", "") or ""
+                ani_loc = ani.get("location", "") or ani.get("hotel", "") or ani.get("address", "") or ""
+            else:
+                ani_name = str(ani)
+                ani_loc = ""
+            # Try to match to SOV location if no location specified
+            if not ani_loc and sov_locs:
+                ani_name_lower = ani_name.lower()
+                for sov_loc in sov_locs:
+                    dba = (sov_loc.get("dba", "") or sov_loc.get("hotel_flag", "") or "").lower()
+                    corp = (sov_loc.get("corporate_name", "") or "").lower()
+                    if dba and dba in ani_name_lower:
+                        ani_loc = f"{sov_loc.get('address', '')}, {sov_loc.get('city', '')}, {sov_loc.get('state', '')}"
+                        break
+                    elif corp and corp in ani_name_lower:
+                        ani_loc = f"{sov_loc.get('address', '')}, {sov_loc.get('city', '')}, {sov_loc.get('state', '')}"
+                        break
+            rows_ani.append([str(idx_ani), ani_name, ani_loc])
+        L = WD_ALIGN_PARAGRAPH.LEFT
+        create_styled_table(doc, headers_ani, rows_ani, col_widths=[0.4, 3.5, 3.6],
+                           header_size=9, body_size=8,
+                           header_alignments={0: L, 1: L, 2: L})
+
+    # Schedule of Locations reference (GL and Crime — critical E&O requirement)
+    if coverage_key in ("general_liability", "crime"):
+        # Count locations from GL schedule_of_classes or designated_premises
+        _loc_count = 0
+        if coverage_key == "general_liability":
+            _gl_classes = cov.get("schedule_of_classes", []) or []
+            _gl_premises = cov.get("designated_premises", []) or []
+            _skip_classes = {"hired auto", "non-owned auto", "loss control", "package store",
+                            "category vi", "sundry", "flat"}
+            _gl_loc_ids = set()
+            for _entry in _gl_classes:
+                if isinstance(_entry, dict):
+                    _loc_id = (_entry.get("location", "") or "").strip().lower()
+                    _classif = (_entry.get("classification", "") or "").lower()
+                    if any(_sk in _classif for _sk in _skip_classes):
+                        continue
+                    if _loc_id and _loc_id not in ("", "n/a", "all", "various"):
+                        _gl_loc_ids.add(_loc_id)
+            _loc_count = max(len(_gl_loc_ids), len(_gl_premises))
+        if _loc_count > 0:
+            add_formatted_paragraph(doc,
+                f"Schedule of Locations: {_loc_count} locations are covered under this policy. "
+                "See the Schedule of Locations section for the complete list with addresses.",
+                size=9, italic=True, color=CHARCOAL, space_before=6, space_after=6)
+
     # Covered Locations (GL only) - backup list of liability locations from GL quote
     if coverage_key == "general_liability":
         import re as _re_gl
@@ -3084,6 +3245,7 @@ def generate_carrier_rating(doc, data):
         "umbrella_alt_3": "Umbrella / Excess 4",
         "umbrella_layer_2": "2nd Excess Layer",
         "umbrella_layer_3": "3rd Excess Layer",
+        "umbrella_layer_4": "4th Excess Layer",
         "excess_liability": "Excess Liability",
         "excess": "Excess Liability",
         "workers_comp": "Workers Compensation",
@@ -3448,10 +3610,12 @@ def generate_proposal(data: dict, output_path: str) -> str:
                 coverages["umbrella_layer_2"] = coverages.pop(_alias)
             elif "umbrella_layer_3" not in coverages:
                 coverages["umbrella_layer_3"] = coverages.pop(_alias)
+            elif "umbrella_layer_4" not in coverages:
+                coverages["umbrella_layer_4"] = coverages.pop(_alias)
     
     # Sort umbrella layers by attachment point before rendering
     # The extractor may assign layers in PDF order, not by actual layer structure
-    _umb_keys = [k for k in ["umbrella", "umbrella_layer_2", "umbrella_layer_3"] if k in coverages]
+    _umb_keys = [k for k in ["umbrella", "umbrella_layer_2", "umbrella_layer_3", "umbrella_layer_4"] if k in coverages]
     if len(_umb_keys) > 1:
         import re as _re_umb
         def _parse_attachment_point(cov_data):
@@ -3518,7 +3682,7 @@ def generate_proposal(data: dict, output_path: str) -> str:
         # Sort umbrella keys by attachment point (ascending = 1st layer first)
         _umb_sorted = sorted(_umb_keys, key=lambda k: _parse_attachment_point(coverages.get(k, {})))
         # Reassign to canonical keys: umbrella, umbrella_layer_2, umbrella_layer_3
-        _canonical_keys = ["umbrella", "umbrella_layer_2", "umbrella_layer_3"]
+        _canonical_keys = ["umbrella", "umbrella_layer_2", "umbrella_layer_3", "umbrella_layer_4"]
         _umb_data_backup = {k: coverages[k] for k in _umb_keys}
         for i, sorted_key in enumerate(_umb_sorted):
             target_key = _canonical_keys[i]
@@ -3529,8 +3693,9 @@ def generate_proposal(data: dict, output_path: str) -> str:
         "umbrella": "Umbrella / Excess Liability Coverage",
         "umbrella_layer_2": "2nd Excess Liability Layer",
         "umbrella_layer_3": "3rd Excess Liability Layer",
+        "umbrella_layer_4": "4th Excess Liability Layer",
     }
-    for _uk in ["umbrella", "umbrella_layer_2", "umbrella_layer_3"]:
+    for _uk in ["umbrella", "umbrella_layer_2", "umbrella_layer_3", "umbrella_layer_4"]:
         if _uk in coverages:
             generate_coverage_section(doc, data, _uk, _umb_titles[_uk])
     if "cyber" in coverages:
