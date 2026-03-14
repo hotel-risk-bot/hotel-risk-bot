@@ -1741,34 +1741,60 @@ DOCUMENT TEXT:
             logger.info("Pass 3 (addresses): No GL coverage found, skipping")
             return data
         
-        # Check if designated_premises needs more addresses
-        # Trigger when count < 3 — GPT often captures only 1-2 addresses in initial pass
-        MIN_ADDRESSES_THRESHOLD = 3
+        # Check if GL data is complete — trigger re-extraction when:
+        # 1. designated_premises < 3 (GPT often captures only 1-2 in initial pass)
+        # 2. schedule_of_classes count is much less than SOV location count (truncated table)
         dp = gl.get("designated_premises", [])
         dp_count = len(dp) if isinstance(dp, list) else 0
-        if dp_count >= MIN_ADDRESSES_THRESHOLD:
-            logger.info(f"Pass 3 (addresses): GL already has {dp_count} designated premises (threshold={MIN_ADDRESSES_THRESHOLD}), skipping")
+        soc = gl.get("schedule_of_classes", [])
+        soc_count = len(soc) if isinstance(soc, list) else 0
+
+        # Get SOV location count for comparison
+        sov_data = data.get("sov_data")
+        sov_count = len(sov_data.get("locations", [])) if sov_data and isinstance(sov_data, dict) else 0
+
+        # Determine if re-extraction is needed
+        dp_seems_complete = dp_count >= max(sov_count, 3)
+        soc_seems_complete = soc_count >= max(sov_count, 5)
+
+        if dp_seems_complete and soc_seems_complete:
+            logger.info(f"Pass 3 (addresses): GL has {dp_count} premises and {soc_count} classes "
+                       f"(SOV has {sov_count} locations), both seem complete — skipping")
             return data
-        
-        logger.info(f"Pass 3 (addresses): GL has only {dp_count} designated premises (threshold={MIN_ADDRESSES_THRESHOLD}), running focused extraction")
-        
+
+        logger.info(f"Pass 3 (addresses): GL has {dp_count} premises and {soc_count} classes "
+                   f"(SOV has {sov_count} locations) — running focused re-extraction")
+
         # Use smart text selection for address-related content
+        # Use larger context window to capture full Schedule of Classes tables
         address_keywords = [
             "CG 21 44", "NXLL 110", "designated premises", "schedule of hazards",
             "schedule of locations", "covered premises", "insured locations",
             "location address", "schedule of classes", "Hotels/Motels",
-            "class code", "exposure basis", "Gross Sales"
+            "class code", "exposure basis", "Gross Sales", "FUT 1004", "FUT 1005",
+            "location#", "Primary"
         ]
-        relevant_text = self._extract_relevant_sections(combined_text, address_keywords, context_chars=8000)
+        relevant_text = self._extract_relevant_sections(combined_text, address_keywords, context_chars=12000)
 
-        prompt = f"""From this General Liability insurance document, extract ALL physical street addresses that represent covered locations.
+        prompt = f"""From this General Liability insurance document, extract TWO things:
+
+1. ALL physical street addresses that represent covered locations (designated_premises)
+2. The COMPLETE Schedule of Classes table (schedule_of_classes) — EVERY row, EVERY location
 
 Look for addresses in:
 - CG 21 44 or NXLL 110 (Limitation of Coverage to Designated Premises) form
-- Schedule of Hazards / Schedule of Locations
+- Schedule of Hazards / Schedule of Locations / FUT 1005
 - Any numbered list of addresses (e.g., "1) 4285 Highway 51, LaPlace, LA 70068")
 - Any section listing covered premises, designated locations, or insured locations
 - The declarations page showing location addresses
+
+For Schedule of Classes (FUT 1004 or similar form):
+- Extract EVERY row — there may be 10-15+ rows spanning multiple locations
+- Each row has: Location (e.g., "Primary", "location#3", "location#8"), Class Code (e.g., 45191), Description, Exposure Amount, Rate, Premium
+- Include ALL locations: Primary, location#3, location#4, ..., location#12, etc.
+- Include restaurant/liquor entries (class codes 16910, 58173) as separate rows
+- CRITICAL: Do NOT stop after 3-4 rows. Extract the ENTIRE table.
+- The exposure amount is the dollar figure (e.g., $3,200,000) — this represents Gross Sales for that location
 
 Rules:
 - Extract the COMPLETE street address including street number, street name, city, state, and zip
@@ -1778,7 +1804,7 @@ Rules:
 
 Return a JSON object:
 {{"designated_premises": ["Full address 1", "Full address 2", ...],
-  "schedule_of_classes": [{{"location": "Loc 1", "address": "Street", "city": "City", "state": "ST", "brand_dba": "Hotel name if shown", "classification": "Hotels/Motels", "class_code": "XXXXX", "exposure_basis": "Gross Sales", "exposure": "$X", "premium": "$X"}}]}}
+  "schedule_of_classes": [{{"location": "Primary", "address": "Street, City, ST Zip", "brand_dba": "Hotel name", "classification": "Hotels and Motels - with pools", "class_code": "45191", "exposure_basis": "Gross Sales", "exposure": "$3,200,000", "rate": "5.8653", "premium": "$18,769"}}]}}
 
 DOCUMENT TEXT:
 {relevant_text}"""
@@ -1787,12 +1813,12 @@ DOCUMENT TEXT:
             response = _get_openai_client().chat.completions.create(
                 model=PASS_MODEL,
                 messages=[
-                    {"role": "system", "content": "You are an expert at finding physical addresses in insurance documents. Extract every covered location address."},
+                    {"role": "system", "content": "You are an expert at extracting location data from insurance documents. Extract every covered location address AND every row from the Schedule of Classes table. Do NOT truncate — include ALL rows."},
                     {"role": "user", "content": prompt}
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.0,
-                max_tokens=8000
+                max_tokens=16000
             )
             result = json.loads(response.choices[0].message.content)
             
