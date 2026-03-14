@@ -424,6 +424,121 @@ def _is_duplicate_named_insured(new_name, existing_names_list):
     return False
 
 
+def _merge_sov_data(pipeline_sov, property_sov):
+    """Merge pipeline SOV (complete location list, corporate names) with property SOV (TIV values).
+
+    Pipeline SOV = Hospitality SOV with all locations, corporate names, class codes, policies column.
+    Property SOV = AmRisc/GHM SOV with real building/contents/BI/TIV dollar values.
+
+    Strategy: Start with pipeline SOV locations, cross-reference property SOV by address to fill TIVs.
+    """
+    import re
+    logger.info(f"_merge_sov_data: pipeline={len(pipeline_sov.get('locations', []))} locs, "
+                f"property={len(property_sov.get('locations', []))} locs")
+
+    def _norm_addr(addr):
+        """Normalize address for fuzzy matching."""
+        a = re.sub(r'[,.]', ' ', str(addr).strip().lower())
+        a = re.sub(r'\b(road|rd|street|st|avenue|ave|drive|dr|boulevard|blvd|highway|hwy|lane|ln|pike|pk|plaza|plz|court|ct|interstate|ih)\b', '', a)
+        a = re.sub(r'\b(united states|usa|us)\b', '', a)
+        a = re.sub(r'\b(texas|louisiana|florida|california|new york)\b', '', a)
+        a = re.sub(r'[^a-z0-9]', '', a)
+        return a
+
+    def _extract_house_number(addr_norm):
+        m = re.match(r'(\d+)', addr_norm)
+        return m.group(1) if m else None
+
+    def _get_street_words(addr_norm):
+        return [w for w in re.findall(r'[a-z]+', addr_norm) if len(w) > 2]
+
+    # Build property SOV address lookup, aggregating multiple buildings at same address
+    prop_addr_lookup = {}
+    for loc in property_sov.get("locations", []):
+        addr = (loc.get("address", "") or "").strip()
+        if not addr:
+            continue
+        addr_norm = _norm_addr(addr)
+        if addr_norm in prop_addr_lookup:
+            existing = prop_addr_lookup[addr_norm]
+            for vf in ("building_value", "contents_value", "bi_value", "other_value",
+                        "pool_value", "sign_value", "tiv", "num_rooms", "square_footage"):
+                existing[vf] = (existing.get(vf, 0) or 0) + (loc.get(vf, 0) or 0)
+        else:
+            prop_addr_lookup[addr_norm] = dict(loc)
+
+    # Match pipeline locations to property SOV by address
+    result = dict(pipeline_sov)
+    result["locations"] = []
+    result["_property_sov"] = property_sov
+
+    for p_loc in pipeline_sov.get("locations", []):
+        merged_loc = dict(p_loc)
+        p_addr = (p_loc.get("address", "") or "").strip()
+        p_addr_norm = _norm_addr(p_addr)
+        p_house = _extract_house_number(p_addr_norm)
+        p_street_words = _get_street_words(p_addr_norm)
+        p_city = (p_loc.get("city", "") or "").strip().lower()
+        p_city_norm = re.sub(r'[^a-z]', '', p_city)
+
+        best_match = None
+        # Try exact normalized address match first
+        if p_addr_norm in prop_addr_lookup:
+            best_match = (p_addr_norm, prop_addr_lookup[p_addr_norm])
+        else:
+            # Fuzzy match: same house number + at least one common street word
+            for prop_addr_norm, prop_loc in prop_addr_lookup.items():
+                prop_house = _extract_house_number(prop_addr_norm)
+                if p_house and prop_house and p_house == prop_house:
+                    prop_street_words = _get_street_words(prop_addr_norm)
+                    common = set(p_street_words) & set(prop_street_words)
+                    if common:
+                        best_match = (prop_addr_norm, prop_loc)
+                        break
+                    # Fallback: house number match + same city
+                    prop_city = (prop_loc.get("city", "") or "").strip().lower()
+                    prop_city_norm = re.sub(r'[^a-z]', '', prop_city)
+                    if p_city_norm and prop_city_norm and p_city_norm == prop_city_norm:
+                        best_match = (prop_addr_norm, prop_loc)
+                        break
+
+        if best_match:
+            _, prop_loc = best_match
+            for vf in ("building_value", "contents_value", "bi_value", "other_value",
+                        "pool_value", "sign_value", "tiv", "num_rooms", "square_footage",
+                        "construction_type", "year_built", "num_stories", "roof_type"):
+                if prop_loc.get(vf) is not None:
+                    merged_loc[vf] = prop_loc[vf]
+            # Extract corporate name from property SOV "Corp LLC dba Brand" format
+            prop_dba = (prop_loc.get("dba", "") or prop_loc.get("hotel_flag", "") or "").strip()
+            if not merged_loc.get("corporate_name") and prop_dba:
+                if " dba " in prop_dba.lower():
+                    parts = re.split(r'\s+dba\s+', prop_dba, flags=re.IGNORECASE)
+                    if len(parts) == 2:
+                        merged_loc["corporate_name"] = parts[0].strip()
+                        if not merged_loc.get("dba"):
+                            merged_loc["dba"] = parts[1].strip()
+                else:
+                    if not merged_loc.get("corporate_name"):
+                        merged_loc["corporate_name"] = prop_dba
+            logger.info(f"  Matched: {p_addr} -> TIV={merged_loc.get('tiv', 0):,}")
+        else:
+            logger.info(f"  No property match: {p_addr} (TIV will be $0)")
+
+        result["locations"].append(merged_loc)
+
+    # Recalculate totals
+    total_tiv = sum((loc.get("tiv", 0) or 0) for loc in result["locations"])
+    total_bldg = sum((loc.get("building_value", 0) or 0) for loc in result["locations"])
+    total_cont = sum((loc.get("contents_value", 0) or 0) for loc in result["locations"])
+    total_bi = sum((loc.get("bi_value", 0) or 0) for loc in result["locations"])
+    result["totals"] = {"tiv": total_tiv, "building": total_bldg, "contents": total_cont, "bi": total_bi}
+
+    logger.info(f"_merge_sov_data result: {len(result['locations'])} locations, TIV=${total_tiv:,.0f}")
+    return result
+
+
+
 def _enrich_with_sov(extracted_data, sov_data):
     """Enrich extracted data with SOV information (DBA, locations, etc.)."""
     logger.info(f"_enrich_with_sov called. sov_data type={type(sov_data).__name__}, "
@@ -570,6 +685,22 @@ def _enrich_with_sov(extracted_data, sov_data):
             dp_norm = re.sub(r'[^a-z0-9]', '', dp_norm)
             gl_addresses_norm.add(dp_norm)
 
+        # FALLBACK: If GL quote exists but has few/no designated_premises or schedule addresses,
+        # assume ALL locations from the SOV are GL-covered. This handles renewals where the
+        # GL quote says "See attached for Schedule of Locations" but the attachment isn't in the PDF.
+        _gl_has_sparse_data = (len(gl_location_nums) + len(gl_addresses_norm)) < 3
+        if _gl_has_sparse_data and sov_locs:
+            logger.info(f"GL has sparse location data ({len(gl_location_nums)} nums, {len(gl_addresses_norm)} addrs) "
+                       f"— assuming all {len(sov_locs)} SOV locations are GL-covered")
+            for loc in sov_locs:
+                loc_num = str(loc.get("location_num", loc.get("building_num", 0)))
+                gl_location_nums.add(loc_num)
+                loc_addr = (loc.get("address", "") or "").strip().lower()
+                if loc_addr:
+                    loc_addr_norm = re.sub(r'\b(road|rd|street|st|avenue|ave|drive|dr|boulevard|blvd|highway|hwy|lane|ln|pike|pk)\b', '', loc_addr)
+                    loc_addr_norm = re.sub(r'[^a-z0-9]', '', loc_addr_norm)
+                    gl_addresses_norm.add(loc_addr_norm)
+
         # Match GL locations to SOV locations and collect corporate entities
         # Use fuzzy deduplication to avoid duplicates from carrier quote vs SOV
         existing_named_names = [ni.get("name", "").strip() if isinstance(ni, dict) else str(ni).strip()
@@ -591,6 +722,12 @@ def _enrich_with_sov(extracted_data, sov_data):
             # Get corporate entity name from SOV
             corp_name = (loc.get("corporate_name") or loc.get("client_name") or "").strip()
             dba_name = (loc.get("dba") or loc.get("hotel_flag") or "").strip()
+            # Fallback: if corp_name is empty but dba contains "LLC dba Brand", split it
+            if not corp_name and dba_name and " dba " in dba_name.lower():
+                parts = re.split(r'\s+dba\s+', dba_name, flags=re.IGNORECASE)
+                if len(parts) == 2:
+                    corp_name = parts[0].strip()
+                    dba_name = parts[1].strip()
 
             if corp_name and not _is_duplicate_named_insured(corp_name, existing_named_names) \
                and not _is_duplicate_named_insured(corp_name, seen_entities):
@@ -1005,17 +1142,52 @@ def _run_extraction(session_id):
     extractor = ProposalExtractor()
 
     try:
-        # Process SOV files first
+        # Process SOV files first — keep all, pick best
+        all_sov_results = []
         for file_info in session["files"]:
             if file_info.get("is_sov"):
                 logger.info(f"Parsing SOV: {file_info['filename']}")
                 sov_data = parse_sov(file_info["path"])
                 if "error" not in sov_data:
                     sov_data = aggregate_locations(sov_data)
-                    session["sov_data"] = sov_data
-                    logger.info(f"SOV parsed: {len(sov_data.get('locations', []))} locations")
+                    sov_data["_source_filename"] = file_info["filename"]
+                    all_sov_results.append(sov_data)
+                    logger.info(f"SOV parsed: {len(sov_data.get('locations', []))} locations, "
+                                f"TIV={sov_data.get('totals', {}).get('tiv', 0)}")
 
-        # Step 1: Extract text from ALL files first (fast, no GPT calls)
+        # Select the property SOV (has real TIV values) as primary
+        property_sov = None
+        pipeline_sov = None
+        for sov in all_sov_results:
+            total_tiv = sov.get("totals", {}).get("tiv", 0) or 0
+            num_locs = len(sov.get("locations", []))
+            if total_tiv > 10000:
+                if property_sov is None or total_tiv > (property_sov.get("totals", {}).get("tiv", 0) or 0):
+                    property_sov = sov
+                    logger.info(f"Property SOV identified: {sov.get('_source_filename', '?')}, TIV=${total_tiv:,.0f}")
+            else:
+                if pipeline_sov is None or num_locs > len(pipeline_sov.get("locations", [])):
+                    pipeline_sov = sov
+                    logger.info(f"Pipeline SOV identified: {sov.get('_source_filename', '?')}, {num_locs} locations")
+
+        # Merge: use pipeline SOV for locations with TIVs from property SOV
+        if property_sov and pipeline_sov:
+            logger.info("Merging pipeline SOV locations with property SOV TIVs")
+            session["sov_data"] = _merge_sov_data(pipeline_sov, property_sov)
+            session["pipeline_sov"] = pipeline_sov
+        elif property_sov:
+            session["sov_data"] = property_sov
+        elif pipeline_sov:
+            session["sov_data"] = pipeline_sov
+        elif all_sov_results:
+            session["sov_data"] = all_sov_results[0]
+
+        if session.get("sov_data"):
+            logger.info(f"Final SOV: {len(session['sov_data'].get('locations', []))} locations, "
+                        f"TIV={session['sov_data'].get('totals', {}).get('tiv', 0)}")
+
+
+        # Step 1: Extract text        # Step 1: Extract text from ALL files first (fast, no GPT calls)
         all_pdf_texts = []
         all_excel_data = []
         total_files = len([f for f in session["files"] if not f.get("is_sov")])
