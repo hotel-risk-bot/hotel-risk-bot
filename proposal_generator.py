@@ -1157,6 +1157,8 @@ def generate_named_insureds(doc, data):
         cov_ani = cov_data.get("additional_named_insureds", []) or []
         if not cov_ani:
             cov_ani = cov_data.get("additional_insureds", []) or []
+        if not cov_ani:
+            cov_ani = cov_data.get("named_insureds", []) or []
         for ani in cov_ani:
             if isinstance(ani, dict):
                 ani_name = ani.get("name", "") or ani.get("insured", "") or ""
@@ -1226,6 +1228,7 @@ def generate_information_summary(doc, data):
     # Calculate total sales from GL schedule_of_classes exposures
     coverages = data.get("coverages", {})
     gl_cov = coverages.get("general_liability", {})
+    designated_premises = gl_cov.get("designated_premises", []) if isinstance(gl_cov, dict) else []
     if isinstance(gl_cov, dict):
         gl_classes = gl_cov.get("schedule_of_classes", [])
         total_sales = 0
@@ -1314,6 +1317,7 @@ def generate_information_summary(doc, data):
     liab_loc_count = max(
         len(gl_loc_keys) if gl_loc_keys else 0,
         len(_gl_loc_ids) if _gl_loc_ids else 0,
+        len(designated_premises) if designated_premises else 0,
         int(gl_cov.get("num_locations", 0) or 0) if isinstance(gl_cov, dict) else 0
     )
     
@@ -1352,6 +1356,8 @@ def generate_information_summary(doc, data):
         total_loc_count = max(_merged_addr_count, prop_loc_count + max(0, _gl_id_count - prop_loc_count))
     else:
         total_loc_count = _merged_addr_count if _merged_addr_count else max(prop_loc_count, liab_loc_count)
+    # Final check: total must be at least max(property, liability)
+    total_loc_count = max(total_loc_count, prop_loc_count, liab_loc_count)
     if total_loc_count > 0:
         rows.append(["Total Number of Locations", str(total_loc_count)])
     if prop_loc_count > 0:
@@ -1914,6 +1920,13 @@ def generate_locations(doc, data):
                     liability_addr_keys.add(resolved_key)
                     break
     
+    # DESIGNATED PREMISES FALLBACK: If GL designated_premises count >= property locations,
+    # all property locations are liability-covered (GL covers at least as many as property)
+    if designated_premises and len(designated_premises) >= len(property_addr_keys) and property_addr_keys:
+        logger.info(f"Schedule of Locations - designated_premises has {len(designated_premises)} entries "
+                     f">= {len(property_addr_keys)} property locations. Marking ALL property as liability-covered.")
+        liability_addr_keys.update(property_addr_keys)
+
     # NOTE: Blanket liability fallback removed. Multi-pass extraction (Pass 3) in
     # proposal_extractor.py now handles focused address extraction for GL when
     # designated_premises is empty. Liability checkmarks are only applied to
@@ -2250,6 +2263,73 @@ def generate_locations(doc, data):
                     })
                     seen_addr_keys.add(addr_key)
     
+    # Fifth: Add GL designated_premises entries not yet in master list
+    # These are the primary GL location list — may have addresses the other passes missed
+    for dp_addr in designated_premises:
+        if not isinstance(dp_addr, str) or not dp_addr.strip() or len(dp_addr.strip()) < 5:
+            continue
+        dp_addr = dp_addr.strip()
+        dp_addr_norm = _normalize_addr(dp_addr)
+        # Check if already in master list
+        already_exists = False
+        for ml in master_locations:
+            if _fuzzy_addr_match(dp_addr_norm, _normalize_addr(ml.get("address", ""))):
+                ml["on_liability"] = True  # Ensure liability checkmark
+                already_exists = True
+                break
+        if not already_exists:
+            parts = [p.strip() for p in dp_addr.split(",")]
+            street = parts[0] if parts else dp_addr
+            city = ""
+            state = ""
+            if len(parts) >= 3:
+                city = parts[1]
+                st_m = re.match(r'([A-Z]{2})\s*\d*', parts[2].strip().upper())
+                if st_m: state = st_m.group(1)
+            elif len(parts) == 2:
+                st_m = re.match(r'([A-Z]{2})\s*\d*', parts[1].strip().upper())
+                if st_m:
+                    state = st_m.group(1)
+                else:
+                    city = parts[1]
+            # Cross-reference SOV for name
+            loc_name = "Pending"
+            if sov_data and sov_data.get("locations"):
+                for sov_loc in sov_data["locations"]:
+                    if _fuzzy_addr_match(_normalize_addr(street), _normalize_addr(sov_loc.get("address", ""))):
+                        _cn = (sov_loc.get("corporate_name", "") or "").strip()
+                        _db = (sov_loc.get("dba", "") or sov_loc.get("hotel_flag", "") or "").strip()
+                        if _cn and _db:
+                            loc_name = f"{_cn} - {_db}"
+                        elif _db:
+                            loc_name = _db
+                        elif _cn:
+                            loc_name = _cn
+                        if not city and sov_loc.get("city"): city = sov_loc["city"]
+                        if not state and sov_loc.get("state"): state = sov_loc["state"]
+                        break
+            addr_key = (_normalize_addr(street) + "|" + _normalize_city(city) + "|" + state.strip().upper())
+            key_already = False
+            for ek in seen_addr_keys:
+                ep = ek.split("|")
+                np = addr_key.split("|")
+                if len(ep) == 3 and len(np) == 3 and _fuzzy_addr_match(ep[0], np[0]):
+                    state_ok = (not ep[2] or not np[2] or ep[2] == np[2])
+                    if state_ok:
+                        key_already = True
+                        break
+            if not key_already:
+                master_locations.append({
+                    "name": loc_name,
+                    "address": street,
+                    "city": city,
+                    "state": state,
+                    "tiv": 0,
+                    "on_property": _is_on_property(addr_key),
+                    "on_liability": True,
+                })
+                seen_addr_keys.add(addr_key)
+
     # Normalize ALL CAPS text in location data to title case
     for ml in master_locations:
         if ml["name"] and ml["name"] == ml["name"].upper() and len(ml["name"]) > 2:
@@ -2514,7 +2594,16 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                           header_size=9, body_size=9)
     
     # Crime Insuring Clauses (3-column: Clause, Limit, Retention)
-    insuring_clauses = cov.get("insuring_clauses", [])
+    insuring_clauses = cov.get("insuring_clauses", []) or cov.get("insuring_agreements", [])
+    # For Crime: if no insuring_clauses but limits contain descriptions+retentions, use as clauses
+    if coverage_key == "crime" and not insuring_clauses:
+        _crime_limits = cov.get("limits", [])
+        if _crime_limits and any(
+            isinstance(lim, dict) and (lim.get("description") or lim.get("type"))
+            and (lim.get("retention") or lim.get("deductible"))
+            for lim in _crime_limits
+        ):
+            insuring_clauses = _crime_limits
     if coverage_key == "crime" and insuring_clauses:
         add_subsection_header(doc, "Insuring Clauses")
         headers = ["Insuring Clause", "Limit", "Retention"]
@@ -2871,12 +2960,20 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         import re as _re_gl
         gl_loc_list = []
         gl_loc_seen = set()
+        def _gl_loc_already_seen(addr_norm):
+            """Check if addr is already in gl_loc_seen using fuzzy matching."""
+            if addr_norm in gl_loc_seen:
+                return True
+            for existing in gl_loc_seen:
+                if _fuzzy_addr_match(addr_norm, existing):
+                    return True
+            return False
         # Source 1: designated_premises array (PRIMARY - extracted by GPT)
         for dp_addr in cov.get("designated_premises", []):
             if not isinstance(dp_addr, str) or not dp_addr.strip() or len(dp_addr.strip()) < 5:
                 continue
             addr_norm = _normalize_addr(dp_addr)
-            if addr_norm not in gl_loc_seen:
+            if not _gl_loc_already_seen(addr_norm):
                 gl_loc_seen.add(addr_norm)
                 gl_loc_list.append({
                     "address": dp_addr.strip(),
@@ -2889,7 +2986,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                 addr = entry.get("address", "") or entry.get("location", "")
                 if addr and addr.strip():
                     addr_norm = _normalize_addr(addr)
-                    if addr_norm not in gl_loc_seen:
+                    if not _gl_loc_already_seen(addr_norm):
                         gl_loc_seen.add(addr_norm)
                         brand = entry.get("brand_dba", "") or ""
                         classification = entry.get("classification", "") or ""
@@ -2913,7 +3010,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                 if not raw_addr or len(raw_addr) < 5:
                     continue
                 addr_norm = _normalize_addr(raw_addr)
-                if addr_norm not in gl_loc_seen:
+                if not _gl_loc_already_seen(addr_norm):
                     gl_loc_seen.add(addr_norm)
                     gl_loc_list.append({
                         "address": raw_addr.strip(),
@@ -2928,23 +3025,14 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                 if gl_loc["brand"]:  # Already has a brand, skip
                     continue
                 gl_addr_norm = _normalize_addr(gl_loc["address"])
+                if not gl_addr_norm:
+                    continue
                 for sov_loc in sov_data["locations"]:
                     sov_addr_norm = _normalize_addr(sov_loc.get("address", ""))
-                    # Fuzzy match: check if street addresses match
-                    if not gl_addr_norm or not sov_addr_norm:
+                    if not sov_addr_norm:
                         continue
-                    # Extract house numbers and street names for comparison
-                    gl_num_m = _re_gl.match(r'^(\d+)\s+(.+)', gl_addr_norm)
-                    sov_num_m = _re_gl.match(r'^(\d+)\s+(.+)', sov_addr_norm)
-                    matched = False
-                    if gl_num_m and sov_num_m:
-                        if gl_num_m.group(1) == sov_num_m.group(1) and gl_num_m.group(2) == sov_num_m.group(2):
-                            matched = True
-                    elif gl_addr_norm == sov_addr_norm:
-                        matched = True
-                    elif gl_addr_norm in sov_addr_norm or sov_addr_norm in gl_addr_norm:
-                        matched = True
-                    if matched:
+                    # Use fuzzy address matching (handles typos, abbreviations, house# tolerance)
+                    if _fuzzy_addr_match(gl_addr_norm, sov_addr_norm):
                         corp = (sov_loc.get("corporate_name", "") or "").strip()
                         dba = (sov_loc.get("dba", "") or sov_loc.get("hotel_flag", "") or "").strip()
                         if corp and dba:
