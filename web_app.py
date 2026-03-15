@@ -441,7 +441,8 @@ def _merge_sov_data(pipeline_sov, property_sov):
         a = re.sub(r'[,.]', ' ', str(addr).strip().lower())
         a = re.sub(r'\b(road|rd|street|st|avenue|ave|drive|dr|boulevard|blvd|highway|hwy|lane|ln|pike|pk|plaza|plz|court|ct|interstate|ih)\b', '', a)
         a = re.sub(r'\b(united states|usa|us)\b', '', a)
-        a = re.sub(r'\b(texas|louisiana|florida|california|new york)\b', '', a)
+        # Strip all state names (full names get in the way of address matching)
+        a = re.sub(r'\b(alabama|alaska|arizona|arkansas|california|colorado|connecticut|delaware|florida|georgia|hawaii|idaho|illinois|indiana|iowa|kansas|kentucky|louisiana|maine|maryland|massachusetts|michigan|minnesota|mississippi|missouri|montana|nebraska|nevada|new hampshire|new jersey|new mexico|new york|north carolina|north dakota|ohio|oklahoma|oregon|pennsylvania|rhode island|south carolina|south dakota|tennessee|texas|utah|vermont|virginia|washington|west virginia|wisconsin|wyoming)\b', '', a)
         a = re.sub(r'[^a-z0-9]', '', a)
         return a
 
