@@ -527,6 +527,14 @@ def _merge_sov_data(pipeline_sov, property_sov):
 
         result["locations"].append(merged_loc)
 
+    # Filter out erroneous TIV values (e.g., $1 placeholders) — no hotel has TIV < $1,000
+    MIN_TIV_THRESHOLD = 1000
+    for loc in result["locations"]:
+        loc_tiv = loc.get("tiv", 0) or 0
+        if 0 < loc_tiv < MIN_TIV_THRESHOLD:
+            logger.info(f"  Filtering erroneous TIV ${loc_tiv:,.0f} for {loc.get('address', 'unknown')} (below ${MIN_TIV_THRESHOLD:,} threshold)")
+            loc["tiv"] = 0
+
     # Recalculate totals
     total_tiv = sum((loc.get("tiv", 0) or 0) for loc in result["locations"])
     total_bldg = sum((loc.get("building_value", 0) or 0) for loc in result["locations"])
@@ -664,6 +672,10 @@ def _enrich_with_sov(extracted_data, sov_data):
 
         # SECONDARY: Enrich named_insureds from SOV corporate entities for GL-covered locations
         # ONLY pull named insureds for locations that appear on the liability quote
+        # SKIP if carrier quote already provided additional_named_insureds (quote is authoritative)
+        _quote_has_additional_ni = bool(extracted_data.get("additional_named_insureds"))
+        if _quote_has_additional_ni:
+            logger.info("  Skipping SOV named insured enrichment — carrier quote already provided additional_named_insureds (quote takes priority)")
         gl_location_nums = set()
         gl_addresses_norm = set()
         # Collect GL location identifiers from schedule_of_classes and designated_premises
@@ -742,13 +754,16 @@ def _enrich_with_sov(extracted_data, sov_data):
             elif corp_name:
                 logger.info(f"  SOV named insured SKIPPED (duplicate): '{corp_name}' already exists in named insureds")
 
-        if new_named_insureds:
+        if new_named_insureds and not _quote_has_additional_ni:
             existing_list = extracted_data.get("named_insureds", [])
             extracted_data["named_insureds"] = existing_list + new_named_insureds
             logger.info(f"  Added {len(new_named_insureds)} named insureds from SOV for GL locations "
                        f"(total now: {len(extracted_data['named_insureds'])})")
         else:
-            logger.info("  No new named insureds to add from SOV (none matched GL locations or all already present)")
+            if _quote_has_additional_ni:
+                logger.info("  Skipped SOV named insured enrichment — carrier quote already provided additional_named_insureds")
+            else:
+                logger.info("  No new named insureds to add from SOV (none matched GL locations or all already present)")
 
 
 # ─── Routes ───
