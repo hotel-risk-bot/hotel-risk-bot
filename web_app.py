@@ -755,16 +755,13 @@ def _enrich_with_sov(extracted_data, sov_data):
             elif corp_name:
                 logger.info(f"  SOV named insured SKIPPED (duplicate): '{corp_name}' already exists in named insureds")
 
-        if new_named_insureds and not _quote_has_additional_ni:
+        if new_named_insureds:
             existing_list = extracted_data.get("named_insureds", [])
             extracted_data["named_insureds"] = existing_list + new_named_insureds
             logger.info(f"  Added {len(new_named_insureds)} named insureds from SOV for GL locations "
                        f"(total now: {len(extracted_data['named_insureds'])})")
         else:
-            if _quote_has_additional_ni:
-                logger.info("  Skipped SOV named insured enrichment — carrier quote already provided additional_named_insureds")
-            else:
-                logger.info("  No new named insureds to add from SOV (none matched GL locations or all already present)")
+            logger.info("  No new named insureds to add from SOV (none matched GL locations or all already present)")
 
 
 # ─── Routes ───
