@@ -1302,10 +1302,31 @@ def generate_information_summary(doc, data):
     sov_locs = sov_data.get("locations", []) if sov_data else []
     
     # Helper to build composite key for dedup
+    # State name -> abbreviation map for _loc_key normalization
+    _state_abbrevs = {
+        "ALABAMA": "AL", "ALASKA": "AK", "ARIZONA": "AZ", "ARKANSAS": "AR",
+        "CALIFORNIA": "CA", "COLORADO": "CO", "CONNECTICUT": "CT", "DELAWARE": "DE",
+        "FLORIDA": "FL", "GEORGIA": "GA", "HAWAII": "HI", "IDAHO": "ID",
+        "ILLINOIS": "IL", "INDIANA": "IN", "IOWA": "IA", "KANSAS": "KS",
+        "KENTUCKY": "KY", "LOUISIANA": "LA", "MAINE": "ME", "MARYLAND": "MD",
+        "MASSACHUSETTS": "MA", "MICHIGAN": "MI", "MINNESOTA": "MN", "MISSISSIPPI": "MS",
+        "MISSOURI": "MO", "MONTANA": "MT", "NEBRASKA": "NE", "NEVADA": "NV",
+        "NEW HAMPSHIRE": "NH", "NEW JERSEY": "NJ", "NEW MEXICO": "NM", "NEW YORK": "NY",
+        "NORTH CAROLINA": "NC", "NORTH DAKOTA": "ND", "OHIO": "OH", "OKLAHOMA": "OK",
+        "OREGON": "OR", "PENNSYLVANIA": "PA", "RHODE ISLAND": "RI",
+        "SOUTH CAROLINA": "SC", "SOUTH DAKOTA": "SD", "TENNESSEE": "TN", "TEXAS": "TX",
+        "UTAH": "UT", "VERMONT": "VT", "VIRGINIA": "VA", "WASHINGTON": "WA",
+        "WEST VIRGINIA": "WV", "WISCONSIN": "WI", "WYOMING": "WY",
+        "DISTRICT OF COLUMBIA": "DC",
+    }
+    def _normalize_state(s):
+        s = s.strip().upper()
+        return _state_abbrevs.get(s, s)
+
     def _loc_key(loc):
         return (_normalize_addr(loc.get("address", "")) + "|" +
                 _normalize_city(loc.get("city", "")) + "|" +
-                loc.get("state", "").strip().upper())
+                _normalize_state(loc.get("state", "")))
     
     # Property locations: unique by composite key
     _prop_unique_keys = set()
@@ -1381,7 +1402,7 @@ def generate_information_summary(doc, data):
         for existing_key in all_unique_keys:
             ex_parts = existing_key.split("|")
             if len(gl_parts) == 3 and len(ex_parts) == 3:
-                state_ok = (not gl_parts[2] or not ex_parts[2] or gl_parts[2] == ex_parts[2])
+                state_ok = (not gl_parts[2] or not ex_parts[2] or _normalize_state(gl_parts[2]) == _normalize_state(ex_parts[2]))
                 if state_ok and _fuzzy_addr_match(gl_parts[0], ex_parts[0]):
                     already_matched = True
                     break
