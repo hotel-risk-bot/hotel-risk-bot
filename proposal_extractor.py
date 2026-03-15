@@ -1836,6 +1836,7 @@ DOCUMENT TEXT:
                 # Use Pass 3 result - it used focused prompt with larger context window
                 gl["schedule_of_classes"] = soc
                 logger.info(f"Pass 3: Updated schedule_of_classes to {len(soc)} entries (was {len(existing_soc)})")
+            return data
         except Exception as e:
             logger.warning(f"Pass 3 address extraction failed: {e}")
             return data
