@@ -19,6 +19,7 @@ from typing import Optional
 
 import openpyxl
 from openai import OpenAI
+import traceback
 
 try:
     import pdfplumber
@@ -1579,8 +1580,8 @@ class ProposalExtractor:
             logger.error(f"GPT returned invalid JSON: {e}")
             return {"error": f"Failed to parse extraction results: {e}"}
         except Exception as e:
-            logger.error(f"GPT extraction failed: {e}")
-            return {"error": f"AI extraction failed: {e}"}
+            logger.error(f"GPT extraction failed: {e}\n{traceback.format_exc()}")
+            return {"error": f"AI extraction failed: {e}\n\nTraceback:\n{traceback.format_exc()}"}
 
     @staticmethod
     def _extract_relevant_sections(combined_text: str, keywords: list, context_chars: int = 8000) -> str:
