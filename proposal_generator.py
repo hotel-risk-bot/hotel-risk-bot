@@ -27,6 +27,29 @@ from proposal_constants import (
 logger = logging.getLogger(__name__)
 
 
+
+# Module-level state normalization for use across all generator functions
+_STATE_ABBREVS = {
+    "ALABAMA": "AL", "ALASKA": "AK", "ARIZONA": "AZ", "ARKANSAS": "AR",
+    "CALIFORNIA": "CA", "COLORADO": "CO", "CONNECTICUT": "CT", "DELAWARE": "DE",
+    "FLORIDA": "FL", "GEORGIA": "GA", "HAWAII": "HI", "IDAHO": "ID",
+    "ILLINOIS": "IL", "INDIANA": "IN", "IOWA": "IA", "KANSAS": "KS",
+    "KENTUCKY": "KY", "LOUISIANA": "LA", "MAINE": "ME", "MARYLAND": "MD",
+    "MASSACHUSETTS": "MA", "MICHIGAN": "MI", "MINNESOTA": "MN", "MISSISSIPPI": "MS",
+    "MISSOURI": "MO", "MONTANA": "MT", "NEBRASKA": "NE", "NEVADA": "NV",
+    "NEW HAMPSHIRE": "NH", "NEW JERSEY": "NJ", "NEW MEXICO": "NM", "NEW YORK": "NY",
+    "NORTH CAROLINA": "NC", "NORTH DAKOTA": "ND", "OHIO": "OH", "OKLAHOMA": "OK",
+    "OREGON": "OR", "PENNSYLVANIA": "PA", "RHODE ISLAND": "RI", "SOUTH CAROLINA": "SC",
+    "SOUTH DAKOTA": "SD", "TENNESSEE": "TN", "TEXAS": "TX", "UTAH": "UT",
+    "VERMONT": "VT", "VIRGINIA": "VA", "WASHINGTON": "WA", "WEST VIRGINIA": "WV",
+    "WISCONSIN": "WI", "WYOMING": "WY", "DISTRICT OF COLUMBIA": "DC",
+}
+
+def _normalize_state(s):
+    """Normalize state name/abbreviation to 2-letter code."""
+    s = s.strip().upper()
+    return _STATE_ABBREVS.get(s, s)
+
 def _clean_carrier_name(name):
     """Strip (Non-Adm), (Non-Admitted), (Surplus Lines) etc. from carrier names."""
     if not name:
@@ -2135,7 +2158,7 @@ def generate_locations(doc, data):
     for ui_loc in data.get("locations", []):
         ui_addr_key = (_normalize_addr(ui_loc.get("address", "")) + "|" +
                       _normalize_city(ui_loc.get("city", "")) + "|" +
-                      ui__normalize_state(loc.get("state", "")))
+                      _normalize_state(loc.get("state", "")))
         ui_name = (ui_loc.get("name", "") or "").strip()
         if ui_name and ui_addr_key != "||":
             _name_overrides[ui_addr_key] = ui_name
