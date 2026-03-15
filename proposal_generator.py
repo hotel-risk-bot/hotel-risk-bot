@@ -1244,6 +1244,7 @@ def generate_information_summary(doc, data):
     ]
     if ci.get("sales_exposure_basis"):
         # Recalculate proposed sales from sum of ALL GL exposures
+        gl_cov = data.get("coverages", {}).get("general_liability", {})
         _gl_cls = gl_cov.get("schedule_of_classes", []) if isinstance(gl_cov, dict) else []
         _recalc = 0
         import re as _re_s
