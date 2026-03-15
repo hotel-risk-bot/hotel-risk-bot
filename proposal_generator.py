@@ -1626,6 +1626,27 @@ def _normalize_addr(s):
     }
     for old, new in replacements.items():
         s = s.replace(old, new)
+    # Normalize state names to abbreviations (TEXAS -> TX, LOUISIANA -> LA, etc.)
+    _state_names = {
+        "ALABAMA": "AL", "ALASKA": "AK", "ARIZONA": "AZ", "ARKANSAS": "AR",
+        "CALIFORNIA": "CA", "COLORADO": "CO", "CONNECTICUT": "CT", "DELAWARE": "DE",
+        "FLORIDA": "FL", "GEORGIA": "GA", "HAWAII": "HI", "IDAHO": "ID",
+        "ILLINOIS": "IL", "INDIANA": "IN", "IOWA": "IA", "KANSAS": "KS",
+        "KENTUCKY": "KY", "LOUISIANA": "LA", "MAINE": "ME", "MARYLAND": "MD",
+        "MASSACHUSETTS": "MA", "MICHIGAN": "MI", "MINNESOTA": "MN", "MISSISSIPPI": "MS",
+        "MISSOURI": "MO", "MONTANA": "MT", "NEBRASKA": "NE", "NEVADA": "NV",
+        "NEW HAMPSHIRE": "NH", "NEW JERSEY": "NJ", "NEW MEXICO": "NM", "NEW YORK": "NY",
+        "NORTH CAROLINA": "NC", "NORTH DAKOTA": "ND", "OHIO": "OH", "OKLAHOMA": "OK",
+        "OREGON": "OR", "PENNSYLVANIA": "PA", "RHODE ISLAND": "RI",
+        "SOUTH CAROLINA": "SC", "SOUTH DAKOTA": "SD", "TENNESSEE": "TN", "TEXAS": "TX",
+        "UTAH": "UT", "VERMONT": "VT", "VIRGINIA": "VA", "WASHINGTON": "WA",
+        "WEST VIRGINIA": "WV", "WISCONSIN": "WI", "WYOMING": "WY",
+        "DISTRICT OF COLUMBIA": "DC",
+    }
+    for state_name, state_abbr in _state_names.items():
+        s = _re_norm.sub(r"\b" + state_name + r"\b", state_abbr, s)
+    # Strip trailing country names
+    s = _re_norm.sub(r"\s+(UNITED STATES|USA|US)\s*$", "", s)
     # Strip trailing zip codes (5-digit or 5+4)
     s = _re_norm.sub(r'\s+\d{5}(-\d{4})?\s*$', '', s)
     s = " ".join(s.split())
