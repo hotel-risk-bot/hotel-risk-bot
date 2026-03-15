@@ -1833,15 +1833,9 @@ DOCUMENT TEXT:
             soc = result.get("schedule_of_classes", [])
             existing_soc = gl.get("schedule_of_classes", [])
             if soc and isinstance(soc, list) and len(soc) >= len(existing_soc):
-            # Merge: keep existing entries and add any new ones from Pass 3
-            if len(soc) > len(existing_soc):
+                # Use Pass 3 result - it used focused prompt with larger context window
                 gl["schedule_of_classes"] = soc
-                logger.info(f"Pass 3: Updated schedule_of_classes from {len(existing_soc)} to {len(soc)} entries")
-            else:
-                # Same count but potentially different/better data — use Pass 3 result
-                # since it used a focused prompt with larger context window
-                gl["schedule_of_classes"] = soc
-                logger.info(f"Pass 3: Replaced schedule_of_classes ({len(soc)} entries) with focused extraction result")
+                logger.info(f"Pass 3: Updated schedule_of_classes to {len(soc)} entries (was {len(existing_soc)})")
 
     def _pass4_sublimits_extraction(self, data: dict, combined_text: str) -> dict:
         """Pass 4: Focused extraction of property sublimits/extensions.
