@@ -1248,8 +1248,11 @@ def generate_information_summary(doc, data):
         _gl_cls = gl_cov.get("schedule_of_classes", []) if isinstance(gl_cov, dict) else []
         _recalc = 0
         import re as _re_s
+        _has_cc = any(isinstance(e, dict) and e.get("class_code") for e in _gl_cls)
         for _e in _gl_cls:
             if isinstance(_e, dict):
+                if _has_cc and not _e.get("class_code"):
+                    continue
                 _exp = _e.get("exposure", "")
                 if isinstance(_exp, (int, float)):
                     _recalc += _exp
