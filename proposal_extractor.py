@@ -1648,9 +1648,16 @@ class ProposalExtractor:
         PASS_MODEL = "gpt-4.1-mini"  # Faster model for focused extraction passes
         
         # Check which coverages need forms extraction
-        # Trigger when forms count < 5 (not just empty) — GPT often captures only 1-2 forms
-        # in the initial pass due to attention dilution across the full document
-        MIN_FORMS_THRESHOLD = 5
+        # GL/Property quotes typically have 30-60+ forms — use higher thresholds
+        # to ensure Pass 2 re-extracts when initial pass captured only a partial list
+        _forms_thresholds = {
+            "general_liability": 25,  # GL forms schedules are typically 30-60+ forms
+            "property": 15,           # Property typically 10-20+ forms
+            "umbrella": 10,           # Umbrella typically 10-25 forms
+            "umbrella_layer_2": 10,
+            "umbrella_layer_3": 10,
+            "crime": 5,
+        }
         needs_forms = []
         for key in ["property", "general_liability", "umbrella", "umbrella_layer_2", "umbrella_layer_3", "crime"]:
             cov = covs.get(key, {})
@@ -1658,9 +1665,10 @@ class ProposalExtractor:
                 continue
             existing_forms = cov.get("forms_endorsements", [])
             form_count = len(existing_forms) if isinstance(existing_forms, list) else 0
-            if form_count < MIN_FORMS_THRESHOLD:
+            threshold = _forms_thresholds.get(key, 5)
+            if form_count < threshold:
                 needs_forms.append(key)
-                logger.info(f"Pass 2: {key} has only {form_count} forms (threshold={MIN_FORMS_THRESHOLD}), will re-extract")
+                logger.info(f"Pass 2: {key} has only {form_count} forms (threshold={threshold}), will re-extract")
         
         if not needs_forms:
             logger.info("Pass 2 (forms): All coverages have sufficient forms, skipping")
@@ -1681,12 +1689,16 @@ class ProposalExtractor:
             
             # Use smart text selection to reduce token usage
             forms_keywords = [
-                "forms schedule", "endorsement schedule", "forms list",
-                "CP 00", "CG 00", "CG 21", "IL 00", "NASC", "NXLL", "CSXC",
-                "form number", "endorsement", carrier.split()[0] if carrier else "",
+                "forms schedule", "endorsement schedule", "forms list", "schedule of forms",
+                "CP 00", "CG 00", "CG 20", "CG 21", "CG 22", "CG 24", "CG 34", "CG 40",
+                "IL 00", "IL 01", "IL 09", "IL DS", "NASC", "NXLL", "CSXC",
+                "FUT ", "GLF", "EPL", "CYB", "WPA ", "EP100",
+                "EXL ", "HS XS", "HS IL", "CX 00", "CX 21",
+                "form number", "endorsement", "form name", "edition", "coverage line",
+                carrier.split()[0] if carrier else "",
                 display.lower()
             ]
-            relevant_text = self._extract_relevant_sections(combined_text, forms_keywords, context_chars=10000)
+            relevant_text = self._extract_relevant_sections(combined_text, forms_keywords, context_chars=25000)
 
             prompt = f"""Extract EVERY form number and endorsement from this insurance document for the {display} coverage issued by {carrier}.
 
