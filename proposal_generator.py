@@ -1277,8 +1277,12 @@ def generate_information_summary(doc, data):
         gl_classes = gl_cov.get("schedule_of_classes", [])
         total_sales = 0
         import re as _re
+        # Only sum class-code-based entries to avoid double-counting location entries
+        _has_class_codes = any(isinstance(e, dict) and e.get("class_code") for e in gl_classes)
         for entry in gl_classes:
             if isinstance(entry, dict):
+                if _has_class_codes and not entry.get("class_code"):
+                    continue  # Skip location-based entries when class codes exist
                 exposure = entry.get("exposure", "")
                 if isinstance(exposure, (int, float)):
                     total_sales += exposure
@@ -1784,7 +1788,7 @@ def _dedup_locations(raw_locations):
     for loc in raw_locations:
         addr_key = (_normalize_addr(loc.get("address", "")) + "|" + 
                     _normalize_city(loc.get("city", "")) + "|" +
-                    loc.get("state", "").strip().upper())
+                    _normalize_state(loc.get("state", "")))
         if addr_key not in seen_addrs:
             seen_addrs.add(addr_key)
             locations.append(loc)
@@ -1813,7 +1817,7 @@ def generate_locations(doc, data):
         for loc in sov_data["locations"]:
             addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
                        _normalize_city(loc.get("city", "")) + "|" +
-                       loc.get("state", "").strip().upper())
+                       _normalize_state(loc.get("state", "")))
             property_addr_keys.add(addr_key)
     elif "property" in coverages:
         # If no SOV, try to use property quote's schedule_of_values for property addresses
@@ -1876,7 +1880,7 @@ def generate_locations(doc, data):
                     if _fuzzy_addr_match(norm_gl_addr, loc_addr_norm):
                         addr_key = (loc_addr_norm + "|" +
                                    _normalize_city(loc.get("city", "")) + "|" +
-                                   loc.get("state", "").strip().upper())
+                                   _normalize_state(loc.get("state", "")))
                         liability_addr_keys.add(addr_key)
                         matched = True
                         break
@@ -1971,7 +1975,7 @@ def generate_locations(doc, data):
             if _fuzzy_addr_match(norm_street, loc_addr_norm):
                 resolved_key = (loc_addr_norm + "|" +
                                _normalize_city(loc.get("city", "")) + "|" +
-                               loc.get("state", "").strip().upper())
+                               _normalize_state(loc.get("state", "")))
                 liability_addr_keys.add(resolved_key)
                 break
     
@@ -2016,7 +2020,7 @@ def generate_locations(doc, data):
                 if _fuzzy_addr_match(norm_street_cg, loc_addr_norm_cg):
                     resolved_key = (loc_addr_norm_cg + "|" +
                                    _normalize_city(loc.get("city", "")) + "|" +
-                                   loc.get("state", "").strip().upper())
+                                   _normalize_state(loc.get("state", "")))
                     liability_addr_keys.add(resolved_key)
                     break
     
@@ -2128,7 +2132,7 @@ def generate_locations(doc, data):
     for ui_loc in data.get("locations", []):
         ui_addr_key = (_normalize_addr(ui_loc.get("address", "")) + "|" +
                       _normalize_city(ui_loc.get("city", "")) + "|" +
-                      ui_loc.get("state", "").strip().upper())
+                      ui__normalize_state(loc.get("state", "")))
         ui_name = (ui_loc.get("name", "") or "").strip()
         if ui_name and ui_addr_key != "||":
             _name_overrides[ui_addr_key] = ui_name
@@ -2143,13 +2147,13 @@ def generate_locations(doc, data):
                 # Still track the addr_key so we don't re-add it later
                 addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
                            _normalize_city(loc.get("city", "")) + "|" +
-                           loc.get("state", "").strip().upper())
+                           _normalize_state(loc.get("state", "")))
                 seen_addr_keys.add(addr_key)
                 continue
             
             addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
                        _normalize_city(loc.get("city", "")) + "|" +
-                       loc.get("state", "").strip().upper())
+                       _normalize_state(loc.get("state", "")))
             
             # Check for user-edited name override first
             if addr_key in _name_overrides:
@@ -2189,12 +2193,12 @@ def generate_locations(doc, data):
             # Track but skip
             addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
                        _normalize_city(loc.get("city", "")) + "|" +
-                       loc.get("state", "").strip().upper())
+                       _normalize_state(loc.get("state", "")))
             seen_addr_keys.add(addr_key)
             continue
         addr_key = (_normalize_addr(loc.get("address", "")) + "|" +
                    _normalize_city(loc.get("city", "")) + "|" +
-                   loc.get("state", "").strip().upper())
+                   _normalize_state(loc.get("state", "")))
         if addr_key not in seen_addr_keys and loc.get("address"):
             name = loc.get("description", "") or loc.get("corporate_entity", "")
             if not name or not name.strip():
@@ -2478,7 +2482,7 @@ def generate_locations(doc, data):
         for i, loc in enumerate(master_locations, 1):
             tiv_val = loc["tiv"] or 0
             total_tiv += tiv_val
-            prop_cell = CHECK if loc["on_property"] else DASH
+            prop_cell = CHECK if loc["on_property"] and (loc["tiv"] or 0) > 0 else DASH
             liab_cell = CHECK if loc["on_liability"] else DASH
             if not loc["on_property"]:
                 missing_property_rows.append(len(rows))  # current row index
@@ -2672,6 +2676,28 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
             headers = ["#", "Location", "Building", "Contents", "BI/Rents", "TIV"]
         rows = []
         total_other = 0
+        # Pre-compute building numbers: same-address buildings get N-1, N-2
+        _addr_to_idxs = {}
+        for _bi, _bl in enumerate(sov_locs):
+            _bak = _normalize_addr(_bl.get("address", "")) + "|" + _normalize_city(_bl.get("city", ""))
+            _addr_to_idxs.setdefault(_bak, []).append(_bi)
+        _bldg_label = {}
+        _loc_ctr = 0
+        _done = set()
+        for _bi in range(len(sov_locs)):
+            if _bi in _done:
+                continue
+            _bak = _normalize_addr(sov_locs[_bi].get("address", "")) + "|" + _normalize_city(sov_locs[_bi].get("city", ""))
+            grp = _addr_to_idxs[_bak]
+            _loc_ctr += 1
+            if len(grp) > 1:
+                for _si, _gi in enumerate(grp, 1):
+                    _bldg_label[_gi] = f"{_loc_ctr}-{_si}"
+                    _done.add(_gi)
+            else:
+                _bldg_label[_bi] = str(_loc_ctr)
+                _done.add(_bi)
+
         for i, loc in enumerate(sov_locs, 1):
             name = loc.get("dba") or loc.get("hotel_flag") or loc.get("corporate_name", "")
             if name and name == name.upper() and len(name) > 2:
@@ -2686,7 +2712,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
             total_other += other_val
             if has_other:
                 rows.append([
-                    str(i),
+                    _bldg_label.get(i-1, str(i)),
                     loc_label,
                     fmt_currency(loc.get("building_value", 0)),
                     fmt_currency(loc.get("contents_value", 0)),
@@ -2696,7 +2722,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                 ])
             else:
                 rows.append([
-                    str(i),
+                    _bldg_label.get(i-1, str(i)),
                     loc_label,
                     fmt_currency(loc.get("building_value", 0)),
                     fmt_currency(loc.get("contents_value", 0)),
