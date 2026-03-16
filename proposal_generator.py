@@ -1525,7 +1525,8 @@ def generate_information_summary(doc, data):
                 if bldg > 0:
                     hotel_count += 1
                 else:
-                    vacant_count += 1
+                    # $0 building could be office or unlisted - skip rather than assume vacant
+                    pass
     
     # Second: supplement from GL schedule_of_classes (only PHYSICAL location entries)
     # Skip non-location exposure classes
@@ -1660,7 +1661,7 @@ def _normalize_addr(s):
     # This handles both directions: "MOUNT" -> "MT", and ensures consistency
     word_replacements = {
         "MOUNT": "MT", "SAINT": "ST", "FORT": "FT",
-        "TOWNSHIP": "TWP", "COUNTY": "CTY",
+        "TOWNSHIP": "TWP", "COUNTY": "CTY", "INTERSTATE": "I",
     }
     words = s.split()
     words = [word_replacements.get(w, w) for w in words]
@@ -1677,6 +1678,8 @@ def _normalize_addr(s):
     }
     for old, new in replacements.items():
         s = s.replace(old, new)
+    # Normalize interstate/highway trailing directional: "I 10 S" -> "I 10", "HWY 51 N" -> "HWY 51"
+    s = _re_norm.sub(r'\b(I|HWY|SR|ROUTE)\s+(\d+)\s+[NSEW]\b', r'\1 \2', s)
     # Normalize state names to abbreviations (TEXAS -> TX, LOUISIANA -> LA, etc.)
     _state_names = {
         "ALABAMA": "AL", "ALASKA": "AK", "ARIZONA": "AZ", "ARKANSAS": "AR",
