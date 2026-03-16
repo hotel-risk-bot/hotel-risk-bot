@@ -2172,7 +2172,7 @@ def generate_locations(doc, data):
     for ui_loc in data.get("locations", []):
         ui_addr_key = (_normalize_addr(ui_loc.get("address", "")) + "|" +
                       _normalize_city(ui_loc.get("city", "")) + "|" +
-                      _normalize_state(loc.get("state", "")))
+                      _normalize_state(ui_loc.get("state", "")))
         ui_name = (ui_loc.get("name", "") or "").strip()
         if ui_name and ui_addr_key != "||":
             _name_overrides[ui_addr_key] = ui_name
