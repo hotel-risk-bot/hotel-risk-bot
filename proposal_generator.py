@@ -2524,7 +2524,7 @@ def generate_locations(doc, data):
         for i, loc in enumerate(master_locations, 1):
             tiv_val = loc["tiv"] or 0
             total_tiv += tiv_val
-            prop_cell = CHECK if loc["on_property"] and (loc["tiv"] or 0) > 0 else DASH
+            prop_cell = CHECK if loc["on_property"] and (_property_covers_all or (loc["tiv"] or 0) > 0) else DASH
             liab_cell = CHECK if loc["on_liability"] else DASH
             if not loc["on_property"]:
                 missing_property_rows.append(len(rows))  # current row index
