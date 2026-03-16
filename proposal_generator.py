@@ -1302,7 +1302,9 @@ def generate_information_summary(doc, data):
     if isinstance(gl_cov, dict):
         gl_classes = gl_cov.get("schedule_of_classes", [])
         total_sales = 0
+        liquor_exposure = 0
         import re as _re
+        _liquor_classes = {"liquor", "restaurant", "tavern", "bar", "lounge"}
         # Only sum class-code-based entries to avoid double-counting location entries
         _has_class_codes = any(isinstance(e, dict) and e.get("class_code") for e in gl_classes)
         for entry in gl_classes:
@@ -1310,18 +1312,27 @@ def generate_information_summary(doc, data):
                 if _has_class_codes and not entry.get("class_code"):
                     continue  # Skip location-based entries when class codes exist
                 exposure = entry.get("exposure", "")
+                exp_val = 0
                 if isinstance(exposure, (int, float)):
-                    total_sales += exposure
+                    exp_val = exposure
                 elif isinstance(exposure, str):
                     # Parse dollar amounts like "$8,748,612" or "8748612"
                     cleaned = _re.sub(r'[^\d.]', '', exposure.replace(',', ''))
                     if cleaned:
                         try:
-                            total_sales += float(cleaned)
+                            exp_val = float(cleaned)
                         except ValueError:
                             pass
+                total_sales += exp_val
+                # Track liquor/restaurant exposure separately
+                classification = (entry.get("classification", "") or "").lower()
+                class_code = str(entry.get("class_code", "") or "")
+                if class_code in ("16910", "58173") or any(lk in classification for lk in _liquor_classes):
+                    liquor_exposure += exp_val
         if total_sales > 0:
             rows.append(["Total Sales / Exposure", fmt_currency(total_sales)])
+        if liquor_exposure > 0:
+            rows.append(["Liquor Liability Exposure", fmt_currency(liquor_exposure)])
         # Also add total_sales from GL coverage if extracted
         elif gl_cov.get("total_sales"):
             rows.append(["Total Sales / Exposure", gl_cov["total_sales"]])
