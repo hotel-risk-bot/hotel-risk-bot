@@ -1569,7 +1569,7 @@ class ProposalExtractor:
             data = self._pass2_forms_extraction(data, combined_text)
             
             # Pass 3: Focused address extraction for GL missing designated_premises
-            data = self._pass3_address_extraction(data, combined_text)
+            data = self._pass3_address_extraction(data, combined_text, all_items)
             
             # Pass 4: Focused sublimits extraction for property missing additional_coverages
             data = self._pass4_sublimits_extraction(data, combined_text)
@@ -1743,7 +1743,7 @@ DOCUMENT TEXT:
         
         return data
 
-    def _pass3_address_extraction(self, data: dict, combined_text: str) -> dict:
+    def _pass3_address_extraction(self, data: dict, combined_text: str, all_items: list = None) -> dict:
         """Pass 3: Focused extraction of covered addresses for GL.
         Uses gpt-4.1-mini for speed since this is a focused extraction task."""
         PASS_MODEL = "gpt-4.1"      
@@ -1787,7 +1787,22 @@ DOCUMENT TEXT:
             "class code", "exposure basis", "Gross Sales", "FUT 1004", "FUT 1005",
             "location#", "Primary", "45191", "16910", "58173", "Gross Sales", "named insured", "FUT 1007"
         ]
-        relevant_text = self._extract_relevant_sections(combined_text, address_keywords, context_chars=25000)
+        # Use the FULL text of the GL file (not the truncated combined_text)
+        # The GL file in combined_text may be heavily truncated by budget allocation
+        gl_source_text = combined_text  # fallback
+        if all_items:
+            gl_keywords = ["gl", "general liability", "commercial general"]
+            for item in all_items:
+                fn_lower = item.get("filename", "").lower()
+                if any(kw in fn_lower for kw in gl_keywords):
+                    full_gl_text = item.get("header", "") + item.get("text", "")
+                    if len(full_gl_text) > len(gl_source_text) * 0.5:
+                        gl_source_text = full_gl_text
+                        gl_fn = item.get("filename", "unknown")
+                        logger.info(f"Pass 3: Using full GL file text ({len(full_gl_text)} chars) "
+                                   f"from {gl_fn!r} instead of truncated combined_text")
+                        break
+        relevant_text = self._extract_relevant_sections(gl_source_text, address_keywords, context_chars=40000)
 
         prompt = f"""From this General Liability insurance document, extract TWO things:
 
