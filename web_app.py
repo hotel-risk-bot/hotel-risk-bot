@@ -1300,6 +1300,38 @@ def _run_extraction(session_id):
                         f"first loc name='{merged_data.get('locations', [{}])[0].get('name', '')}', "
                         f"first loc tiv={merged_data.get('locations', [{}])[0].get('tiv', 0)}")
 
+        # Fallback: populate location name/tiv from GPT extraction when no SOV
+        if not session.get("sov_data"):
+            locations = merged_data.get("locations", [])
+            client_name = merged_data.get("client_info", {}).get("named_insured", "")
+            prop_data = merged_data.get("coverages", {}).get("property", {})
+            prop_tiv_str = str(prop_data.get("tiv", "") or "")
+            # Parse TIV from string like "$4,660,000" to number
+            import re as _re_tiv
+            prop_tiv = 0
+            tiv_match = _re_tiv.search(r'[\$]?([\d,]+)', prop_tiv_str)
+            if tiv_match:
+                try:
+                    prop_tiv = float(tiv_match.group(1).replace(",", ""))
+                except (ValueError, TypeError):
+                    pass
+            for loc in locations:
+                # Fill name if missing: use GPT-extracted name, corporate_entity, or client name
+                if not loc.get("name"):
+                    loc["name"] = (loc.get("corporate_entity") or client_name or "").strip()
+                # Fill tiv if missing: use GPT-extracted tiv, or property coverage tiv for single-loc
+                loc_tiv = loc.get("tiv", 0) or 0
+                if isinstance(loc_tiv, str):
+                    tiv_m = _re_tiv.search(r'[\$]?([\d,]+)', loc_tiv)
+                    loc_tiv = float(tiv_m.group(1).replace(",", "")) if tiv_m else 0
+                if not loc_tiv and len(locations) == 1 and prop_tiv > 0:
+                    loc_tiv = prop_tiv
+                loc["tiv"] = loc_tiv
+            if locations:
+                logger.info(f"No-SOV fallback: {len(locations)} locations, "
+                            f"first name='{locations[0].get('name', '')}', "
+                            f"first tiv={locations[0].get('tiv', 0)}")
+
         session["extracted_data"] = merged_data
         session["status"] = "extracted"
         _set_session(session_id, session)
