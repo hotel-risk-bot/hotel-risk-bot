@@ -728,9 +728,9 @@ def _enrich_with_sov(extracted_data, sov_data):
             loc_addr_norm = re.sub(r'[^a-z0-9]', '', loc_addr_norm)
 
             # Check if this SOV location is on the GL quote
-            is_gl_location = (loc_num in gl_location_nums) or (loc_addr_norm in gl_addresses_norm)
-            if not is_gl_location:
-                continue
+            # NOTE: Previously filtered to only GL-matching locations, but every
+            # SOV property is a named insured regardless of GL schedule extraction.
+            # is_gl_location check removed to ensure ALL portfolio entities are captured.
 
             # Get corporate entity name from SOV
             corp_name = (loc.get("corporate_name") or loc.get("client_name") or "").strip()
@@ -751,7 +751,7 @@ def _enrich_with_sov(extracted_data, sov_data):
                 })
                 seen_entities.append(corp_name)
                 logger.info(f"  SOV named insured enrichment: '{corp_name}' (DBA: '{dba_name}') "
-                           f"from GL location {loc_num} / {loc.get('address', '')}")
+                           f"from SOV location {loc_num} / {loc.get('address', '')}")
             elif corp_name:
                 logger.info(f"  SOV named insured SKIPPED (duplicate): '{corp_name}' already exists in named insureds")
 
