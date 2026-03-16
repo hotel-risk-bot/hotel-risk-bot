@@ -1556,6 +1556,7 @@ def _build_review_summary(data):
         "epli": "EPLI",
         "cyber": "Cyber",
         "flood": "Flood",
+        "wind": "Wind / Named Storm",
         "earthquake": "Earthquake",
         "enviro_pack": "Enviro Pack",
         "terrorism": "Terrorism / TRIA",
