@@ -690,6 +690,7 @@ def generate_premium_summary(doc, data):
         "workers_compensation_alt_1": "Workers Comp (Option 2)",
         "commercial_auto": "Commercial Auto",
         "flood": "Flood",
+        "wind": "Wind / Named Storm",
         "epli": "EPLI",
         "cyber": "Cyber",
         "cyber_alt_1": "Cyber (Option 2)",
@@ -971,6 +972,7 @@ def generate_subjectivities(doc, data):
         "epli": "Employment Practices Liability",
         "crime": "Crime",
         "flood": "Flood",
+        "wind": "Wind / Named Storm",
         "inland_marine": "Inland Marine",
         "equipment_breakdown": "Equipment Breakdown",
         "liquor_liability": "Liquor Liability",
@@ -3632,6 +3634,7 @@ def generate_carrier_rating(doc, data):
         "epli": "Employment Practices Liability",
         "crime": "Crime",
         "flood": "Flood",
+        "wind": "Wind / Named Storm",
         "inland_marine": "Inland Marine",
         "equipment_breakdown": "Equipment Breakdown",
         "liquor_liability": "Liquor Liability",
@@ -4078,6 +4081,8 @@ def generate_proposal(data: dict, output_path: str) -> str:
         generate_coverage_section(doc, data, "epli", "Employment Practices Liability (EPLI) Coverage")
     if "flood" in coverages:
         generate_coverage_section(doc, data, "flood", "Flood Coverage")
+    if "wind" in coverages:
+        generate_coverage_section(doc, data, "wind", "Wind / Named Storm Coverage")
     if "terrorism" in coverages:
         generate_coverage_section(doc, data, "terrorism", "Terrorism / TRIA Coverage")
     if "crime" in coverages:
