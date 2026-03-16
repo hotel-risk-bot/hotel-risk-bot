@@ -742,7 +742,13 @@ def _enrich_with_sov(extracted_data, sov_data):
                     corp_name = parts[0].strip()
                     dba_name = parts[1].strip()
 
-            if corp_name and not _is_duplicate_named_insured(corp_name, existing_named_names) \
+            # Only add entities that look like real corporate named insureds (LLC, Inc, Corp, etc.)
+            # This prevents adding contractors, vendors, or property managers from SOV
+            _corp_suffixes = ("llc", "inc", "corp", "ltd", "lp", "llp", "l.l.c", "l.p.", "company", "co.",
+                              "hospitality", "hotel", "management", "properties", "enterprises", "group")
+            is_corporate = any(sfx in corp_name.lower() for sfx in _corp_suffixes)
+            if corp_name and is_corporate \
+               and not _is_duplicate_named_insured(corp_name, existing_named_names) \
                and not _is_duplicate_named_insured(corp_name, seen_entities):
                 new_named_insureds.append({
                     "name": corp_name,
