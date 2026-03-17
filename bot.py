@@ -23,6 +23,19 @@ import tempfile
 import asyncio
 from datetime import datetime, date
 
+# ── Version stamp (bump to confirm deployment) ────────────────────────────
+BOT_VERSION = "2026-03-17-v2"
+
+# ── Client name aliases ──────────────────────────────────────────────────
+# Maps common alternate names / management company names to the name stored
+# in Airtable so that /report and /consulting work regardless of how the
+# user phrases the client name.
+CLIENT_ALIASES = {
+    "pride management": "pride hotels",
+    "pride hospitality": "pride hotels",
+    "pride group": "pride hotels",
+}
+
 import requests as http_requests
 import unicodedata
 from telegram import Update, InputFile
@@ -798,6 +811,11 @@ def parse_consulting_args(raw_args: list) -> dict:
     if not client_name:
         client_name = " ".join(raw_args)
 
+    # Apply client name aliases (e.g. 'pride management' -> 'pride hotels')
+    alias_key = client_name.lower().strip()
+    if alias_key in CLIENT_ALIASES:
+        client_name = CLIENT_ALIASES[alias_key]
+
     return {
         "client_name": client_name,
         "status": status,
@@ -1100,6 +1118,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start_command(update, context)
+
+
+async def version_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /version - show current bot version."""
+    await update.message.reply_text(
+        f"Bot version: {BOT_VERSION}\n"
+        f"OR-word fallback: enabled\n"
+        f"Client aliases: {len(CLIENT_ALIASES)} entries"
+    )
 
 
 async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2238,6 +2265,7 @@ def main():
     app.add_handler(CommandHandler("add", add_command))
     app.add_handler(CommandHandler("consulting", consulting_command))
     app.add_handler(CommandHandler("report", report_command))
+    app.add_handler(CommandHandler("version", version_command))
     app.add_handler(CommandHandler("sales", sales_command))
 
     # New task management commands
