@@ -253,19 +253,47 @@ def airtable_create_record(base_id: str, table_id: str, fields: dict) -> dict | 
 
 # Ã¢ÂÂÃ¢ÂÂ Consulting Query Functions Ã¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂÃ¢ÂÂ
 
+def _build_name_filter(words: list, use_and: bool = True) -> str:
+    """Build an Airtable name filter from a list of words.
+
+    use_and=True  → all words must appear (AND across words, OR across fields)
+    use_and=False → any word must appear (OR across all words and fields)
+    """
+    word_conditions = []
+    for word in words:
+        safe_word = word.replace('"', '\\"')
+        per_word = [
+            f'FIND(LOWER("{safe_word}"), LOWER(ARRAYJOIN({{Client Name}}, ",")))',
+            f'FIND(LOWER("{safe_word}"), LOWER(ARRAYJOIN({{Corporate Name}}, ",")))',
+            f'FIND(LOWER("{safe_word}"), LOWER(ARRAYJOIN({{DBA (from Location)}}, ",")))',
+            f'FIND(LOWER("{safe_word}"), LOWER(ARRAYJOIN({{Companies}}, ",")))',
+        ]
+        word_conditions.append(f'OR({", ".join(per_word)})')
+
+    if len(word_conditions) == 1:
+        return word_conditions[0]
+    if use_and:
+        return f'AND({", ".join(word_conditions)})'
+    # OR mode: flatten all per-word conditions into a single OR
+    all_conditions = []
+    for word in words:
+        safe_word = word.replace('"', '\\"')
+        all_conditions += [
+            f'FIND(LOWER("{safe_word}"), LOWER(ARRAYJOIN({{Client Name}}, ",")))',
+            f'FIND(LOWER("{safe_word}"), LOWER(ARRAYJOIN({{Corporate Name}}, ",")))',
+            f'FIND(LOWER("{safe_word}"), LOWER(ARRAYJOIN({{DBA (from Location)}}, ",")))',
+            f'FIND(LOWER("{safe_word}"), LOWER(ARRAYJOIN({{Companies}}, ",")))',
+        ]
+    return f'OR({", ".join(all_conditions)})'
+
+
 def build_filter_formula(client_name: str, status: str = None,
                          min_incurred: float = None, max_incurred: float = None,
-                         claim_type: str = None, min_policy_year: int = None) -> str:
+                         claim_type: str = None, min_policy_year: int = None,
+                         use_and_words: bool = True) -> str:
     """Build an Airtable filterByFormula string for Incidents Claims."""
-    safe_name = client_name.replace('"', '\\"')
-
-    name_conditions = [
-        f'FIND(LOWER("{safe_name}"), LOWER(ARRAYJOIN({{Client Name}}, ",")))',
-        f'FIND(LOWER("{safe_name}"), LOWER(ARRAYJOIN({{Corporate Name}}, ",")))',
-        f'FIND(LOWER("{safe_name}"), LOWER(ARRAYJOIN({{DBA (from Location)}}, ",")))',
-        f'FIND(LOWER("{safe_name}"), LOWER(ARRAYJOIN({{Companies}}, ",")))',
-    ]
-    name_filter = f'OR({", ".join(name_conditions)})'
+    words = [w for w in client_name.split() if w] or [client_name]
+    name_filter = _build_name_filter(words, use_and=use_and_words)
 
     conditions = [name_filter]
 
@@ -292,15 +320,32 @@ def build_filter_formula(client_name: str, status: str = None,
 def search_incidents(client_name: str, status: str = None,
                      min_incurred: float = None, max_incurred: float = None,
                      claim_type: str = None, min_policy_year: int = None) -> list:
-    """Search Incidents Claims table with full filter support."""
+    """Search Incidents Claims table with full filter support.
+
+    Strategy: try AND-word matching first (all words must appear). If that
+    returns no results and the query has multiple words, fall back to OR-word
+    matching (any word must appear). This lets 'pride management' find
+    'Pride Hotels' even though 'management' is not in any name field.
+    """
     formula = build_filter_formula(client_name, status, min_incurred, max_incurred,
-                                   claim_type, min_policy_year)
-    logger.info(f"Airtable filter formula: {formula}")
+                                   claim_type, min_policy_year, use_and_words=True)
+    logger.info(f"Airtable filter formula (AND-words): {formula}")
 
     records = airtable_list_records(
         CONSULTING_BASE_ID, INCIDENTS_TABLE_ID,
         filter_formula=formula, max_records=100,
     )
+
+    # Fallback: if no results and query has multiple words, try OR-word matching
+    words = [w for w in client_name.split() if w]
+    if not records and len(words) > 1:
+        formula_or = build_filter_formula(client_name, status, min_incurred, max_incurred,
+                                          claim_type, min_policy_year, use_and_words=False)
+        logger.info(f"Airtable filter formula (OR-words fallback): {formula_or}")
+        records = airtable_list_records(
+            CONSULTING_BASE_ID, INCIDENTS_TABLE_ID,
+            filter_formula=formula_or, max_records=100,
+        )
 
     if not records:
         return []
