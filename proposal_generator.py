@@ -2897,6 +2897,35 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     
     # Deductibles (Property)
     deductibles = cov.get("deductibles", [])
+    # Filter out deductibles for perils that are NOT COVERED in additional_coverages/sublimits
+    if deductibles and coverage_key == "property":
+        _addl_covs = cov.get("additional_coverages", [])
+        _not_covered_perils = set()
+        for ac in _addl_covs:
+            if isinstance(ac, dict):
+                _ac_limit = (str(ac.get("limit", "")) or "").upper()
+                if "NOT COVERED" in _ac_limit or _ac_limit == "EXCLUDED":
+                    _ac_desc = (ac.get("description", "") or "").lower()
+                    _not_covered_perils.add(_ac_desc)
+        if _not_covered_perils:
+            _filtered = []
+            for ded in deductibles:
+                if isinstance(ded, dict):
+                    _ded_desc = (ded.get("description", "") or ded.get("type", "") or "").lower()
+                    # Check if this deductible's peril matches any NOT COVERED sublimit
+                    _is_excluded = False
+                    for ncp in _not_covered_perils:
+                        # Match "named storm" ded to "named windstorm" sublimit, etc.
+                        if (ncp in _ded_desc or _ded_desc in ncp or
+                            ("named" in ncp and "wind" in ncp and "named" in _ded_desc and "storm" in _ded_desc) or
+                            ("named" in _ded_desc and "storm" in _ded_desc and "named" in ncp and "wind" in ncp)):
+                            _is_excluded = True
+                            break
+                    if not _is_excluded:
+                        _filtered.append(ded)
+                else:
+                    _filtered.append(ded)
+            deductibles = _filtered
     if deductibles:
         add_subsection_header(doc, "Deductibles")
         headers = ["Peril", "Deductible"]
