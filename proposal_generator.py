@@ -1522,6 +1522,7 @@ def generate_information_summary(doc, data):
                 (loc.get("hotel_flag", "") or "").lower(),
                 (loc.get("occupancy", "") or "").lower(),
                 (loc.get("dba", "") or "").lower(),
+                (loc.get("name", "") or "").lower(),
             ]
             combined_desc = " ".join(all_desc_parts)
             if any(kw in combined_desc for kw in _hotel_keywords):
@@ -1538,8 +1539,8 @@ def generate_information_summary(doc, data):
                 if bldg > 0:
                     hotel_count += 1
                 else:
-                    # $0 building could be office or unlisted - skip rather than assume vacant
-                    pass
+                    # In hotel program, default physical locations to hotel
+                    hotel_count += 1
     
     # Second: supplement from GL schedule_of_classes (only PHYSICAL location entries)
     # Skip non-location exposure classes
@@ -3104,7 +3105,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     # Forms & Endorsements
     forms = cov.get("forms_endorsements", [])
     # Critical coverages MUST show forms — add placeholder if empty
-    _critical_form_coverages = {"general_liability", "crime", "umbrella", "umbrella_layer_2",
+    _critical_form_coverages = {"property", "general_liability", "crime", "umbrella", "umbrella_layer_2",
                                  "umbrella_layer_3", "umbrella_layer_4", "workers_comp",
                                  "workers_compensation", "commercial_auto"}
     if forms:
