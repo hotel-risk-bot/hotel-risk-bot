@@ -1782,7 +1782,7 @@ def _fuzzy_addr_match(addr1, addr2):
         house1 = int(num1.group(1))
         house2 = int(num2.group(1))
         # Same house number (or within 20) and street names match
-        if abs(house1 - house2) <= 20:
+        if abs(house1 - house2) <= 5:
             if street1 == street2:
                 return True
             # Word-level match with edit distance tolerance
@@ -2083,7 +2083,7 @@ def generate_locations(doc, data):
     # assume ALL property locations are GL-covered. This handles renewals where the
     # GL quote says "See attached for Schedule of Locations" but the attachment isn't in the PDF.
     _gl_has_sparse_data = (len(gl_classes) + len(designated_premises)) < 3
-    if _gl_has_sparse_data and property_addr_keys and sov_data and sov_data.get("locations"):
+    if _gl_carrier and _gl_has_sparse_data and property_addr_keys and sov_data and sov_data.get("locations"):
         logger.info(f"GL has sparse location data ({len(gl_classes)} classes, {len(designated_premises)} designated_premises) "
                    f"— assuming all {len(property_addr_keys)} property locations are GL-covered")
         liability_addr_keys.update(property_addr_keys)
