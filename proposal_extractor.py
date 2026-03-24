@@ -1569,57 +1569,57 @@ class ProposalExtractor:
                     if isinstance(cov, dict):
                         logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, premium={cov.get('premium', 0)}, total={cov.get('total_premium', 0)}")
 
-        # ===== UMBRELLA/EXCESS VALIDATION =====
-        # Check if combined_text contains excess liability content but no umbrella was extracted
-        _has_umbrella = any(k.startswith("umbrella") for k in covs.keys()) if isinstance(covs, dict) else False
-        if not _has_umbrella:
-            _text_lower = combined_text.lower()
-            _excess_indicators = [
-                "excess liability", "commercial excess liability",
-                "xs liability", "excess liability quote",
-                "excess liability quotation", "excess of underlying",
-                "schedule of underlying insurance",
-                "commercial excess liability quote"
-            ]
-            _has_excess_content = any(ind in _text_lower for ind in _excess_indicators)
-            if _has_excess_content:
-                logger.warning("UMBRELLA MISSING: combined_text contains excess liability content but no umbrella coverage was extracted. Attempting targeted re-extraction...")
-                try:
-                    # Extract just the excess-related sections
-                    _xs_keywords = ["excess liability", "commercial excess", "underlying insurance",
-                                    "excess premium", "total excess", "each loss event",
-                                    "policy aggregate", "xs quote", "excess quotation"]
-                    _xs_text = self._extract_relevant_sections(combined_text, _xs_keywords, context_chars=15000)
-                    if len(_xs_text) > 500:
-                        _xs_prompt = f"""The main extraction MISSED an Excess Liability / Umbrella coverage that is clearly present in the documents. 
-Extract ONLY the umbrella/excess liability coverage from the text below. Return a JSON object with a single key "umbrella" containing the full coverage data (carrier, premium, total_premium, limits, underlying_insurance, forms_endorsements, etc).
-If the quote shows multiple limit options in columns, extract the HIGHEST limit option.
-The coverage type on this document says "Excess Liability" or "Commercial Excess Liability" - this maps to the "umbrella" key, NOT "general_liability" or "excess_property".
+            # ===== UMBRELLA/EXCESS VALIDATION =====
+            # Check if combined_text contains excess liability content but no umbrella was extracted
+            _has_umbrella = any(k.startswith("umbrella") for k in covs.keys()) if isinstance(covs, dict) else False
+            if not _has_umbrella:
+                _text_lower = combined_text.lower()
+                _excess_indicators = [
+                    "excess liability", "commercial excess liability",
+                    "xs liability", "excess liability quote",
+                    "excess liability quotation", "excess of underlying",
+                    "schedule of underlying insurance",
+                    "commercial excess liability quote"
+                ]
+                _has_excess_content = any(ind in _text_lower for ind in _excess_indicators)
+                if _has_excess_content:
+                    logger.warning("UMBRELLA MISSING: combined_text contains excess liability content but no umbrella coverage was extracted. Attempting targeted re-extraction...")
+                    try:
+                        # Extract just the excess-related sections
+                        _xs_keywords = ["excess liability", "commercial excess", "underlying insurance",
+                                        "excess premium", "total excess", "each loss event",
+                                        "policy aggregate", "xs quote", "excess quotation"]
+                        _xs_text = self._extract_relevant_sections(combined_text, _xs_keywords, context_chars=15000)
+                        if len(_xs_text) > 500:
+                            _xs_prompt = f"""The main extraction MISSED an Excess Liability / Umbrella coverage that is clearly present in the documents. 
+    Extract ONLY the umbrella/excess liability coverage from the text below. Return a JSON object with a single key "umbrella" containing the full coverage data (carrier, premium, total_premium, limits, underlying_insurance, forms_endorsements, etc).
+    If the quote shows multiple limit options in columns, extract the HIGHEST limit option.
+    The coverage type on this document says "Excess Liability" or "Commercial Excess Liability" - this maps to the "umbrella" key, NOT "general_liability" or "excess_property".
 
-TEXT:
-{_xs_text}"""
-                        _xs_response = self.client.chat.completions.create(
-                            model=GPT_MODEL,
-                            messages=[
-                                {"role": "system", "content": "You are an insurance data extraction specialist. Extract the umbrella/excess liability coverage data and return valid JSON."},
-                                {"role": "user", "content": _xs_prompt},
-                            ],
-                            response_format={"type": "json_object"},
-                            temperature=0.1,
-                            max_tokens=8000,
-                        )
-                        _xs_data = json.loads(_xs_response.choices[0].message.content)
-                        if "umbrella" in _xs_data and isinstance(_xs_data["umbrella"], dict):
-                            _umb = _xs_data["umbrella"]
-                            if _umb.get("carrier") or _umb.get("premium"):
-                                data["coverages"]["umbrella"] = _umb
-                                logger.info(f"UMBRELLA RECOVERED: carrier={_umb.get('carrier', 'N/A')}, premium={_umb.get('premium', 0)}, total={_umb.get('total_premium', 0)}")
+    TEXT:
+    {_xs_text}"""
+                            _xs_response = _get_openai_client().chat.completions.create(
+                                model=GPT_MODEL,
+                                messages=[
+                                    {"role": "system", "content": "You are an insurance data extraction specialist. Extract the umbrella/excess liability coverage data and return valid JSON."},
+                                    {"role": "user", "content": _xs_prompt},
+                                ],
+                                response_format={"type": "json_object"},
+                                temperature=0.1,
+                                max_tokens=8000,
+                            )
+                            _xs_data = json.loads(_xs_response.choices[0].message.content)
+                            if "umbrella" in _xs_data and isinstance(_xs_data["umbrella"], dict):
+                                _umb = _xs_data["umbrella"]
+                                if _umb.get("carrier") or _umb.get("premium"):
+                                    data["coverages"]["umbrella"] = _umb
+                                    logger.info(f"UMBRELLA RECOVERED: carrier={_umb.get('carrier', 'N/A')}, premium={_umb.get('premium', 0)}, total={_umb.get('total_premium', 0)}")
+                                else:
+                                    logger.warning("Umbrella re-extraction returned empty data")
                             else:
-                                logger.warning("Umbrella re-extraction returned empty data")
-                        else:
-                            logger.warning(f"Umbrella re-extraction did not return umbrella key. Keys: {list(_xs_data.keys())}")
-                except Exception as e:
-                    logger.error(f"Umbrella re-extraction failed: {e}")
+                                logger.warning(f"Umbrella re-extraction did not return umbrella key. Keys: {list(_xs_data.keys())}")
+                    except Exception as e:
+                        logger.error(f"Umbrella re-extraction failed: {e}")
 
             # ===== MULTI-PASS EXTRACTION =====
             # Pass 2: Focused forms & endorsements extraction for coverages missing them
