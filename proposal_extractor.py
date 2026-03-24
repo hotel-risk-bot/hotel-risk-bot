@@ -922,6 +922,8 @@ IMPORTANT:
 - COINSURANCE & VALUATION: For ALL property layers (primary and excess), extract the coinsurance percentage for Building, Business Income, and BPP. Also extract the Monthly Limitation for Business Income (e.g., "1/4 Monthly", "1/3 Monthly"). This is a CRITICAL field that must ALWAYS be included in property quotes. Look for "Coinsurance", "Monthly Limitation", "Coinsurance & Valuation" sections. If coinsurance is waived or 0%, still include it as "0%". Also extract the valuation basis (Replacement Cost, Actual Cash Value, Agreed Value).
 - UMBRELLA/EXCESS LAYERS: When multiple umbrella/excess liability quotes are provided (e.g., separate PDFs for different layers), extract EACH layer as a separate coverage entry. Use "umbrella" for the primary excess layer, "umbrella_layer_2" for the second excess layer ($XM xs $XM), and "umbrella_layer_3" for the third excess layer ($XM xs $XM). Each layer has its own carrier, premium, limits, forms, and subjectivities. The tower_structure field should show that layer's position. Look for "Controlling Underlying" or "Schedule of Underlying" to determine the layer position. If a quote says it sits excess of another carrier's layer, it is a higher layer.
 - CRITICAL DISTINCTION - EXCESS LIABILITY vs EXCESS PROPERTY: "Excess Liability" is NOT the same as "Excess Property". If a quote says "Excess Liability", "Excess Liability Quotation", or "XS Liability" and its Schedule of Underlying Insurance references an Umbrella or General Liability policy, it is an UMBRELLA/EXCESS LIABILITY layer — use "umbrella" or "umbrella_layer_2" or "umbrella_layer_3". Do NOT classify it as "property" or "excess_property". Excess Property layers sit excess of a primary PROPERTY policy and cover physical damage to buildings/contents. Excess Liability layers sit excess of an Umbrella or GL policy and cover bodily injury/property damage liability claims. If the underlying schedule shows an umbrella or GL carrier, it is ALWAYS an excess liability layer, never excess property.
+- SAME CARRIER FOR GL AND EXCESS: When the SAME carrier (e.g., Admiral Insurance Company) provides BOTH a General Liability quote AND an Excess Liability/Umbrella quote in separate PDF files, these MUST be extracted as SEPARATE coverage entries. Extract the GL quote under "general_liability" and the Excess Liability quote under "umbrella". Do NOT merge or combine them into one entry just because they share a carrier name. Look at the coverage type stated on each document ("Coverage: Excess Liability" vs "Coverage: General Liability") and the document title ("Commercial Excess Liability Quote" vs "Commercial General Liability Quote") to distinguish them.
+- MULTI-OPTION EXCESS QUOTES: Some excess liability quotes present multiple limit options in columns (e.g., $1M/$2M/$3M Each Loss Event with different premiums for each). Extract the HIGHEST limit option as the primary "umbrella" entry. If the user needs a different option, they can adjust in the editor.
 - COMPETING QUOTES (MULTIPLE CARRIERS FOR SAME COVERAGE): When documents contain quotes from DIFFERENT carriers for the SAME line of coverage (e.g., Starr Property quote AND Markel Property quote in separate PDFs), extract EACH as a separate coverage entry. Use the base key for the first (e.g., "property") and "_alt_1", "_alt_2" suffixes for additional competing quotes (e.g., "property_alt_1", "general_liability_alt_1"). Do NOT discard any carrier's quote. Do NOT confuse competing quotes with layered programs — layered programs have excess/xs relationships, while competing quotes are independent quotes at the same attachment point from different carriers.
 
 DOCUMENT TEXT:
@@ -1566,6 +1568,58 @@ class ProposalExtractor:
                 for key, cov in covs.items():
                     if isinstance(cov, dict):
                         logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, premium={cov.get('premium', 0)}, total={cov.get('total_premium', 0)}")
+
+        # ===== UMBRELLA/EXCESS VALIDATION =====
+        # Check if combined_text contains excess liability content but no umbrella was extracted
+        _has_umbrella = any(k.startswith("umbrella") for k in covs.keys()) if isinstance(covs, dict) else False
+        if not _has_umbrella:
+            _text_lower = combined_text.lower()
+            _excess_indicators = [
+                "excess liability", "commercial excess liability",
+                "xs liability", "excess liability quote",
+                "excess liability quotation", "excess of underlying",
+                "schedule of underlying insurance",
+                "commercial excess liability quote"
+            ]
+            _has_excess_content = any(ind in _text_lower for ind in _excess_indicators)
+            if _has_excess_content:
+                logger.warning("UMBRELLA MISSING: combined_text contains excess liability content but no umbrella coverage was extracted. Attempting targeted re-extraction...")
+                try:
+                    # Extract just the excess-related sections
+                    _xs_keywords = ["excess liability", "commercial excess", "underlying insurance",
+                                    "excess premium", "total excess", "each loss event",
+                                    "policy aggregate", "xs quote", "excess quotation"]
+                    _xs_text = self._extract_relevant_sections(combined_text, _xs_keywords, context_chars=15000)
+                    if len(_xs_text) > 500:
+                        _xs_prompt = f"""The main extraction MISSED an Excess Liability / Umbrella coverage that is clearly present in the documents. 
+Extract ONLY the umbrella/excess liability coverage from the text below. Return a JSON object with a single key "umbrella" containing the full coverage data (carrier, premium, total_premium, limits, underlying_insurance, forms_endorsements, etc).
+If the quote shows multiple limit options in columns, extract the HIGHEST limit option.
+The coverage type on this document says "Excess Liability" or "Commercial Excess Liability" - this maps to the "umbrella" key, NOT "general_liability" or "excess_property".
+
+TEXT:
+{_xs_text}"""
+                        _xs_response = self.client.chat.completions.create(
+                            model=GPT_MODEL,
+                            messages=[
+                                {"role": "system", "content": "You are an insurance data extraction specialist. Extract the umbrella/excess liability coverage data and return valid JSON."},
+                                {"role": "user", "content": _xs_prompt},
+                            ],
+                            response_format={"type": "json_object"},
+                            temperature=0.1,
+                            max_tokens=8000,
+                        )
+                        _xs_data = json.loads(_xs_response.choices[0].message.content)
+                        if "umbrella" in _xs_data and isinstance(_xs_data["umbrella"], dict):
+                            _umb = _xs_data["umbrella"]
+                            if _umb.get("carrier") or _umb.get("premium"):
+                                data["coverages"]["umbrella"] = _umb
+                                logger.info(f"UMBRELLA RECOVERED: carrier={_umb.get('carrier', 'N/A')}, premium={_umb.get('premium', 0)}, total={_umb.get('total_premium', 0)}")
+                            else:
+                                logger.warning("Umbrella re-extraction returned empty data")
+                        else:
+                            logger.warning(f"Umbrella re-extraction did not return umbrella key. Keys: {list(_xs_data.keys())}")
+                except Exception as e:
+                    logger.error(f"Umbrella re-extraction failed: {e}")
 
             # ===== MULTI-PASS EXTRACTION =====
             # Pass 2: Focused forms & endorsements extraction for coverages missing them
