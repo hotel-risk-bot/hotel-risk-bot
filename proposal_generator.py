@@ -1331,13 +1331,21 @@ def generate_information_summary(doc, data):
                 class_code = str(entry.get("class_code", "") or "")
                 if class_code in ("16910", "58173") or any(lk in classification for lk in _liquor_classes):
                     liquor_exposure += exp_val
-        if total_sales > 0:
+        # Prioritize total_sales from GL coverage (authoritative) over summed per-class exposures
+        _gl_total_sales = gl_cov.get("total_sales", "") if isinstance(gl_cov, dict) else ""
+        if _gl_total_sales:
+            # Parse the total_sales value
+            _ts_val = _parse_currency(str(_gl_total_sales)) if _gl_total_sales else 0
+            if _ts_val and _ts_val > 0:
+                rows.append(["Total Sales / Exposure", fmt_currency(_ts_val)])
+            elif isinstance(_gl_total_sales, str) and _gl_total_sales.strip():
+                rows.append(["Total Sales / Exposure", _gl_total_sales])
+            elif total_sales > 0:
+                rows.append(["Total Sales / Exposure", fmt_currency(total_sales)])
+        elif total_sales > 0:
             rows.append(["Total Sales / Exposure", fmt_currency(total_sales)])
         if liquor_exposure > 0:
             rows.append(["Liquor Liability Exposure", fmt_currency(liquor_exposure)])
-        # Also add total_sales from GL coverage if extracted
-        elif gl_cov.get("total_sales"):
-            rows.append(["Total Sales / Exposure", gl_cov["total_sales"]])
     
     # Add number of locations with property/liability breakdown
     # Count UNIQUE addresses using composite key (addr|city|state) — 1 address with 4 buildings = 1 location
