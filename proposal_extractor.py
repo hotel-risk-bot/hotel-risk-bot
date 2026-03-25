@@ -1859,32 +1859,31 @@ DOCUMENT TEXT:
                 )
                 result = json.loads(response.choices[0].message.content)
                 forms = result.get("forms_endorsements", [])
-
-                    # ---- FORMS PREFIX VALIDATION ----
-                    # Reject property-only forms extracted for non-property coverages
-                    if forms and cov_key in ("general_liability", "umbrella", "umbrella_layer_2", "umbrella_layer_3"):
-                        _prop_pfx = ("CP ", "MS PR", "MS DEC", "MS EBC", "HSIC SP", "HSIC SOS", "MS GEN")
-                        _gl_pfx = ("CG ", "AD ", "AI ", "DE ", "JA ", "NXLL", "NASC", "GLF", "GL ")
-                        _umb_pfx = ("CSXC", "EXL ", "HS XS", "FUT ", "XS ", "NXLL", "CX ")
-                        prop_ct = sum(1 for f in forms if isinstance(f, dict) and
-                                     str(f.get("form_number", "")).upper().startswith(_prop_pfx))
-                        rel_ct = 0
-                        if cov_key == "general_liability":
-                            rel_ct = sum(1 for f in forms if isinstance(f, dict) and
-                                        str(f.get("form_number", "")).upper().startswith(_gl_pfx))
-                        else:
-                            rel_ct = sum(1 for f in forms if isinstance(f, dict) and
-                                        str(f.get("form_number", "")).upper().startswith(_umb_pfx + _gl_pfx))
-                        if prop_ct > 5 and rel_ct < 3:
-                            logger.warning(f"Pass 2: REJECTED {len(forms)} forms for {cov_key} - "
-                                          f"{prop_ct} property prefixes vs {rel_ct} relevant. "
-                                          f"These are property forms incorrectly extracted for {cov_key}.")
-                            forms = []
-                        elif prop_ct > 0 and rel_ct > 0:
-                            filtered = [f for f in forms if isinstance(f, dict) and
-                                       not str(f.get("form_number", "")).upper().startswith(_prop_pfx)]
-                            logger.info(f"Pass 2: Filtered {len(forms) - len(filtered)} property forms from {cov_key}, keeping {len(filtered)}")
-                            forms = filtered
+                # ---- FORMS PREFIX VALIDATION ----
+                # Reject property-only forms extracted for non-property coverages
+                if forms and cov_key in ("general_liability", "umbrella", "umbrella_layer_2", "umbrella_layer_3"):
+                    _prop_pfx = ("CP ", "MS PR", "MS DEC", "MS EBC", "HSIC SP", "HSIC SOS", "MS GEN")
+                    _gl_pfx = ("CG ", "AD ", "AI ", "DE ", "JA ", "NXLL", "NASC", "GLF", "GL ")
+                    _umb_pfx = ("CSXC", "EXL ", "HS XS", "FUT ", "XS ", "NXLL", "CX ")
+                    prop_ct = sum(1 for f in forms if isinstance(f, dict) and
+                                 str(f.get("form_number", "")).upper().startswith(_prop_pfx))
+                    rel_ct = 0
+                    if cov_key == "general_liability":
+                        rel_ct = sum(1 for f in forms if isinstance(f, dict) and
+                                    str(f.get("form_number", "")).upper().startswith(_gl_pfx))
+                    else:
+                        rel_ct = sum(1 for f in forms if isinstance(f, dict) and
+                                    str(f.get("form_number", "")).upper().startswith(_umb_pfx + _gl_pfx))
+                    if prop_ct > 5 and rel_ct < 3:
+                        logger.warning(f"Pass 2: REJECTED {len(forms)} forms for {cov_key} - "
+                                      f"{prop_ct} property prefixes vs {rel_ct} relevant. "
+                                      f"These are property forms incorrectly extracted for {cov_key}.")
+                        forms = []
+                    elif prop_ct > 0 and rel_ct > 0:
+                        filtered = [f for f in forms if isinstance(f, dict) and
+                                   not str(f.get("form_number", "")).upper().startswith(_prop_pfx)]
+                        logger.info(f"Pass 2: Filtered {len(forms) - len(filtered)} property forms from {cov_key}, keeping {len(filtered)}")
+                        forms = filtered
                 existing_count = len(cov.get("forms_endorsements", []) or [])
                 if forms and isinstance(forms, list) and len(forms) > existing_count:
                     cov["forms_endorsements"] = forms
