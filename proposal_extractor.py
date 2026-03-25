@@ -261,6 +261,49 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 100000) -> str:
                         "chars": len(page_text)
                     })
 
+        # --- OCR fallback for image-only pages (scanned/no text) ---
+        if page_texts and len(page_texts) < total_pages and HAS_PDF2IMAGE:
+            text_pages = {p["page"] for p in page_texts}
+            missing_pages = [p for p in range(1, total_pages + 1) if p not in text_pages]
+            if missing_pages and len(missing_pages) <= 10:
+                logger.info(f"OCR: {len(missing_pages)} image-only pages detected: {missing_pages}")
+                try:
+                    import base64
+                    from io import BytesIO
+                    for pg in missing_pages:
+                        try:
+                            imgs = convert_from_path(pdf_path, dpi=200, first_page=pg, last_page=pg)
+                            if not imgs:
+                                continue
+                            buffered = BytesIO()
+                            imgs[0].save(buffered, format="JPEG", quality=85)
+                            img_b64 = base64.b64encode(buffered.getvalue()).decode()
+                            ocr_resp = _get_openai_client().chat.completions.create(
+                                model="gpt-4.1-mini",
+                                messages=[
+                                    {"role": "system", "content": "Extract ALL text from this insurance document page. Include every number, limit, form number, premium, rate, address, and coverage detail exactly as shown. Preserve layout structure."},
+                                    {"role": "user", "content": [
+                                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}", "detail": "high"}}
+                                    ]}
+                                ],
+                                temperature=0.0,
+                                max_tokens=8000
+                            )
+                            ocr_text = ocr_resp.choices[0].message.content.strip()
+                            if ocr_text and len(ocr_text) > 50:
+                                score = _score_page(ocr_text)
+                                page_texts.append({
+                                    "page": pg,
+                                    "text": ocr_text,
+                                    "score": score + 20,
+                                    "chars": len(ocr_text)
+                                })
+                                logger.info(f"OCR page {pg}: {len(ocr_text)} chars, score={score + 20:.0f}")
+                        except Exception as e:
+                            logger.error(f"OCR failed for page {pg}: {e}")
+                except Exception as e:
+                    logger.error(f"OCR fallback setup failed: {e}")
+
         if not page_texts:
             logger.warning("No text extracted from any pages via pdftotext, trying pdfplumber fallback")
             return _extract_with_pdfplumber(pdf_path, max_chars)
