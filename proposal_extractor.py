@@ -1665,7 +1665,7 @@ Look for these ADDITIONAL limits in the text:
 - Assault and Battery (Each Event and Aggregate)
 - Hired & Non-Owned Auto (HNOA) Liability
 
-Already extracted: {", ".join(sorted(_existing_descs))}
+Already extracted: {', '.join(sorted(_existing_descs))}
 
 Return JSON: {{"additional_limits": [{{"description": "Name", "limit": "$X"}}]}}
 Only include limits NOT already extracted. If none found, return {{"additional_limits": []}}.
