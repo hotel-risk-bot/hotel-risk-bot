@@ -609,6 +609,7 @@ CRITICAL RULES:
 18. Property coinsurance is MANDATORY - ALWAYS extract coinsurance percentages and monthly limitation for Business Income. Look for "Coinsurance", "Monthly Limitation", "Coinsurance & Valuation" sections. This is a critical part of every property quote.
 19. For LAYERED property programs with multiple carriers: Use "property" for the primary layer, "excess_property" for the first excess layer, and "excess_property_2" for the second excess layer. Each layer has its own carrier, limits, deductibles, forms, coinsurance, and subjectivities.
 20. COMPETING / ALTERNATIVE QUOTES FOR THE SAME COVERAGE TYPE: When the uploaded documents contain quotes from DIFFERENT carriers for the SAME coverage type (e.g., two separate property quotes from Starr and Markel, or two GL quotes from different carriers), you MUST extract ALL of them. Use the base key for the first quote (e.g., "property") and append "_alt_1", "_alt_2" etc. for additional competing quotes of the same type (e.g., "property_alt_1", "general_liability_alt_1"). Each alternative quote gets its own full coverage entry with carrier, premium, limits, forms, subjectivities, etc. â identical structure to the primary. IMPORTANT: Do NOT discard or merge competing quotes. If two different carriers each provide a property quote, both must appear in the output. Look at the FILE headers to identify separate quote documents from different carriers.
+21. Property coverage_by_location is MANDATORY for multi-location/multi-building quotes. When the quote shows a "COVERAGE SUMMARY" or "DESCRIPTION OF PREMISES" table with per-premise/per-building values (Building, BPP, Business Income amounts per location), extract EACH row into coverage_by_location. The "limits" array should contain the TOTAL/COMBINED values, while coverage_by_location has the per-location breakdown. Do NOT combine per-location values into single limits.
 
 Return your extraction as a JSON object with the following structure. Only include sections that are present in the documents."""
 
@@ -639,6 +640,9 @@ The JSON structure should be:
         {{"description": "Building", "limit": "$X"}},
         {{"description": "Business Personal Property", "limit": "$X"}},
         {{"description": "Business Income", "limit": "ALS or $X"}}
+      ],
+      "coverage_by_location": [
+        {{"premise": 1, "building": 1, "address": "Street Address, City, ST ZIP", "building_value": "$X", "bpp_value": "$X", "business_income": "$X or ALS", "other_values": {{"Outside Signs": "$X"}}, "cause_of_loss": "Special or Basic", "coinsurance": "80%", "valuation": "RC or ACV"}}
       ],
       "deductibles": [
         {{"description": "All Other Perils", "amount": "$X"}},
