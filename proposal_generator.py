@@ -2902,7 +2902,32 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                                header_size=10, body_size=10,
                                header_alignments={0: L, 1: L},
                                col_alignments=limit_body_align)
-    
+
+    # Per-location property coverage breakdown
+    if coverage_key == "property":
+        cbl = cov.get("coverage_by_location", [])
+        if cbl and isinstance(cbl, list) and len(cbl) > 1:
+            add_subsection_header(doc, "Coverage by Location")
+            cbl_headers = ["Location", "Building", "BPP", "Business Income"]
+            cbl_rows = []
+            for loc in cbl:
+                if isinstance(loc, dict):
+                    addr = loc.get("address", "")
+                    if len(addr) > 40:
+                        addr = addr[:37] + "..."
+                    prem = loc.get("premise", "")
+                    label = f"Prem {prem}: {addr}" if prem else addr
+                    cbl_rows.append([
+                        label,
+                        loc.get("building_value", ""),
+                        loc.get("bpp_value", ""),
+                        loc.get("business_income", "")
+                    ])
+            if cbl_rows:
+                create_styled_table(doc, cbl_headers, cbl_rows,
+                                   col_widths=[3.0, 1.5, 1.5, 1.5],
+                                   header_size=9, body_size=9)
+
     # Deductibles (Property)
     deductibles = cov.get("deductibles", [])
     # Filter out deductibles for perils that are NOT COVERED in additional_coverages/sublimits
