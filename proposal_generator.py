@@ -1267,33 +1267,6 @@ def generate_information_summary(doc, data):
         ["Effective Date", ci.get("effective_date", "")],
         ["Expiration Date", ci.get("expiration_date", "")],
     ]
-    if ci.get("sales_exposure_basis"):
-        # Recalculate proposed sales from sum of ALL GL exposures
-        gl_cov = data.get("coverages", {}).get("general_liability", {})
-        _gl_cls = gl_cov.get("schedule_of_classes", []) if isinstance(gl_cov, dict) else []
-        _recalc = 0
-        import re as _re_s
-        _has_cc = any(isinstance(e, dict) and e.get("class_code") for e in _gl_cls)
-        for _e in _gl_cls:
-            if isinstance(_e, dict):
-                if _has_cc and not _e.get("class_code"):
-                    continue
-                _exp = _e.get("exposure", "")
-                if isinstance(_exp, (int, float)):
-                    _recalc += _exp
-                elif isinstance(_exp, str):
-                    _c = _re_s.sub(r'[^\d.]', '', _exp.replace(',', ''))
-                    if _c:
-                        try: _recalc += float(_c)
-                        except ValueError: pass
-        if _recalc > 0:
-            _basis = ci["sales_exposure_basis"]
-            _upd = _re_s.sub(r'\$[\d,]+', fmt_currency(_recalc), _basis, count=1)
-            if _upd == _basis:
-                _upd = fmt_currency(_recalc) + " \u2013 " + _basis
-            rows.append(["Proposed Sales/Exposure Basis", _upd])
-        else:
-            rows.append(["Proposed Sales/Exposure Basis", ci["sales_exposure_basis"]])
     if ci.get("dba"):
         rows.insert(1, ["DBA", _proper_case(ci["dba"])])
     
@@ -3166,6 +3139,17 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     
     # Forms & Endorsements
     forms = cov.get("forms_endorsements", [])
+        # Filter out non-crime forms when rendering crime coverage
+        # Crime forms should NOT contain property (CP/PR/HSIC/SSPN/LMA/NMA/61330-3), GL (CG/AD/AI/DE/JA),
+        # umbrella/excess (SCX), or EPLI (BR/EMD/EMO/EGD) prefixes
+        if coverage_key == "crime":
+            _non_crime_prefixes = ("CP", "PR ", "PR0", "PR9", "HSIC", "SSPN", "LMA", "NMA", "6133",
+                                   "CG", "AD", "AI", "DE", "JA",
+                                   "SCX", "NXLL", "CSXC",
+                                   "BR", "EMD", "EMO", "EGD", "PN00")
+            forms = [f for f in forms if not any(
+                (f.get("form_number", "") if isinstance(f, dict) else str(f)).upper().startswith(p)
+                for p in _non_crime_prefixes)]
     # Critical coverages MUST show forms — add placeholder if empty
     _critical_form_coverages = {"property", "general_liability", "crime", "umbrella", "umbrella_layer_2",
                                  "umbrella_layer_3", "umbrella_layer_4", "workers_comp",
