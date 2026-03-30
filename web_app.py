@@ -15,7 +15,7 @@ import threading
 from pathlib import Path
 from datetime import datetime
 
-from flask import Flask, request, jsonify, send_file, render_template, session, redirect, url_for
+from flask import Flask, request, jsonify, send_file, render_template
 
 from proposal_extractor import ProposalExtractor, extract_text_from_pdf_smart, extract_text_from_excel
 from proposal_generator import generate_proposal
@@ -81,43 +81,6 @@ else:
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max upload
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'hub-hotel-risk-advisor-2026-secret')
-
-# ─── Private Login Credentials (set via env vars or defaults) ───
-APP_USERNAME = os.environ.get('APP_USERNAME', 'hub')
-APP_PASSWORD = os.environ.get('APP_PASSWORD', 'HotelRisk2026!')
-
-# Public paths that do not require authentication
-_PUBLIC_PATHS = {'/login', '/logout'}
-
-@app.before_request
-def require_login():
-    """Enforce login for all routes except /login and /logout."""
-    if request.path in _PUBLIC_PATHS:
-        return None
-    if not session.get('authenticated'):
-        return redirect(url_for('login', next=request.url))
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    """Simple private login page."""
-    error = None
-    if request.method == 'POST':
-        username = request.form.get('username', '').strip()
-        password = request.form.get('password', '').strip()
-        if username == APP_USERNAME and password == APP_PASSWORD:
-            session['authenticated'] = True
-            next_url = request.args.get('next') or url_for('index')
-            return redirect(next_url)
-        else:
-            error = 'Invalid username or password. Please try again.'
-    return render_template('login.html', error=error)
-
-@app.route('/logout')
-def logout():
-    """Clear session and redirect to login."""
-    session.clear()
-    return redirect(url_for('login'))
 
 # File-backed session storage to survive across workers/restarts
 # Use a STABLE directory path so sessions survive Railway redeploys within the same container
