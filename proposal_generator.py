@@ -3414,11 +3414,11 @@ def generate_confirmation_to_bind(doc, data):
     
     # Show effective date prominently
     effective_date = data.get("client_info", {}).get("effective_date", "")
-        try:
-            _ed = datetime.datetime.strptime(effective_date, "%m/%d/%Y")
-            effective_date = _ed.strftime("%B %d, %Y")
-        except (ValueError, TypeError):
-            pass
+    try:
+        _ed = datetime.datetime.strptime(effective_date, "%m/%d/%Y")
+        effective_date = _ed.strftime("%B %d, %Y")
+    except (ValueError, TypeError):
+        pass
     if effective_date:
         add_formatted_paragraph(doc, f"Effective Date: {effective_date}", size=12,
                                color=ELECTRIC_BLUE, bold=True, space_after=8)
