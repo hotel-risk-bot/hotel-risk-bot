@@ -3139,17 +3139,17 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     
     # Forms & Endorsements
     forms = cov.get("forms_endorsements", [])
-        # Filter out non-crime forms when rendering crime coverage
-        # Crime forms should NOT contain property (CP/PR/HSIC/SSPN/LMA/NMA/61330-3), GL (CG/AD/AI/DE/JA),
-        # umbrella/excess (SCX), or EPLI (BR/EMD/EMO/EGD) prefixes
-        if coverage_key == "crime":
-            _non_crime_prefixes = ("CP", "PR ", "PR0", "PR9", "HSIC", "SSPN", "LMA", "NMA", "6133",
-                                   "CG", "AD", "AI", "DE", "JA",
-                                   "SCX", "NXLL", "CSXC",
-                                   "BR", "EMD", "EMO", "EGD", "PN00")
-            forms = [f for f in forms if not any(
-                (f.get("form_number", "") if isinstance(f, dict) else str(f)).upper().startswith(p)
-                for p in _non_crime_prefixes)]
+    # Filter out non-crime forms when rendering crime coverage
+    # Crime forms should NOT contain property (CP/PR/HSIC/SSPN/LMA/NMA/61330-3), GL (CG/AD/AI/DE/JA),
+    # umbrella/excess (SCX), or EPLI (BR/EMD/EMO/EGD) prefixes
+    if coverage_key == "crime":
+        _non_crime_prefixes = ("CP", "PR ", "PR0", "PR9", "HSIC", "SSPN", "LMA", "NMA", "6133",
+                               "CG", "AD", "AI", "DE", "JA",
+                               "SCX", "NXLL", "CSXC",
+                               "BR", "EMD", "EMO", "EGD", "PN00")
+        forms = [f for f in forms if not any(
+            (f.get("form_number", "") if isinstance(f, dict) else str(f)).upper().startswith(p)
+            for p in _non_crime_prefixes)]
     # Critical coverages MUST show forms — add placeholder if empty
     _critical_form_coverages = {"property", "general_liability", "crime", "umbrella", "umbrella_layer_2",
                                  "umbrella_layer_3", "umbrella_layer_4", "workers_comp",
