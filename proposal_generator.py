@@ -458,6 +458,14 @@ def generate_cover_page(doc, data):
     dba = ci.get("dba", "")
     address = ci.get("address", "")
     effective_date = ci.get("effective_date", "")
+    # Convert MM/DD/YYYY to "Month DD, YYYY" display format
+    if effective_date:
+        try:
+            _ed = datetime.datetime.strptime(effective_date, "%m/%d/%Y")
+            effective_date = _ed.strftime("%B %d, %Y")
+            ci["effective_date"] = effective_date
+        except (ValueError, TypeError):
+            pass  # Keep original if format doesn't match
     proposal_date = datetime.date.today().strftime("%B %d, %Y")
     
     # Ensure cover page section has NO header or footer
@@ -3406,6 +3414,11 @@ def generate_confirmation_to_bind(doc, data):
     
     # Show effective date prominently
     effective_date = data.get("client_info", {}).get("effective_date", "")
+        try:
+            _ed = datetime.datetime.strptime(effective_date, "%m/%d/%Y")
+            effective_date = _ed.strftime("%B %d, %Y")
+        except (ValueError, TypeError):
+            pass
     if effective_date:
         add_formatted_paragraph(doc, f"Effective Date: {effective_date}", size=12,
                                color=ELECTRIC_BLUE, bold=True, space_after=8)
