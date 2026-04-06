@@ -664,7 +664,7 @@ def generate_premium_summary(doc, data):
     
     add_subsection_header(doc, "Coverage Premium Comparison")
     add_formatted_paragraph(doc,
-        "Premiums shown include applicable taxes and fees. TRIA/Terrorism premiums are not included.",
+        "Premiums shown include applicable taxes and fees.",
         size=9, color=CHARCOAL, space_after=6)
     
     coverages = data.get("coverages", {})
@@ -815,11 +815,9 @@ def generate_premium_summary(doc, data):
             optional_rows.append(row_data)
         else:
             rows.append(row_data)
-            # Exclude terrorism/TRIA from totals
-            if key != "terrorism":
-                total_proposed += proposed
-                if has_expiring:
-                    total_expiring += _get_expiring_premium(key)
+            total_proposed += proposed
+            if has_expiring:
+                total_expiring += _get_expiring_premium(key)
 
     # Total row
     if has_expiring:
@@ -2684,10 +2682,11 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     # Schedule of Values (Property) - prefer SOV data if available
     sov_data = data.get("sov_data")
     sov_from_quote = cov.get("schedule_of_values", [])
-    
+    sov_rendered = False
     if coverage_key == "property" and sov_data and sov_data.get("locations"):
         # Use SOV spreadsheet data for detailed Schedule of Values
         add_subsection_header(doc, "Schedule of Values")
+        sov_rendered = True
         # Prefer property SOV building-level data if available (from merged SOV)
         if sov_data.get("_property_sov") and sov_data["_property_sov"].get("locations"):
             _prop_sov = sov_data["_property_sov"]
@@ -2792,6 +2791,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                                              4: WD_ALIGN_PARAGRAPH.CENTER, 5: WD_ALIGN_PARAGRAPH.CENTER})
     elif sov_from_quote:
         add_subsection_header(doc, "Schedule of Values")
+        sov_rendered = True
         headers = ["Location", "Building", "Contents", "BI/Rents", "TIV"]
         rows = [[
             s.get("location", ""),
@@ -2887,7 +2887,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     # Per-location property coverage breakdown
     if coverage_key == "property":
         cbl = cov.get("coverage_by_location", [])
-        if cbl and isinstance(cbl, list) and len(cbl) > 1:
+        if cbl and isinstance(cbl, list) and len(cbl) > 1 and not sov_rendered:
             add_subsection_header(doc, "Coverage by Location")
             cbl_headers = ["Location", "Building", "BPP", "Business Income"]
             cbl_rows = []
