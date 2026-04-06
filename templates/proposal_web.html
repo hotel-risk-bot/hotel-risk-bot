@@ -1458,11 +1458,10 @@ function renderExpiringPremiums() {
         html += `</tr>`;
     }
     
-    // Total row (excludes terrorism and optional coverages)
+    // Total row (excludes optional coverages)
     let totalProposed = 0;
     let totalExpiring = 0;
     for (const [key, cov] of mainCovs) {
-        if (key === 'terrorism') continue;
         totalProposed += parseFloat(cov.total_premium) || parseFloat(cov.premium) || 0;
         totalExpiring += parseFloat(ep[key]) || 0;
     }
