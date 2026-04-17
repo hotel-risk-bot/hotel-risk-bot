@@ -1315,6 +1315,33 @@ def _run_extraction(session_id):
                     prop_tiv = float(tiv_match.group(1).replace(",", ""))
                 except (ValueError, TypeError):
                     pass
+            # Synthesize a single location when GPT returned none (e.g., Tower Hill PREMISES AND BUILDINGS
+            # section that earlier prompt revisions did not recognize, or any single-property quote whose
+            # schedule page was pruned). Safer to emit one row seeded from property coverage than to leave
+            # the proposal with 0 locations.
+            if not locations:
+                _syn_name = (client_name or "").strip()
+                _syn_addr = ""
+                for _fld in ("address", "property_address", "location_address"):
+                    _val = prop_data.get(_fld) if isinstance(prop_data, dict) else None
+                    if _val:
+                        _syn_addr = str(_val).strip()
+                        break
+                if _syn_name or prop_tiv:
+                    locations.append({
+                        "number": "1",
+                        "name": _syn_name or "Insured Property",
+                        "corporate_entity": _syn_name,
+                        "address": _syn_addr,
+                        "city": "",
+                        "state": "",
+                        "zip": "",
+                        "description": "Hotel/Motel",
+                        "tiv": prop_tiv or 0,
+                    })
+                    merged_data["locations"] = locations
+                    logger.info(f"No-SOV fallback: synthesized 1 location from property coverage "
+                                f"(name={_syn_name!r}, tiv={prop_tiv})")
             for loc in locations:
                 # Fill name if missing: use GPT-extracted name, corporate_entity, or client name
                 if not loc.get("name"):
