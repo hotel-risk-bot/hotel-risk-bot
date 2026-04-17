@@ -155,6 +155,12 @@ def _score_page(page_text: str) -> float:
         "TOTAL COST OF POLICY",
         "SCHEDULE OF UNDERLYING",
         "DESIGNATED PREMISES",
+        "PREMISES AND BUILDINGS",
+        "LOCATION 1",
+        "LOCATION 2",
+        "LOCATION 3",
+        "BLDG#",
+        "BUILDING DESCRIPTION",
     ]
     is_critical = False
     for kw in _critical_page_keywords:
@@ -987,6 +993,9 @@ IMPORTANT:
 - Mark excluded coverages explicitly
 - For Property tiv: Extract the Total Insured Value (TIV) from the property quote or SOV. Look for "Total Insured Value", "TIV", "Total Values", or the sum total on the Schedule of Values. This should be the total of Building + Contents/BPP + Business Income/Rents across all locations. For example if the SOV shows Building Total $42,800,000 + Contents Total $7,700,000 + BI/Rents Total $5,550,000 = TIV $56,390,000. Use the actual SOV/quote total, NOT the per-location coverage limits.
 - For locations: Extract ALL property locations. For each location, set "name" to the hotel/property name (e.g., "Hacienda Hotel", "Hampton Inn") and "tiv" to the Total Insured Value for that specific location. For single-location quotes, use the "Account Name", "Applicant", or "Named Insured" as the location name, and the total TIV from the quote (e.g., "Total Insured Values: $4,660,000") as the location tiv. Always extract tiv as a number (no $ or commas).
+- TOWER HILL / VANTAGE RISK PROPERTY QUOTES: Tower Hill Insurance Group underwrites for Vantage Risk Specialty. Locations appear under a "PREMISES AND BUILDINGS" section header (NOT "Schedule of Locations" or "Schedule of Values"). Each property is shown under a centered "Location N" header with the street address on line 1 and "CITY, ST ZIP" on line 2, followed by a table with columns: "Bldg#", "Building Description", and "Limit". The "Building Description" column contains the full property street address. TIV for each location = sum of all Limit rows under that Bldg# (typically Building limit + Business Personal Property limit). Extract these as normal locations entries.
+- LLC/ENTITY NAME IS NOT THE PROPERTY ADDRESS: The Insured / Named Insured is often an LLC whose legal name contains a street address that is DIFFERENT from the actual insured property (e.g., "1345 Lee Rd LLC" that owns a hotel at 1275 Lee Rd). NEVER copy the LLC name or any address embedded in the LLC name into locations[].address. Always use the address from the property schedule / PREMISES AND BUILDINGS / Building Description / Schedule of Locations section. If the only address you can find IS the one inside the LLC name, leave the location address empty rather than guess.
+- REJECT PHANTOM LOCATION PHRASES: Do NOT create a location entry from generic phrases like "See attached for Schedule of Locations", "Per Schedule", "See SOV", "Various", "TBD", "Pending", or any similar placeholder language. Only emit a location when you have an actual street address or hotel/property name from the quote.
 - For Property: ALWAYS include Flood and Earthquake rows even if excluded
 - For Property deductibles: Do NOT extract deductibles for perils marked "NOT COVERED" in the sublimits. If Named Windstorm sublimit says "NOT COVERED", omit the Named Storm/Named Windstorm deductible entirely. Only extract deductibles for perils that actually have coverage on this specific policy.
 - For Property additional_coverages (sublimits/extensions): This section is MANDATORY. Extract ALL sublimits of liability, also called extensions of coverage or additional coverages. Common property sublimits include: Flood, Earthquake, Equipment Breakdown, Ordinance or Law, Spoilage, Business Income Extended Period, Sign Coverage, Accounts Receivable, Valuable Papers, Fine Arts, Newly Acquired Property, Transit, Debris Removal, Pollutant Cleanup, Utility Services, Green Building, Sewer/Drain Backup, Water Damage, Mold/Fungi, and any other sublimit or extension listed in the quote. Include the limit and deductible for each.
