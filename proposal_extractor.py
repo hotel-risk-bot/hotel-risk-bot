@@ -61,7 +61,7 @@ def _get_openai_client():
 # Keywords that indicate a page contains important quote data (high priority)
 QUOTE_PAGE_KEYWORDS = [
     "QUOTATION", "QUOTE", "PROPOSAL", "INDICATION",
-    "COVERAGE â", "COVERAGE -", "COVERAGE:", "COVERAGE SUMMARY",
+    "COVERAGE -", "COVERAGE -", "COVERAGE:", "COVERAGE SUMMARY",
     "PREMIUM BREAKDOWN", "PREMIUM SUMMARY", "TOTAL PREMIUM",
     "Total Cost of Policy", "Total General Liability Premium",
     "Total Property Premium", "Total Umbrella Premium",
@@ -142,7 +142,7 @@ def _score_page(page_text: str) -> float:
     text_upper = page_text.upper()
     score = 0.0
 
-    # CRITICAL PAGES: These must ALWAYS be included â give maximum boost
+    # CRITICAL PAGES: These must ALWAYS be included - give maximum boost
     # These are schedule pages that contain essential structured data
     _critical_page_keywords = [
         "ADDITIONAL NAMED INSURED",
@@ -165,7 +165,7 @@ def _score_page(page_text: str) -> float:
     is_critical = False
     for kw in _critical_page_keywords:
         if kw in text_upper:
-            score += 50.0  # Massive boost â these pages are NEVER dropped
+            score += 50.0  # Massive boost - these pages are NEVER dropped
             is_critical = True
             break
 
@@ -185,7 +185,7 @@ def _score_page(page_text: str) -> float:
         score += min(len(rates) * 0.3, 3.0)
 
     # Detect if this is a forms SCHEDULE/LIST page (lists form numbers + descriptions)
-    # These pages are HIGH VALUE â they list the forms attached to the policy
+    # These pages are HIGH VALUE - they list the forms attached to the policy
     # Do NOT penalize them with boilerplate keywords
     is_forms_schedule = any(kw in text_upper for kw in [
         "FORMS SCHEDULE", "ENDORSEMENT SCHEDULE", "FORMS AND ENDORSEMENTS",
@@ -377,7 +377,7 @@ def _extract_with_ocr(pdf_path: str, total_pages: int = 0, max_pages: int = 3) -
     try:
         logger.info(f"OCR fallback: converting PDF pages to images for {pdf_path}")
         
-        # Limit pages aggressively â key quote info is in first few pages
+        # Limit pages aggressively - key quote info is in first few pages
         pages_to_convert = min(total_pages, max_pages) if total_pages > 0 else max_pages
         images = convert_from_path(
             pdf_path,
@@ -614,7 +614,7 @@ CRITICAL RULES:
 17. For carrier names: Use the ISSUING carrier name (e.g., "Associated Industries Insurance Company" or "Technology Insurance Company" for AmTrust policies, "Palms Insurance Company" for Palms). Do NOT use the wholesale broker name as the carrier. For RT Specialty quotes: RT Specialty (RSG Specialty) is a WHOLESALE BROKER, NOT the carrier. The issuing carrier is typically "Certain Underwriters at Lloyd's, London" placed through the Owners First Association program. Use "Certain Underwriters at Lloyd's, London" as the carrier name. Similarly, CRC, Amwins, Burns & Wilcox are wholesale brokers — always use the actual issuing carrier.
 18. Property coinsurance is MANDATORY - ALWAYS extract coinsurance percentages and monthly limitation for Business Income. Look for "Coinsurance", "Monthly Limitation", "Coinsurance & Valuation" sections. This is a critical part of every property quote.
 19. For LAYERED property programs with multiple carriers: Use "property" for the primary layer, "excess_property" for the first excess layer, and "excess_property_2" for the second excess layer. Each layer has its own carrier, limits, deductibles, forms, coinsurance, and subjectivities.
-20. COMPETING / ALTERNATIVE QUOTES FOR THE SAME COVERAGE TYPE: When the uploaded documents contain quotes from DIFFERENT carriers for the SAME coverage type (e.g., two separate property quotes from Starr and Markel, or two GL quotes from different carriers), you MUST extract ALL of them. Use the base key for the first quote (e.g., "property") and append "_alt_1", "_alt_2" etc. for additional competing quotes of the same type (e.g., "property_alt_1", "general_liability_alt_1"). Each alternative quote gets its own full coverage entry with carrier, premium, limits, forms, subjectivities, etc. â identical structure to the primary. IMPORTANT: Do NOT discard or merge competing quotes. If two different carriers each provide a property quote, both must appear in the output. Look at the FILE headers to identify separate quote documents from different carriers.
+20. COMPETING / ALTERNATIVE QUOTES FOR THE SAME COVERAGE TYPE: When the uploaded documents contain quotes from DIFFERENT carriers for the SAME coverage type (e.g., two separate property quotes from Starr and Markel, or two GL quotes from different carriers), you MUST extract ALL of them. Use the base key for the first quote (e.g., "property") and append "_alt_1", "_alt_2" etc. for additional competing quotes of the same type (e.g., "property_alt_1", "general_liability_alt_1"). Each alternative quote gets its own full coverage entry with carrier, premium, limits, forms, subjectivities, etc. - identical structure to the primary. IMPORTANT: Do NOT discard or merge competing quotes. If two different carriers each provide a property quote, both must appear in the output. Look at the FILE headers to identify separate quote documents from different carriers.
 21. Property coverage_by_location is MANDATORY for multi-location/multi-building quotes. When the quote shows a "COVERAGE SUMMARY" or "DESCRIPTION OF PREMISES" table with per-premise/per-building values (Building, BPP, Business Income amounts per location), extract EACH row into coverage_by_location. The "limits" array should contain the TOTAL/COMBINED values, while coverage_by_location has the per-location breakdown. Do NOT combine per-location values into single limits.
 
 Return your extraction as a JSON object with the following structure. Only include sections that are present in the documents."""
@@ -984,41 +984,46 @@ IMPORTANT:
 - Extract EVERY form number and endorsement exactly as written
 - Include form dates (e.g., "06/07" in "CP 00 10 06/07")
 - For total_premium: This MUST be the all-in out-the-door number — the HIGHEST total shown on the quote. Look for "Total Cost of Policy", "Total Package Cost", "Total Policy Cost", "Total Policy Premium", "Total Due", "Grand Total", "Total Amount Due", "Total Estimated Cost", or any final total line. It includes base premium + broker fees + surplus lines tax + stamping fee + fire marshal tax + inspection fees + FSLSO fees + EMPA surcharge + any other taxes/fees/surcharges. ALWAYS use the HIGHEST total amount shown — this includes broker fees. If no single total line exists, calculate total_premium = premium + taxes_fees. CRITICAL: total_premium must ALWAYS be >= premium. If the quote shows separate line items for taxes and fees, ADD them ALL (including broker fees) to the base premium to get total_premium. For example if GL premium is $8,874, broker fee is $250, surplus lines tax is $430.39, and stamping fee is $3.55, then total_premium = $8,874 + $250 + $430.39 + $3.55 = $9,557.94. NEVER use the base premium as total_premium when taxes/fees exist. PREFERRED: If the quote prints a "Total Cost of Policy" line that includes broker fee, use that EXACT number (with cents) as total_premium. DOUBLE-CHECK: After extracting premium and total_premium, verify that total_premium = premium + ALL individual tax/fee line items (including broker fee). If your calculated total doesn't match the document's stated total, use the document's stated total number — always the HIGHEST one.
-- For GL policies that include BOTH General Liability AND Liquor Liability in a single package: The "premium" field should be the combined package premium (GL + Liquor), and "total_premium" should be the Total Package Cost (premium + broker fee + surplus lines tax + stamping fee + all other fees). CRITICAL: Use the EXACT dollar amount printed on the "Total Package Cost" or "Total Cost" line â do NOT manually sum individual line items, as you may miss fees or introduce rounding errors. For example, if the quote shows Total General Liability Premium: $61,899, Total Liquor Liability Premium: $2,200, Total Package Premium: $64,099, Broker Fee: $2,500, Surplus Lines Tax: $3,108.80, Stamping Fee: $25.64, Total Package Cost: $69,733.44 â then premium=64099 and total_premium=69733.44. ALWAYS preserve cents.
+- For GL policies that include BOTH General Liability AND Liquor Liability in a single package: The "premium" field should be the combined package premium (GL + Liquor), and "total_premium" should be the Total Package Cost (premium + broker fee + surplus lines tax + stamping fee + all other fees). CRITICAL: Use the EXACT dollar amount printed on the "Total Package Cost" or "Total Cost" line - do NOT manually sum individual line items, as you may miss fees or introduce rounding errors. For example, if the quote shows Total General Liability Premium: $61,899, Total Liquor Liability Premium: $2,200, Total Package Premium: $64,099, Broker Fee: $2,500, Surplus Lines Tax: $3,108.80, Stamping Fee: $25.64, Total Package Cost: $69,733.44 - then premium=64099 and total_premium=69733.44. ALWAYS preserve cents.
 - For GL gl_deductible: Extract the per-occurrence deductible if one exists. Look for "Deductible Per Occurrence", "Deductible Liability", "$X,000 Deductible Per Occurrence Including Loss Adjustment Expense", or similar. Include the full description (e.g., "$5,000 Per Occurrence Including Loss Adjustment Expense"). If no GL deductible, set to "$0" or "None".
 - For GL defense_basis: Look for "Defense Basis" or whether defense costs are "In Addition to Limits" or "Within Limits of Liability".
 - For GL schedule_of_classes: Extract the exposure schedule. This may be location-based OR class-code-based. For class-code-based quotes (like AmTrust), extract each class code entry with: class_code (e.g., "45190"), classification/description, rate (e.g., "9.964" per $100), exposure amount (e.g., "$8,748,612"), and exposure_basis (e.g., "Gross Sales", "Per Acre", "Area", "Liquor Sales", "FLAT"). For location-based quotes, include address, brand_dba, classification, exposure, and premium. Include vacant land, restaurants, liquor, sundry, hired auto, loss control, and all non-hotel entries. Include ALL exposure classes for each location (e.g., Hotel/Motel, Restaurant, Liquor Liability as separate rows). CRITICAL: Always capture the actual dollar amount for exposure (e.g., $8,748,612 not just "Gross Sales"). The exposure_basis describes what the number represents (Gross Sales, Revenue, Area, etc.)
 - GL DESIGNATED PREMISES LOCATIONS: If the GL quote includes a form like CG 21 44, CG2144, NXLL110, or any "Limitation of Coverage to Designated Premises" form, extract EVERY location listed in that form. These are ALL the locations covered under the GL policy. Do TWO things: (1) Add each address as a separate schedule_of_classes entry with its full address. (2) Also populate the "designated_premises" array with each full address string exactly as written (e.g., "4285 Highway 51, LaPlace, LA 70068"). The designated_premises array is the AUTHORITATIVE list of GL covered locations. CRITICAL: The CG2144/NXLL110 form typically lists addresses in a numbered format like "1) 4285 Highway 51, LaPlace, LA 70068" followed by "2) 4281 Highway 51..." etc. Extract ALL numbered addresses, not just the first few. There may be 8 or more addresses. Also look for addresses that may appear with labels like "Office:" or "Hotels:" before the numbered list. Extract those too. If the form text is split across multiple pages, combine all addresses from all pages.
 - ALWAYS preserve cents in premium amounts (e.g., $60,513.35 not $60,513)
 - Mark excluded coverages explicitly
-- For Property tiv: Extract the Total Insured Value (TIV) from the property quote or SOV. Look for "Total Insured Value", "TIV", "Total Values", or the sum total on the Schedule of Values. This should be the total of Building + Contents/BPP + Business Income/Rents across all locations. For example if the SOV shows Building Total $42,800,000 + Contents Total $7,700,000 + BI/Rents Total $5,550,000 = TIV $56,390,000. Use the actual SOV/quote total, NOT the per-location coverage limits.
+- For Property tiv: Extract the Total Insured Value (TIV) from the property quote or SOV. Look for "Total Insured Value", "TIV", "Total Values", or the sum total on the Schedule of Values. This should be the total of Building + Contents/BPP + Business Income/Rents across all locations. For example if the SOV shows Building Total $42,800,000 + Contents Total $7,700,000 + BI/Rents Total $5,550,000 = TIV $56,390,000. Use the actual SOV/quote total, NOT the per-location coverage limits. TOWER HILL / VANTAGE RISK SPECIFIC: For Tower Hill property quotes, the overall Total Insured Value does NOT appear as a single labeled line. Instead, you MUST sum the "Limit" column across ALL Bldg# rows in the "PREMISES AND BUILDINGS" section. For a single-location Tower Hill quote with one Bldg# that has Building Limit $15,080,000 and Business Personal Property Limit $1,500,000, property.tiv = 16580000. NEVER leave property.tiv at 0 when a Tower Hill Bldg# table is present.
 - For locations: Extract ALL property locations. For each location, set "name" to the hotel/property name (e.g., "Hacienda Hotel", "Hampton Inn") and "tiv" to the Total Insured Value for that specific location. For single-location quotes, use the "Account Name", "Applicant", or "Named Insured" as the location name, and the total TIV from the quote (e.g., "Total Insured Values: $4,660,000") as the location tiv. Always extract tiv as a number (no $ or commas).
-- TOWER HILL / VANTAGE RISK PROPERTY QUOTES: Tower Hill Insurance Group underwrites for Vantage Risk Specialty. Locations appear under a "PREMISES AND BUILDINGS" section header (NOT "Schedule of Locations" or "Schedule of Values"). Each property is shown under a centered "Location N" header with the street address on line 1 and "CITY, ST ZIP" on line 2, followed by a table with columns: "Bldg#", "Building Description", and "Limit". The "Building Description" column contains the full property street address. TIV for each location = sum of all Limit rows under that Bldg# (typically Building limit + Business Personal Property limit). Extract these as normal locations entries.
-- LLC/ENTITY NAME IS NOT THE PROPERTY ADDRESS: The Insured / Named Insured is often an LLC whose legal name contains a street address that is DIFFERENT from the actual insured property (e.g., "1345 Lee Rd LLC" that owns a hotel at 1275 Lee Rd). NEVER copy the LLC name or any address embedded in the LLC name into locations[].address. Always use the address from the property schedule / PREMISES AND BUILDINGS / Building Description / Schedule of Locations section. If the only address you can find IS the one inside the LLC name, leave the location address empty rather than guess.
+- TOWER HILL / VANTAGE RISK PROPERTY QUOTES - CRITICAL EXTRACTION PROCEDURE: Tower Hill Insurance Group underwrites on behalf of Vantage Risk Specialty Insurance Company. Their property quotes do NOT use the header "Schedule of Locations" or "Schedule of Values". Instead, locate the section whose heading reads exactly "PREMISES AND BUILDINGS" (may appear as "PREMISES  AND  BUILDINGS" with double spaces). Under that heading you will see (in order): (a) a few "Coverage for All Premises" rows (Employee Dishonesty, Forgery - SKIP these, they are policy-wide limits, not locations), then (b) one or more centered sub-headings of the form "Location 1", "Location 2", etc. Under each "Location N" heading the street address appears on line 1 and "CITY, ST ZIP" appears on line 2. Immediately below is a small table with column headers "Bldg#", "Building Description", and "Limit". Each Bldg# row in that table has the FULL property address in "Building Description" and a dollar "Limit" value (typically one row for Building limit and one for Business Personal Property / BPP). To extract this correctly:
+    1. For locations[N].name: If the quote shows a hotel/DBA name (e.g., "Hilton Garden Inn Winter Park"), use that; otherwise use the corporate entity or franchise flag. Do NOT default to the LLC name when a franchise DBA is available.
+    2. For locations[N].address / city / state / zip: Parse the two lines under the "Location N" heading - line 1 = street address, line 2 = "CITY, ST ZIP" (split on the comma and the last space). You may also confirm with the "Building Description" column.
+    3. For locations[N].tiv: Sum the "Limit" column across ALL Bldg# rows that belong to this Location N (typically Building + BPP). Example: if Bldg# 1 shows Building $15,080,000 and BPP $1,500,000, locations[0].tiv = 16580000.
+    4. For coverages.property.tiv at the policy level: Sum the limits across EVERY Bldg# row under EVERY Location N (this equals the total insured value for the property policy). For a single-location Tower Hill quote, this equals locations[0].tiv.
+    5. NEVER emit a location whose name/address comes from the Insured LLC when the LLC name contains a street that does NOT match the PREMISES AND BUILDINGS address. The property-schedule address wins over the LLC name.
+- LLC/ENTITY NAME IS NOT THE PROPERTY ADDRESS: The Insured / Named Insured is often an LLC whose legal name contains a street address that is DIFFERENT from the actual insured property (e.g., "1345 Lee Rd LLC" owning a hotel at 1275 Lee Rd). NEVER copy the LLC name or any address embedded in the LLC name into locations[].address. Always use the address from the property schedule / PREMISES AND BUILDINGS / Building Description / Schedule of Locations section. If the only address you can find IS the one inside the LLC name, leave the location address empty rather than guess.
 - REJECT PHANTOM LOCATION PHRASES: Do NOT create a location entry from generic phrases like "See attached for Schedule of Locations", "Per Schedule", "See SOV", "Various", "TBD", "Pending", or any similar placeholder language. Only emit a location when you have an actual street address or hotel/property name from the quote.
 - For Property: ALWAYS include Flood and Earthquake rows even if excluded
 - For Property deductibles: Do NOT extract deductibles for perils marked "NOT COVERED" in the sublimits. If Named Windstorm sublimit says "NOT COVERED", omit the Named Storm/Named Windstorm deductible entirely. Only extract deductibles for perils that actually have coverage on this specific policy.
 - For Property additional_coverages (sublimits/extensions): This section is MANDATORY. Extract ALL sublimits of liability, also called extensions of coverage or additional coverages. Common property sublimits include: Flood, Earthquake, Equipment Breakdown, Ordinance or Law, Spoilage, Business Income Extended Period, Sign Coverage, Accounts Receivable, Valuable Papers, Fine Arts, Newly Acquired Property, Transit, Debris Removal, Pollutant Cleanup, Utility Services, Green Building, Sewer/Drain Backup, Water Damage, Mold/Fungi, and any other sublimit or extension listed in the quote. Include the limit and deductible for each.
-- For Property forms_endorsements: This section is MANDATORY. Extract EVERY policy form and endorsement listed in the property quote. Include the exact form number (e.g., CP 00 10 06/07, PR 001, PR 902, SSPN-018, LMA 5401, NMA1191) and description. These are typically listed under "Endorsements/Additional Endorsements" or "Forms Schedule" â may span MULTIPLE PAGES. Extract ALL items (a through z, aa through zz, etc.). Do NOT skip this section even if the list is long (50+ forms is normal for property).
+- For Property forms_endorsements: This section is MANDATORY. Extract EVERY policy form and endorsement listed in the property quote. Include the exact form number (e.g., CP 00 10 06/07, PR 001, PR 902, SSPN-018, LMA 5401, NMA1191) and description. These are typically listed under "Endorsements/Additional Endorsements" or "Forms Schedule" - may span MULTIPLE PAGES. Extract ALL items (a through z, aa through zz, etc.). Do NOT skip this section even if the list is long (50+ forms is normal for property).
 - For General Liability forms_endorsements: This section is MANDATORY. Extract EVERY form and endorsement listed under "PRIMARY GENERAL LIABILITY FORMS & ENDORSEMENTS" or similar GL-specific forms schedule. These forms have form numbers starting with CG, AD, AI, DE, JA, IL (liability-specific), etc. Do NOT copy property forms (CP, MS PR, HSIC, MS DEC, MS EBC) into the GL section. Each coverage type must have ONLY its own forms.
 - For Umbrella/Excess forms_endorsements: Extract the forms listed under the umbrella/excess liability quote. If the umbrella quote shares a forms schedule with GL (common with Admiral), extract the umbrella-specific forms. Do NOT copy property forms into the umbrella section.
 - FORMS SEPARATION RULE: Each coverage's forms_endorsements array must contain ONLY forms from that specific coverage's quote document. Property forms (CP, PR, MS PR, HSIC, SSPN, LMA, NMA, 6133x forms) go ONLY in the property section. GL forms (CG, AD, AI, DE, JA forms) go ONLY in the general_liability section. Umbrella/excess forms (SCX, NXLL, CSXC forms) go ONLY in the umbrella section. EPLI forms (BR, EMD, EMO, EGD, PN forms) go ONLY in the epli section. Crime forms should contain ONLY crime/fidelity-specific forms (e.g., CR, bond, fidelity forms) — do NOT copy property, GL, umbrella, or EPLI forms into the crime section. When a single carrier (e.g., Coalition) provides both EPLI and Crime, extract separate forms for each — crime gets only crime-specific endorsements, EPLI gets only EPLI endorsements. Shared policy jacket forms (IL, EMN, EMJ) should go in the primary coverage only, not duplicated across both.
 - For General Liability limits: Extract ALL limits of liability listed on the quote, not just the standard 6 CGL limits. Many hotel GL policies include additional limits for Employee Benefits (Each Claim and Aggregate), Sexual Abuse (Each Act and Aggregate), Hired & Non-Owned Auto, and Assault & Battery (Each Event and Aggregate). Include EVERY limit line item shown on the carrier quote in the "limits" array. Also extract the ACTUAL dollar amounts from the quote - do not use defaults like $100,000 for Damage to Rented Premises or $5,000 for Medical Payments if the quote shows different amounts.
-- For General Liability total_sales and schedule_of_classes exposure: The "total_sales" field must contain the ACTUAL total gross sales figure from the quote's rate basis line. Look for text like "Per $1,000 Gross Sales ($X)" or "Gross Sales: $X" and extract $X as total_sales. Do NOT fabricate or estimate per-class exposure amounts in schedule_of_classes â if the quote does not show individual per-class exposure breakdowns, leave the exposure field empty for each class entry. The total_sales field is the authoritative source for the Information Summary.
+- For General Liability total_sales and schedule_of_classes exposure: The "total_sales" field must contain the ACTUAL total gross sales figure from the quote's rate basis line. Look for text like "Per $1,000 Gross Sales ($X)" or "Gross Sales: $X" and extract $X as total_sales. Do NOT fabricate or estimate per-class exposure amounts in schedule_of_classes - if the quote does not show individual per-class exposure breakdowns, leave the exposure field empty for each class entry. The total_sales field is the authoritative source for the Information Summary.
 - For EPLI / Employment Practices Liability / Management Liability (ProEx): Extract as coverage_type "epli". ProEx Management Liability proposals from carriers like Coalition, Travelers, or Hartford contain EPL coverage. Look for "Employment Practices", "EPL", "EPLI", "Management Liability", or "ProEx" in the document. Extract the carrier name, AM Best rating, premium, surplus lines tax, total_premium (premium + SLT only, no broker fees), defense provisions (Duty to Defend or Non-Duty to Defend), aggregate limit, third-party discrimination/harassment sublimit, additional defense limit, retention per claim, and all sublimits (wage & hour, workplace violence, immigration, WARN Act, biometric, employee privacy). Also extract notable endorsements like "Bodily Injury & Property Damage Exclusion" or "Physical or Sexual Abuse Exclusion" with their coverage detail (e.g., "Yes - absolute language"). CRITICAL: The ProEx/Management Liability PDF is a SEPARATE coverage from General Liability — do NOT merge EPLI data into the GL section.
-- For ALL coverage types subjectivities: This section is CRITICAL. Extract ALL conditions, subjectives, binding requirements, and binding conditions listed in the quote. These are often on a page titled "CONDITIONS & SUBJECTIVES", "BINDING REQUIREMENTS", "BINDING SUBJECTIVITIES", or "BINDING CONDITIONS". Each bullet point or numbered item should be a separate string in the subjectivities array. Include items like: loss control report requirements, certificates of insurance requirements, named insured confirmation, application requirements, ACORD application deadlines, terrorism form requirements, payment of state taxes, inspection/audit contact requirements, and any other conditions the carrier requires before or after binding. Do NOT skip or summarize â extract each condition verbatim as written in the quote.
-- For named_insureds: Extract each named insured as an object with "name" and "dba" fields. Do NOT repeat the same entity twice (case-insensitive). If a named insured has a DBA or trade name EXPLICITLY listed in the quote (e.g., "Q Hotels Management LLC DBA Best Western"), split into name="Q Hotels Management LLC" and dba="Best Western". CRITICAL RULES: (1) Only include DBAs that are EXPLICITLY written as "DBA", "d/b/a", or "doing business as" in the documents. (2) Do NOT infer DBAs from hotel brand names, location names, or SOV entries. (3) Do NOT fabricate entity names like "Cajun Lodging LLC" unless that exact name appears in the quote documents. (4) If a named insured appears as "Q HOTEL MANAGEMENT, LLC" in ALL CAPS, extract it exactly as written â the generator will handle proper case formatting. (5) Do NOT create separate named insured entries for each hotel brand â those are locations, not named insureds.
-- For additional_named_insureds: CRITICAL â Search ALL pages thoroughly for "Additional Named Insured", "Additional Named Insureds Schedule", "Named Insured Schedule", or similar headings. These are often on a SEPARATE PAGE listing 5-15+ entities (LLCs, management companies with DBAs). You MUST extract EVERY SINGLE entity listed â do NOT stop early or truncate. Count the entities and verify your count matches the document. Each entity is typically an LLC with a DBA hotel brand name (e.g., "PORT PLAZA HOTEL LLC DBA HOME2SUITES BY HILTON"). Extract each one as {{name: "LLC name", dba: "brand name"}}. Do NOT duplicate entities already in named_insureds.
+- For ALL coverage types subjectivities: This section is CRITICAL. Extract ALL conditions, subjectives, binding requirements, and binding conditions listed in the quote. These are often on a page titled "CONDITIONS & SUBJECTIVES", "BINDING REQUIREMENTS", "BINDING SUBJECTIVITIES", or "BINDING CONDITIONS". Each bullet point or numbered item should be a separate string in the subjectivities array. Include items like: loss control report requirements, certificates of insurance requirements, named insured confirmation, application requirements, ACORD application deadlines, terrorism form requirements, payment of state taxes, inspection/audit contact requirements, and any other conditions the carrier requires before or after binding. Do NOT skip or summarize - extract each condition verbatim as written in the quote.
+- For named_insureds: Extract each named insured as an object with "name" and "dba" fields. Do NOT repeat the same entity twice (case-insensitive). If a named insured has a DBA or trade name EXPLICITLY listed in the quote (e.g., "Q Hotels Management LLC DBA Best Western"), split into name="Q Hotels Management LLC" and dba="Best Western". CRITICAL RULES: (1) Only include DBAs that are EXPLICITLY written as "DBA", "d/b/a", or "doing business as" in the documents. (2) Do NOT infer DBAs from hotel brand names, location names, or SOV entries. (3) Do NOT fabricate entity names like "Cajun Lodging LLC" unless that exact name appears in the quote documents. (4) If a named insured appears as "Q HOTEL MANAGEMENT, LLC" in ALL CAPS, extract it exactly as written - the generator will handle proper case formatting. (5) Do NOT create separate named insured entries for each hotel brand - those are locations, not named insureds.
+- For additional_named_insureds: CRITICAL - Search ALL pages thoroughly for "Additional Named Insured", "Additional Named Insureds Schedule", "Named Insured Schedule", or similar headings. These are often on a SEPARATE PAGE listing 5-15+ entities (LLCs, management companies with DBAs). You MUST extract EVERY SINGLE entity listed - do NOT stop early or truncate. Count the entities and verify your count matches the document. Each entity is typically an LLC with a DBA hotel brand name (e.g., "PORT PLAZA HOTEL LLC DBA HOME2SUITES BY HILTON"). Extract each one as {{name: "LLC name", dba: "brand name"}}. Do NOT duplicate entities already in named_insureds.
 - For additional_insureds: Search for "Additional Insured", "Additional Insured Schedule", or endorsement pages listing additional insureds (franchisors, mortgagees, managers). Extract all of them.
 - CRIME COVERAGE: For crime/fidelity bond policies (e.g., Chubb ForeFront Portfolio, Travelers Crime), extract ALL insuring clauses with their individual limits and retentions. Common insuring clauses include: Employee Theft, Forgery or Alteration, Inside the Premises (Theft of Money & Securities), Inside the Premises (Robbery/Safe Burglary), Outside the Premises, Computer and Funds Transfer Fraud, Money Orders and Counterfeit Money, Social Engineering Fraud. Also extract all endorsements from the forms schedule. If the policy is claims-made, note the retroactive date.
 - RT SPECIALTY / LLOYD'S OF LONDON PROPERTY QUOTES: RT Specialty quotes have a two-part format: (1) an RT "Insurance Proposal" cover with Cost Summary, and (2) a "Quotation Memorandum" from the actual carrier (Lloyd's via Owners First Association). CRITICAL extraction rules: Use the Quotation Memorandum "PREMIUM AND FEES" section Total as total_premium (this includes brokerage fees and association fees). The RT cover "Total Policy Cost" includes surplus lines tax which should NOT be in total_premium. Extract TIV from "RISK DETAILS" section. Extract deductibles from the lettered A/B/C structure (e.g., A=$10K AOP, B=$25K per building for water damage). Extract ALL lettered sublimits A through FF+ from "SCHEDULE OF SUBLIMITS". If Wind/Hail or Named Windstorm says "EXCLUDED", mark as "NOT COVERED" in additional_coverages. Extract WARRANTIES as subjectivities. Extract SUBJECTIVITIES as binding conditions. The SOV page (Schedule of Values) contains per-location breakdowns with LID, address, year built, construction, stories, units, sprinklered status, gross sq ft, building value, BPP value, BI value, and TIV — use this for coverage_by_location. Set carrier_admitted to false (Lloyd's is non-admitted/surplus lines).
 - LAYERED PROPERTY PROGRAMS: When a property quote contains multiple carriers in a layered/shared program (e.g., Lexington primary + Kinsale excess + Gotham/Coaction excess), extract EACH layer separately. Use "property" for the primary layer, "excess_property" for the first excess layer, and "excess_property_2" for the second excess layer. Each layer has its own carrier, premium, limits, deductibles, forms, subjectivities, and coinsurance. The layer_description should show the attachment point (e.g., "$10,000,000 xs $10,000,000"). Look for terms like "Excess", "xs", "excess of", or "Per Schedule" to identify excess layers. Common excess property carriers include Kinsale, Gotham (via Coaction), and others.
 - COINSURANCE & VALUATION: For ALL property layers (primary and excess), extract the coinsurance percentage for Building, Business Income, and BPP. Also extract the Monthly Limitation for Business Income (e.g., "1/4 Monthly", "1/3 Monthly"). This is a CRITICAL field that must ALWAYS be included in property quotes. Look for "Coinsurance", "Monthly Limitation", "Coinsurance & Valuation" sections. If coinsurance is waived or 0%, still include it as "0%". Also extract the valuation basis (Replacement Cost, Actual Cash Value, Agreed Value).
 - UMBRELLA/EXCESS LAYERS: When multiple umbrella/excess liability quotes are provided (e.g., separate PDFs for different layers), extract EACH layer as a separate coverage entry. Use "umbrella" for the primary excess layer, "umbrella_layer_2" for the second excess layer ($XM xs $XM), and "umbrella_layer_3" for the third excess layer ($XM xs $XM). Each layer has its own carrier, premium, limits, forms, and subjectivities. The tower_structure field should show that layer's position. Look for "Controlling Underlying" or "Schedule of Underlying" to determine the layer position. If a quote says it sits excess of another carrier's layer, it is a higher layer.
-- CRITICAL DISTINCTION - EXCESS LIABILITY vs EXCESS PROPERTY: "Excess Liability" is NOT the same as "Excess Property". If a quote says "Excess Liability", "Excess Liability Quotation", or "XS Liability" and its Schedule of Underlying Insurance references an Umbrella or General Liability policy, it is an UMBRELLA/EXCESS LIABILITY layer â use "umbrella" or "umbrella_layer_2" or "umbrella_layer_3". Do NOT classify it as "property" or "excess_property". Excess Property layers sit excess of a primary PROPERTY policy and cover physical damage to buildings/contents. Excess Liability layers sit excess of an Umbrella or GL policy and cover bodily injury/property damage liability claims. If the underlying schedule shows an umbrella or GL carrier, it is ALWAYS an excess liability layer, never excess property.
+- CRITICAL DISTINCTION - EXCESS LIABILITY vs EXCESS PROPERTY: "Excess Liability" is NOT the same as "Excess Property". If a quote says "Excess Liability", "Excess Liability Quotation", or "XS Liability" and its Schedule of Underlying Insurance references an Umbrella or General Liability policy, it is an UMBRELLA/EXCESS LIABILITY layer - use "umbrella" or "umbrella_layer_2" or "umbrella_layer_3". Do NOT classify it as "property" or "excess_property". Excess Property layers sit excess of a primary PROPERTY policy and cover physical damage to buildings/contents. Excess Liability layers sit excess of an Umbrella or GL policy and cover bodily injury/property damage liability claims. If the underlying schedule shows an umbrella or GL carrier, it is ALWAYS an excess liability layer, never excess property.
 - SAME CARRIER FOR GL AND EXCESS: When the SAME carrier (e.g., Admiral Insurance Company) provides BOTH a General Liability quote AND an Excess Liability/Umbrella quote in separate PDF files, these MUST be extracted as SEPARATE coverage entries. Extract the GL quote under "general_liability" and the Excess Liability quote under "umbrella". Do NOT merge or combine them into one entry just because they share a carrier name. Look at the coverage type stated on each document ("Coverage: Excess Liability" vs "Coverage: General Liability") and the document title ("Commercial Excess Liability Quote" vs "Commercial General Liability Quote") to distinguish them.
 - MULTI-OPTION EXCESS QUOTES: Some excess liability quotes present multiple limit options in columns (e.g., $1M/$2M/$3M Each Loss Event with different premiums for each). Extract the HIGHEST limit option as the primary "umbrella" entry. If the user needs a different option, they can adjust in the editor.
-- COMPETING QUOTES (MULTIPLE CARRIERS FOR SAME COVERAGE): When documents contain quotes from DIFFERENT carriers for the SAME line of coverage (e.g., Starr Property quote AND Markel Property quote in separate PDFs), extract EACH as a separate coverage entry. Use the base key for the first (e.g., "property") and "_alt_1", "_alt_2" suffixes for additional competing quotes (e.g., "property_alt_1", "general_liability_alt_1"). Do NOT discard any carrier's quote. Do NOT confuse competing quotes with layered programs â layered programs have excess/xs relationships, while competing quotes are independent quotes at the same attachment point from different carriers.
+- COMPETING QUOTES (MULTIPLE CARRIERS FOR SAME COVERAGE): When documents contain quotes from DIFFERENT carriers for the SAME line of coverage (e.g., Starr Property quote AND Markel Property quote in separate PDFs), extract EACH as a separate coverage entry. Use the base key for the first (e.g., "property") and "_alt_1", "_alt_2" suffixes for additional competing quotes (e.g., "property_alt_1", "general_liability_alt_1"). Do NOT discard any carrier's quote. Do NOT confuse competing quotes with layered programs - layered programs have excess/xs relationships, while competing quotes are independent quotes at the same attachment point from different carriers.
 
 DOCUMENT TEXT:
 {document_text}"""
@@ -1088,7 +1093,7 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
                     if cov_type not in normalized:
                         normalized[cov_type] = item
                     else:
-                        # Competing quote â find next available alt slot
+                        # Competing quote - find next available alt slot
                         for alt_n in range(1, 5):
                             alt_key = f"{cov_type}_alt_{alt_n}"
                             if alt_key not in normalized:
@@ -1129,7 +1134,7 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
             ni_lower = ni_name.lower()
             brand_count = sum(1 for b in _brand_names if b in ni_lower)
             if brand_count >= 3:
-                # This is likely a hallucinated concatenation â try to extract just the entity
+                # This is likely a hallucinated concatenation - try to extract just the entity
                 import re as _re_fix
                 m = _re_fix.match(r'^(.+?\b(?:LLC|LP|LLP|Inc|Corp)\b)', ni_name, _re_fix.IGNORECASE)
                 if m:
@@ -1152,12 +1157,12 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
         for cov_key in ["property", "general_liability"]:
             cov = data.get("coverages", {}).get(cov_key, {})
             if cov and not cov.get("forms_endorsements"):
-                logger.warning(f"{cov_key} has no forms_endorsements extracted â may need manual review")
+                logger.warning(f"{cov_key} has no forms_endorsements extracted - may need manual review")
         
         # Fix 4: Validate additional_coverages for property
         prop_cov = data.get("coverages", {}).get("property", {})
         if prop_cov and not prop_cov.get("additional_coverages"):
-            logger.warning("Property has no additional_coverages (sublimits) extracted â may need manual review")
+            logger.warning("Property has no additional_coverages (sublimits) extracted - may need manual review")
 
         # Validate and fix total_premium for each coverage
         def _to_num(val):
@@ -1320,15 +1325,15 @@ def format_verification_message(data: dict) -> str:
         return f"Extraction Error: {data['error']}"
 
     lines = []
-    lines.append("ââââââââââââââââââââââââââââââââââââââââ")
-    lines.append("ð EXTRACTED DATA â PLEASE VERIFY")
-    lines.append("âââââââââââââââââââââââââââââââââââââââââ")
+    lines.append("----------------------------------------")
+    lines.append("ð EXTRACTED DATA - PLEASE VERIFY")
+    lines.append("-----------------------------------------")
 
     # Client Info
     ci = data.get("client_info", {})
     if ci:
         lines.append("")
-        lines.append("â¸ CLIENT INFORMATION")
+        lines.append("-¸ CLIENT INFORMATION")
         lines.append(f"  Named Insured: {ci.get('named_insured', 'N/A')}")
         if ci.get("dba"):
             lines.append(f"  DBA: {ci['dba']}")
@@ -1343,9 +1348,9 @@ def format_verification_message(data: dict) -> str:
     coverages = data.get("coverages", {})
     if coverages:
         lines.append("")
-        lines.append("â¸ PREMIUM SUMMARY")
+        lines.append("-¸ PREMIUM SUMMARY")
         lines.append(f"  {'Coverage':<25} {'Carrier':<20} {'Total Premium':>15}")
-        lines.append(f"  {'â'*25} {'â'*20} {'â'*15}")
+        lines.append(f"  {'-'*25} {'-'*20} {'-'*15}")
 
         grand_total = 0
         coverage_names = {
@@ -1378,7 +1383,7 @@ def format_verification_message(data: dict) -> str:
                     lines.append(f"  {'':25} {admitted}")
                 grand_total += total
 
-        lines.append(f"  {'â'*25} {'â'*20} {'â'*15}")
+        lines.append(f"  {'-'*25} {'-'*20} {'-'*15}")
         lines.append(f"  {'TOTAL':<25} {'':20} ${grand_total:>12,.0f}")
 
     # Coverage Details
@@ -1393,7 +1398,7 @@ def format_verification_message(data: dict) -> str:
             continue
 
         lines.append("")
-        lines.append(f"â¸ {display_name}")
+        lines.append(f"-¸ {display_name}")
         lines.append(f"  Carrier: {cov.get('carrier', 'N/A')}")
         lines.append(f"  AM Best: {cov.get('am_best_rating', 'N/A')}")
 
@@ -1403,9 +1408,9 @@ def format_verification_message(data: dict) -> str:
             lines.append("  Limits:")
             for lim in limits:
                 if isinstance(lim, dict):
-                    lines.append(f"    â¢ {lim.get('description', '')}: {lim.get('limit', '')}")
+                    lines.append(f"    -¢ {lim.get('description', '')}: {lim.get('limit', '')}")
                 elif isinstance(lim, str):
-                    lines.append(f"    â¢ {lim}")
+                    lines.append(f"    -¢ {lim}")
 
         # Deductibles
         deductibles = cov.get("deductibles", [])
@@ -1413,9 +1418,9 @@ def format_verification_message(data: dict) -> str:
             lines.append("  Deductibles:")
             for ded in deductibles:
                 if isinstance(ded, dict):
-                    lines.append(f"    â¢ {ded.get('description', '')}: {ded.get('amount', '')}")
+                    lines.append(f"    -¢ {ded.get('description', '')}: {ded.get('amount', '')}")
                 elif isinstance(ded, str):
-                    lines.append(f"    â¢ {ded}")
+                    lines.append(f"    -¢ {ded}")
 
         # Additional Coverages
         addl = cov.get("additional_coverages", [])
@@ -1424,9 +1429,9 @@ def format_verification_message(data: dict) -> str:
             for ac in addl:
                 if isinstance(ac, dict):
                     ded_str = f" (Ded: {ac['deductible']})" if ac.get("deductible") else ""
-                    lines.append(f"    â¢ {ac.get('description', '')}: {ac.get('limit', '')}{ded_str}")
+                    lines.append(f"    -¢ {ac.get('description', '')}: {ac.get('limit', '')}{ded_str}")
                 elif isinstance(ac, str):
-                    lines.append(f"    â¢ {ac}")
+                    lines.append(f"    -¢ {ac}")
 
         # Forms count
         forms = cov.get("forms_endorsements", [])
@@ -1434,9 +1439,9 @@ def format_verification_message(data: dict) -> str:
             lines.append(f"  Forms & Endorsements: {len(forms)} extracted")
             for f in forms[:5]:
                 if isinstance(f, dict):
-                    lines.append(f"    â¢ {f.get('form_number', '')} â {f.get('description', '')}")
+                    lines.append(f"    -¢ {f.get('form_number', '')} - {f.get('description', '')}")
                 elif isinstance(f, str):
-                    lines.append(f"    â¢ {f}")
+                    lines.append(f"    -¢ {f}")
             if len(forms) > 5:
                 lines.append(f"    ... and {len(forms) - 5} more")
 
@@ -1449,7 +1454,7 @@ def format_verification_message(data: dict) -> str:
                 # Truncate long items for display
                 if len(s_text) > 100:
                     s_text = s_text[:97] + "..."
-                lines.append(f"    â {s_text}")
+                lines.append(f"    - {s_text}")
             if len(subjs) > 5:
                 lines.append(f"    ... and {len(subjs) - 5} more")
 
@@ -1457,7 +1462,7 @@ def format_verification_message(data: dict) -> str:
     locations = data.get("locations", [])
     if locations:
         lines.append("")
-        lines.append(f"â¸ LOCATIONS: {len(locations)} found")
+        lines.append(f"-¸ LOCATIONS: {len(locations)} found")
         for loc in locations[:5]:
             lines.append(f"  {loc.get('number', '?')}. {loc.get('address', '')} {loc.get('city', '')}, {loc.get('state', '')} {loc.get('zip', '')}")
         if len(locations) > 5:
@@ -1467,21 +1472,21 @@ def format_verification_message(data: dict) -> str:
     named = data.get("named_insureds", [])
     if named:
         lines.append("")
-        lines.append(f"â¸ NAMED INSUREDS: {len(named)}")
+        lines.append(f"-¸ NAMED INSUREDS: {len(named)}")
         for ni in named[:5]:
-            lines.append(f"  â¢ {ni}")
+            lines.append(f"  -¢ {ni}")
         if len(named) > 5:
             lines.append(f"  ... and {len(named) - 5} more")
 
     lines.append("")
-    lines.append("âââââââââââââââââââââââââââââââââââââââââ")
-    lines.append("â ï¸ PLEASE VERIFY ALL DATA ABOVE")
+    lines.append("-----------------------------------------")
+    lines.append("- ï¸ PLEASE VERIFY ALL DATA ABOVE")
     lines.append("")
     lines.append("Reply with:")
-    lines.append("  â /proposal confirm â to generate the proposal")
-    lines.append("  âï¸ Send corrections as a message")
-    lines.append("  â /proposal cancel â to cancel")
-    lines.append("âââââââââââââââââââââââââââââââââââââââââ")
+    lines.append("  - /proposal confirm - to generate the proposal")
+    lines.append("  -ï¸ Send corrections as a message")
+    lines.append("  - /proposal cancel - to cancel")
+    lines.append("-----------------------------------------")
 
     return "\n".join(lines)
 
@@ -1627,7 +1632,7 @@ class ProposalExtractor:
                         if cov_type not in normalized:
                             normalized[cov_type] = item
                         else:
-                            # Competing quote â find next available alt slot
+                            # Competing quote - find next available alt slot
                             for alt_n in range(1, 5):
                                 alt_key = f"{cov_type}_alt_{alt_n}"
                                 if alt_key not in normalized:
@@ -1814,7 +1819,7 @@ TEXT:
                 start = idx + 1
 
         if not positions:
-            # No keyword matches â fall back to first + last portions of text
+            # No keyword matches - fall back to first + last portions of text
             max_len = context_chars * 2
             if len(combined_text) <= max_len:
                 return combined_text
@@ -1858,7 +1863,7 @@ TEXT:
         PASS_MODEL = "gpt-4.1-mini"  # Faster model for focused extraction passes
         
         # Check which coverages need forms extraction
-        # GL/Property quotes typically have 30-60+ forms â use higher thresholds
+        # GL/Property quotes typically have 30-60+ forms - use higher thresholds
         # to ensure Pass 2 re-extracts when initial pass captured only a partial list
         _forms_thresholds = {
             "general_liability": 25,  # GL forms schedules are typically 30-60+ forms
@@ -1989,7 +1994,7 @@ DOCUMENT TEXT:
             logger.info("Pass 3 (addresses): No GL coverage found, skipping")
             return data
         
-        # Check if GL data is complete â trigger re-extraction when:
+        # Check if GL data is complete - trigger re-extraction when:
         # 1. designated_premises < 3 (GPT often captures only 1-2 in initial pass)
         # 2. schedule_of_classes count is much less than SOV location count (truncated table)
         dp = gl.get("designated_premises", [])
@@ -2007,11 +2012,11 @@ DOCUMENT TEXT:
 
         if dp_seems_complete and soc_seems_complete:
             logger.info(f"Pass 3 (addresses): GL has {dp_count} premises and {soc_count} classes "
-                       f"(SOV has {sov_count} locations), both seem complete â skipping")
+                       f"(SOV has {sov_count} locations), both seem complete - skipping")
             return data
 
         logger.info(f"Pass 3 (addresses): GL has {dp_count} premises and {soc_count} classes "
-                   f"(SOV has {sov_count} locations) â running focused re-extraction")
+                   f"(SOV has {sov_count} locations) - running focused re-extraction")
 
         # Use smart text selection for address-related content
         # Use larger context window to capture full Schedule of Classes tables
@@ -2042,7 +2047,7 @@ DOCUMENT TEXT:
         prompt = f"""From this General Liability insurance document, extract TWO things:
 
 1. ALL physical street addresses that represent covered locations (designated_premises)
-2. The COMPLETE Schedule of Classes table (schedule_of_classes) â EVERY row, EVERY location
+2. The COMPLETE Schedule of Classes table (schedule_of_classes) - EVERY row, EVERY location
 
 Look for addresses in:
 - CG 21 44 or NXLL 110 (Limitation of Coverage to Designated Premises) form
@@ -2052,17 +2057,17 @@ Look for addresses in:
 - The declarations page showing location addresses
 
 For Schedule of Classes (FUT 1004 or similar form):
-- Extract EVERY row â there may be 10-15+ rows spanning multiple locations
+- Extract EVERY row - there may be 10-15+ rows spanning multiple locations
 - Each row has: Location (e.g., "Primary", "location#3", "location#8"), Class Code (e.g., 45191), Description, Exposure Amount, Rate, Premium
 - Include ALL locations: Primary, location#3, location#4, ..., location#12, etc.
 - Include restaurant/liquor entries (class codes 16910, 58173) as separate rows
 - CRITICAL: Do NOT stop after 3-4 rows. Extract the ENTIRE table.
-- The exposure amount is the dollar figure (e.g., $3,200,000) â this represents Gross Sales for that location
+- The exposure amount is the dollar figure (e.g., $3,200,000) - this represents Gross Sales for that location
 
 Rules:
 - Extract the COMPLETE street address including street number, street name, city, state, and zip
 - Include ALL addresses, even if they span multiple pages
-- Do NOT include PO Boxes or mailing addresses â only physical location addresses
+- Do NOT include PO Boxes or mailing addresses - only physical location addresses
 - Each address should be a separate entry
 
 Return a JSON object:
@@ -2076,7 +2081,7 @@ DOCUMENT TEXT:
             response = _get_openai_client().chat.completions.create(
                 model=PASS_MODEL,
                 messages=[
-                    {"role": "system", "content": "You are an expert at extracting location data from insurance documents. Extract every covered location address AND every row from the Schedule of Classes table. Do NOT truncate â include ALL rows."},
+                    {"role": "system", "content": "You are an expert at extracting location data from insurance documents. Extract every covered location address AND every row from the Schedule of Classes table. Do NOT truncate - include ALL rows."},
                     {"role": "user", "content": prompt}
                 ],
                 response_format={"type": "json_object"},
