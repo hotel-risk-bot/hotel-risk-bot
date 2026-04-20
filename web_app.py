@@ -1385,6 +1385,32 @@ def _run_extraction(session_id):
                             if _v:
                                 _addr_full = str(_v).strip()
                                 break
+                    if not _addr_full:
+                        # Fallback: client_info mailing/property/address fields
+                        _ci = merged_data.get("client_info") if isinstance(merged_data, dict) else None
+                        if isinstance(_ci, dict):
+                            for _cif in ("property_address", "mailing_address", "address"):
+                                _v = _ci.get(_cif)
+                                if _v:
+                                    _addr_full = str(_v).strip()
+                                    break
+                    if not _addr_full:
+                        # Fallback: GL designated_premises or schedule_of_classes address
+                        _gl = merged_data.get("general_liability") if isinstance(merged_data, dict) else None
+                        if isinstance(_gl, dict):
+                            _dp = _gl.get("designated_premises")
+                            if isinstance(_dp, list) and _dp:
+                                _first_dp = _dp[0]
+                                if isinstance(_first_dp, dict):
+                                    _addr_full = str(_first_dp.get("address") or "").strip()
+                                elif isinstance(_first_dp, str):
+                                    _addr_full = _first_dp.strip()
+                            elif isinstance(_dp, str):
+                                _addr_full = _dp.strip()
+                            if not _addr_full:
+                                _soc = _gl.get("schedule_of_classes")
+                                if isinstance(_soc, list) and _soc and isinstance(_soc[0], dict):
+                                    _addr_full = str(_soc[0].get("address") or "").strip()
                     if _addr_full:
                         import re as _re_addr
                         _m = _re_addr.match(r'^(.+?),\s*(.+?),\s*([A-Z]{2})\s*(\d{5}(?:-\d{4})?)?', _addr_full)
