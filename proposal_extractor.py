@@ -161,6 +161,8 @@ def _score_page(page_text: str) -> float:
         "LOCATION 3",
         "BLDG#",
         "BUILDING DESCRIPTION",
+        "ADDITIONAL COVERAGES INCLUDED",
+        "POLICY COVERAGES",
     ]
     is_critical = False
     for kw in _critical_page_keywords:
@@ -277,6 +279,7 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 100000) -> str:
                 "PREMISES AND BUILDINGS", "SCHEDULE OF LOCATIONS", "SCHEDULE OF VALUES",
                 "BLDG#", "BUILDING DESCRIPTION", "BUILDING LIMIT", "TOTAL INSURED VALUE",
                 "COVERAGE BY LOCATION", "DESIGNATED PREMISES", "LOCATION SCHEDULE",
+                "ADDITIONAL COVERAGES INCLUDED", "POLICY COVERAGES",
             )
             thin_pages = []
             for _p in page_texts:
@@ -1009,6 +1012,7 @@ IMPORTANT:
 - For Property tiv: Extract the Total Insured Value (TIV) from the property quote or SOV. Look for "Total Insured Value", "TIV", "Total Values", or the sum total on the Schedule of Values. This should be the total of Building + Contents/BPP + Business Income/Rents across all locations. For example if the SOV shows Building Total $42,800,000 + Contents Total $7,700,000 + BI/Rents Total $5,550,000 = TIV $56,390,000. Use the actual SOV/quote total, NOT the per-location coverage limits. TOWER HILL / VANTAGE RISK SPECIFIC: For Tower Hill property quotes, the overall Total Insured Value does NOT appear as a single labeled line. Instead, you MUST sum the "Limit" column across ALL Bldg# rows in the "PREMISES AND BUILDINGS" section. For a single-location Tower Hill quote with one Bldg# that has Building Limit $15,080,000 and Business Personal Property Limit $1,500,000, property.tiv = 16580000. NEVER leave property.tiv at 0 when a Tower Hill Bldg# table is present.
 - For locations: Extract ALL property locations. For each location, set "name" to the hotel/property name (e.g., "Hacienda Hotel", "Hampton Inn") and "tiv" to the Total Insured Value for that specific location. For single-location quotes, use the "Account Name", "Applicant", or "Named Insured" as the location name, and the total TIV from the quote (e.g., "Total Insured Values: $4,660,000") as the location tiv. Always extract tiv as a number (no $ or commas).
 - TOWER HILL / VANTAGE RISK PROPERTY QUOTES - CRITICAL EXTRACTION PROCEDURE: Tower Hill Insurance Group underwrites on behalf of Vantage Risk Specialty Insurance Company. Their property quotes do NOT use the header "Schedule of Locations" or "Schedule of Values". Instead, locate the section whose heading reads exactly "PREMISES AND BUILDINGS" (may appear as "PREMISES  AND  BUILDINGS" with double spaces). Under that heading you will see (in order): (a) a few "Coverage for All Premises" rows (Employee Dishonesty, Forgery - SKIP these, they are policy-wide limits, not locations), then (b) one or more centered sub-headings of the form "Location 1", "Location 2", etc. Under each "Location N" heading the street address appears on line 1 and "CITY, ST ZIP" appears on line 2. Immediately below is a small table with column headers "Bldg#", "Building Description", and "Limit". Each Bldg# row in that table has the FULL property address in "Building Description" and a dollar "Limit" value (typically one row for Building limit and one for Business Personal Property / BPP). To extract this correctly:
+- TOWER HILL PER-PREMISE POLICY COVERAGES AND ADDITIONAL COVERAGES INCLUDED: (1) From the "PREMISES AND BUILDINGS" page, under each "Location N" heading, extract the Bldg# table rows for Building and Business Personal Property into property.limits[]. (2) The "Business Income with Extra Expense Coverage" row (often shown as "- 1/6" meaning a 2-month period) MUST be extracted as an entry in property.limits[] with description "Business Income" and the exact dollar value shown - this is required so TIV sums Building + BPP + Business Income. (3) All OTHER per-premise "Policy Coverages" rows (Ordinance or Law A, Ordinance or Law B/C, Valuable Papers, Accounts Receivable, Debris Removal, Pollutant Removal and Clean Up, Water Backup and Sump Overflow, Outdoor Signs, Fire Department Service Charge, etc.) go into property.additional_coverages[] with the exact description and limit. (4) A separate page titled "Additional Coverages Included" lists the Tower Hill form-included coverages (often 15 to 25 line items) - pass through EVERY line on that page into property.additional_coverages[] exactly as written, with the description and any limit shown. (5) NEVER put Southlake or GL-only optional-coverage packages (Breach Response, EPLI, Enviro Pack, Workplace Violence, Hired and Non-Owned Auto) into property.additional_coverages[] - those are GL coverages and belong only in general_liability.additional_coverages[].
     1. For locations[N].name: If the quote shows a hotel/DBA name (e.g., "Hilton Garden Inn Winter Park"), use that; otherwise use the corporate entity or franchise flag. Do NOT default to the LLC name when a franchise DBA is available.
     2. For locations[N].address / city / state / zip: Parse the two lines under the "Location N" heading - line 1 = street address, line 2 = "CITY, ST ZIP" (split on the comma and the last space). You may also confirm with the "Building Description" column.
     3. For locations[N].tiv: Sum the "Limit" column across ALL Bldg# rows that belong to this Location N (typically Building + BPP). Example: if Bldg# 1 shows Building $15,080,000 and BPP $1,500,000, locations[0].tiv = 16580000.
@@ -2172,7 +2176,8 @@ DOCUMENT TEXT:
             "equipment breakdown", "ordinance or law", "spoilage",
             "business income", "debris removal", "pollutant cleanup",
             "utility services", "sewer", "drain backup", "mold", "fungi",
-            "ingress", "egress", "contingent business"
+            "ingress", "egress", "contingent business",
+            "additional coverages included", "policy coverages", "valuable papers", "accounts receivable", "water backup", "outdoor signs", "fire department service charge",
         ]
         relevant_text = self._extract_relevant_sections(combined_text, sublimit_keywords, context_chars=10000)
 
@@ -2184,6 +2189,8 @@ Look for sections titled:
 - Additional Coverages
 - Coverage Extensions
 - Supplemental Coverages
+- Additional Coverages Included (Tower Hill / Vantage Risk quotes use this exact section name listing form-included coverages)
+- Policy Coverages (Tower Hill per-premise sub-table listing Ordinance or Law A, Ordinance or Law B/C, Valuable Papers, Business Income with Extra Expense Coverage, Accounts Receivable, Debris Removal, Pollutant Removal and Clean Up, Water Backup)
 - Any table or list showing coverage descriptions with dollar limits
 
 Common property sublimits to look for:
