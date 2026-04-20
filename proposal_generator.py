@@ -3122,6 +3122,15 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
             rows = [[ac.get("description", "") or ac.get("coverage", "") or ac.get("name", ""), ac.get("limit", "")] if isinstance(ac, dict) else [str(ac), ""] for ac in addl]
             create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
                               header_alignments={0: L, 1: L})
+    elif coverage_key == "property":
+        # No Additional Coverages / Sublimits extracted - render Review Required placeholder so broker verifies against quote
+        add_subsection_header(doc, "Sublimits of Liability / Extensions")
+        add_formatted_paragraph(doc,
+            "Review Required - Additional Coverages / Sublimits were not located in the carrier quote. "
+            "Broker and account executive must verify Business Income, Ordinance or Law, Equipment Breakdown, "
+            "Spoilage, Debris Removal, Pollutant Cleanup, Valuable Papers, Accounts Receivable, and Water Backup "
+            "limits directly against the carrier-issued policy prior to binding.",
+            size=9, italic=True, color=CHARCOAL, space_after=6)
     
     # Underlying Insurance (Umbrella)
     underlying = cov.get("underlying_insurance", [])
@@ -3176,8 +3185,8 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     elif coverage_key in _critical_form_coverages:
         add_subsection_header(doc, "Forms & Endorsements")
         add_formatted_paragraph(doc,
-            "Forms and endorsements schedule to be confirmed upon policy issuance. "
-            "Please refer to the carrier quote documents for the complete list of applicable forms.",
+            "Review Required - Form Schedule page not located in the carrier quote. "
+            "Do not bind until the complete Forms & Endorsements schedule has been verified against the carrier-issued policy.",
             size=9, italic=True, color=CHARCOAL, space_after=6)
     
     # Additional Named Insureds (per-coverage)
