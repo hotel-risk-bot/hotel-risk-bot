@@ -597,17 +597,17 @@ CRITICAL RULES:
 1. Extract EVERY form and endorsement number with full description and date
 2. NEVER summarize - list everything exactly as shown
 3. NEVER write "Additional forms as listed in policy"
-4. Extract ALL additional coverages (even if excluded - mark as "Excluded" or "NOT COVERED")
-5. For Property: ALWAYS include Flood and Earthquake status (even if excluded)
+4. Extract additional coverages ONLY if they literally appear in the quote. If a peril or coverage is not mentioned, OMIT it from additional_coverages - do NOT invent a row. Only use "Excluded" or "NOT COVERED" when the document literally contains those exact words, a $0 limit, or an explicit exclusion.
+5. For Property Flood and Earthquake: include ONLY if the quote explicitly lists them with a limit, "Excluded", "Not Covered", or a $0 value. If the quote is silent on them, OMIT (do not assume excluded and do not emit a row).
 6. Include ALL taxes, fees, surcharges in premium calculations
 7. Exclude TRIA premiums from totals
 8. Extract ALL deductibles
 8a. Do NOT include deductibles for perils that are "NOT COVERED" in the sublimits section (e.g., if Named Windstorm sublimit is "NOT COVERED", do NOT extract a Named Windstorm/Named Storm deductible)
 9. Extract ALL limits
 10. Note carrier name and whether admitted or non-admitted
-11. Property additional_coverages (sublimits) is MANDATORY - if you see ANY sublimits, extensions, or coverage limits in the property quote, extract ALL of them. Common ones: Flood, Earthquake, Equipment Breakdown, Ordinance or Law, Spoilage, Business Income Extended Period, Sign Coverage, Accounts Receivable, Valuable Papers, Newly Acquired Property, Transit, Debris Removal, Pollutant Cleanup, Sewer/Drain Backup, Water Damage, Mold/Fungi, Green Building
-12. Property forms_endorsements is MANDATORY - extract EVERY form number from the forms schedule page
-13. GL forms_endorsements is MANDATORY - extract EVERY form number from the GL forms schedule
+11. Property additional_coverages is a LITERAL PASS-THROUGH of the "Additional Coverages", "Policy Coverages", "Sublimits", or "Extensions of Coverage" section of the quote. Extract EVERY line item literally present with its exact limit - do NOT add line items that are not in the document, and do NOT drop any that are. Business Income w/ Extra Expense, Ordinance or Law (A/B/C), Equipment Breakdown components (Data Restoration, Hazardous Substances, Spoilage), Debris Removal, Pollutant Cleanup, Valuable Papers, Accounts Receivable, Water Backup, Outdoor Signs, etc. must flow through exactly as written when present, and must be OMITTED when not present.
+12. Property forms_endorsements: HARD RULE - emit ONLY form numbers that LITERALLY appear on a dedicated "Form Schedule", "Schedule of Forms", "Schedule of Forms and Endorsements", or "Forms and Endorsements" page within the PROPERTY section of this quote. You are FORBIDDEN from generating forms from training data, generic ISO boilerplate (CP DS 00, CP 00 90, CP 99 03, CP 17 96, CP 17 97, CP 04 21, CP 01 54, IL 00 21, IL 09 99, etc.), or carrier templates. If no such schedule page is found in the PROPERTY section, return "forms_endorsements": [] and add a string to warnings: "Property forms schedule page not found - forms intentionally empty". DO NOT GUESS. DO NOT SYNTHESIZE.
+13. GL forms_endorsements: HARD RULE - emit ONLY form numbers that LITERALLY appear on a dedicated forms schedule page within the GL section. If absent, return "forms_endorsements": [] and add a warning. DO NOT synthesize or fill in from training data.
 14. GL designated_premises is MANDATORY when CG2144/NXLL110 form exists - extract ALL addresses
 15. GL schedule_of_classes MUST include ALL class codes with actual dollar exposure amounts
 16. Named insureds MUST be exact legal entity names from the quote - do NOT concatenate hotel brand names into entity names
@@ -656,13 +656,7 @@ The JSON structure should be:
         {{"description": "Wind/Hail", "amount": "$X"}}
       ],
       "additional_coverages": [
-        {{"description": "Flood", "limit": "$X or NOT COVERED"}},
-        {{"description": "Earthquake", "limit": "$X or Excluded"}},
-        {{"description": "Equipment Breakdown", "limit": "$X or Included"}},
-        {{"description": "Ordinance or Law", "limit": "$X"}},
-        {{"description": "Spoilage", "limit": "$X"}},
-        {{"description": "Business Income Extended Period", "limit": "X days"}},
-        {{"description": "Sign Coverage", "limit": "$X"}}
+        {{"description": "Line item exactly as written in quote (e.g., Business Income with Extra Expense Coverage - 1/6)", "limit": "exact limit from quote (e.g., $2,100,000)"}}
       ],
       "coinsurance": [
         {{"coverage": "Building", "percentage": "0% or 80% or 90% or 100%"}},
@@ -975,7 +969,8 @@ The JSON structure should be:
   }},
   "payment_options": [
     {{"carrier": "Carrier", "coverage_type": "Property, General Liability, Umbrella / Excess, Workers Compensation, Crime, Terrorism, Equipment Breakdown, EPLI, Cyber, Flood, Auto", "terms": "Payment terms (exclude commission/broker fee info)", "mep": "Minimum earned premium"}}
-  ]
+  ],
+  "warnings": ["String entries describing any value the extractor could not verify (e.g., Property forms schedule page not found - forms intentionally empty)"]
 }}
 
 IMPORTANT:
