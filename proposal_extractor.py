@@ -383,7 +383,7 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 100000) -> str:
         return _extract_with_pdfplumber(pdf_path, max_chars)
 
 
-def _extract_with_ocr(pdf_path: str, total_pages: int = 0, max_pages: int = 3) -> str:
+def _extract_with_ocr(pdf_path: str, total_pages: int = 0, max_pages: int = 20) -> str:
     """OCR fallback for scanned/image-based PDFs using GPT Vision.
     
     Converts PDF pages to images and sends them to GPT-4.1-mini with vision
