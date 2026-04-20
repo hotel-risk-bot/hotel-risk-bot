@@ -1305,16 +1305,43 @@ def _run_extraction(session_id):
             locations = merged_data.get("locations", [])
             client_name = merged_data.get("client_info", {}).get("named_insured", "")
             prop_data = merged_data.get("coverages", {}).get("property", {})
-            prop_tiv_str = str(prop_data.get("tiv", "") or "")
-            # Parse TIV from string like "$4,660,000" to number
+            # Parse TIV from property coverage; try multiple shapes the extractor may emit
             import re as _re_tiv
-            prop_tiv = 0
-            tiv_match = _re_tiv.search(r'[\$]?([\d,]+)', prop_tiv_str)
-            if tiv_match:
+            def _parse_money(v):
+                if v is None or v == "":
+                    return 0.0
+                if isinstance(v, (int, float)):
+                    return float(v)
+                m = _re_tiv.search(r'[\$]?([\d,]+(?:\.\d+)?)', str(v))
+                if not m:
+                    return 0.0
                 try:
-                    prop_tiv = float(tiv_match.group(1).replace(",", ""))
+                    return float(m.group(1).replace(",", ""))
                 except (ValueError, TypeError):
-                    pass
+                    return 0.0
+            prop_tiv = _parse_money(prop_data.get("tiv"))
+            # Fallback 1: sum Building + BPP/Contents + Business Income from limits[]
+            if not prop_tiv and isinstance(prop_data.get("limits"), list):
+                _sum = 0.0
+                for _lim in prop_data.get("limits", []):
+                    if not isinstance(_lim, dict):
+                        continue
+                    _desc = str(_lim.get("description") or "").lower()
+                    if any(k in _desc for k in ("building", "personal property", "bpp", "contents", "business income", "rents", "rental")):
+                        _sum += _parse_money(_lim.get("limit"))
+                if _sum > 0:
+                    prop_tiv = _sum
+            # Fallback 2: sum building_value + bpp_value + business_income across coverage_by_location[*]
+            if not prop_tiv and isinstance(prop_data.get("coverage_by_location"), list):
+                _sum = 0.0
+                for _cbl in prop_data.get("coverage_by_location", []):
+                    if not isinstance(_cbl, dict):
+                        continue
+                    _sum += _parse_money(_cbl.get("building_value"))
+                    _sum += _parse_money(_cbl.get("bpp_value"))
+                    _sum += _parse_money(_cbl.get("business_income"))
+                if _sum > 0:
+                    prop_tiv = _sum
             # Synthesize a single location when GPT returned none (e.g., Tower Hill PREMISES AND BUILDINGS
             # section that earlier prompt revisions did not recognize, or any single-property quote whose
             # schedule page was pruned). Safer to emit one row seeded from property coverage than to leave
