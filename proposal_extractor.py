@@ -267,16 +267,30 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 100000) -> str:
                         "chars": len(page_text)
                     })
 
-        # --- OCR fallback for image-only pages (scanned/no text) ---
-        if page_texts and len(page_texts) < total_pages and HAS_PDF2IMAGE:
-            text_pages = {p["page"] for p in page_texts}
-            missing_pages = [p for p in range(1, total_pages + 1) if p not in text_pages]
-            if missing_pages and len(missing_pages) <= 10:
-                logger.info(f"OCR: {len(missing_pages)} image-only pages detected: {missing_pages}")
+        # --- OCR fallback for image-only pages AND thin-critical pages ---
+        # Thin-critical: < 500 chars of pdftotext but mentions a tabular keyword
+        # (e.g. Tower Hill PREMISES AND BUILDINGS where headers extract but the Bldg# table is image-based)
+        if page_texts and HAS_PDF2IMAGE:
+            text_pages_map = {p["page"]: p for p in page_texts}
+            missing_pages = [p for p in range(1, total_pages + 1) if p not in text_pages_map]
+            _thin_crit_kw = (
+                "PREMISES AND BUILDINGS", "SCHEDULE OF LOCATIONS", "SCHEDULE OF VALUES",
+                "BLDG#", "BUILDING DESCRIPTION", "BUILDING LIMIT", "TOTAL INSURED VALUE",
+                "COVERAGE BY LOCATION", "DESIGNATED PREMISES", "LOCATION SCHEDULE",
+            )
+            thin_pages = []
+            for _p in page_texts:
+                if _p["chars"] < 500:
+                    _up = _p["text"].upper()
+                    if any(kw in _up for kw in _thin_crit_kw):
+                        thin_pages.append(_p["page"])
+            ocr_targets = sorted(set(missing_pages + thin_pages))
+            if ocr_targets and len(ocr_targets) <= 10:
+                logger.info(f"OCR: {len(missing_pages)} image-only + {len(thin_pages)} thin-critical pages = {ocr_targets}")
                 try:
                     import base64
                     from io import BytesIO
-                    for pg in missing_pages:
+                    for pg in ocr_targets:
                         try:
                             imgs = convert_from_path(pdf_path, dpi=200, first_page=pg, last_page=pg)
                             if not imgs:
@@ -287,9 +301,9 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 100000) -> str:
                             ocr_resp = _get_openai_client().chat.completions.create(
                                 model="gpt-4.1-mini",
                                 messages=[
-                                    {"role": "system", "content": "Extract ALL text from this insurance document page. Include every number, limit, form number, premium, rate, address, and coverage detail exactly as shown. Preserve layout structure."},
+                                    {"role": "system", "content": "Extract ALL text visible in this image, preserving tables, columns, and layout."},
                                     {"role": "user", "content": [
-                                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}", "detail": "high"}}
+                                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
                                     ]}
                                 ],
                                 temperature=0.0,
@@ -297,14 +311,22 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 100000) -> str:
                             )
                             ocr_text = ocr_resp.choices[0].message.content.strip()
                             if ocr_text and len(ocr_text) > 50:
-                                score = _score_page(ocr_text)
-                                page_texts.append({
-                                    "page": pg,
-                                    "text": ocr_text,
-                                    "score": score + 20,
-                                    "chars": len(ocr_text)
-                                })
-                                logger.info(f"OCR page {pg}: {len(ocr_text)} chars, score={score + 20:.0f}")
+                                if pg in text_pages_map:
+                                    _ent = text_pages_map[pg]
+                                    _merged = _ent["text"] + "\n" + ocr_text
+                                    _ent["text"] = _merged
+                                    _ent["chars"] = len(_merged)
+                                    _ent["score"] = _score_page(_merged) + 20
+                                    logger.info(f"OCR (thin) page {pg}: merged to {len(_merged)} chars, score={_ent['score']}")
+                                else:
+                                    score = _score_page(ocr_text)
+                                    page_texts.append({
+                                        "page": pg,
+                                        "text": ocr_text,
+                                        "score": score + 20,
+                                        "chars": len(ocr_text)
+                                    })
+                                    logger.info(f"OCR page {pg}: {len(ocr_text)} chars, score={score + 20}")
                         except Exception as e:
                             logger.error(f"OCR failed for page {pg}: {e}")
                 except Exception as e:
