@@ -1393,9 +1393,9 @@ def _run_extraction(session_id):
                         # Fallback: client_info mailing/property/address fields
                         _ci = merged_data.get("client_info") if isinstance(merged_data, dict) else None
                         if isinstance(_ci, dict):
-                            for _cif in ("property_address", "mailing_address", "address"):
+                            for _cif in ("property_address", "address"):
                                 _v = _ci.get(_cif)
-                                if _v:
+                                if _v and "PO BOX" not in str(_v).upper() and "P.O. BOX" not in str(_v).upper():
                                     _addr_full = str(_v).strip()
                                     break
                     if not _addr_full:
