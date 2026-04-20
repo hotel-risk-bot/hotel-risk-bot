@@ -1939,11 +1939,16 @@ DOCUMENT TEXT:
                 result = json.loads(response.choices[0].message.content)
                 forms = result.get("forms_endorsements", [])
                 # ---- FORMS PREFIX VALIDATION ----
-                # Reject property-only forms extracted for non-property coverages
+                # Property uses CP/TC/VR/EC/EB/CPF/CFP prefixes (ISO + Vantage Risk/Tower Hill)
+                # GL uses CG/GLF/AD/AI/DE/JA/NXLL/NASC; Liquor uses LL; Auto uses CA
+                # Umbrella uses CSXC/EXL/HS XS/FUT/XS/CX
+                _prop_pfx = ("CP ", "CPF", "CFP", "TC ", "VR ", "EC ", "EB-", "EB0", "MS PR", "MS DEC", "MS EBC", "HSIC SP", "HSIC SOS", "MS GEN")
+                _gl_pfx = ("CG ", "AD ", "AI ", "DE ", "JA ", "NXLL", "NASC", "GLF", "GL ")
+                _umb_pfx = ("CSXC", "EXL ", "HS XS", "FUT ", "XS ", "NXLL", "CX ")
+                _liq_pfx = ("LL ", "LL-", "LL FLIQL")
+                _auto_pfx = ("CA ", "CA-")
+                _gl_pkg_pfx = ("EPL", "CYB", "WPA", "EP1", "FLSL", "SSIC", "FUT-SS", "FUT SS", "GL STATE")
                 if forms and cov_key in ("general_liability", "umbrella", "umbrella_layer_2", "umbrella_layer_3"):
-                    _prop_pfx = ("CP ", "MS PR", "MS DEC", "MS EBC", "HSIC SP", "HSIC SOS", "MS GEN")
-                    _gl_pfx = ("CG ", "AD ", "AI ", "DE ", "JA ", "NXLL", "NASC", "GLF", "GL ")
-                    _umb_pfx = ("CSXC", "EXL ", "HS XS", "FUT ", "XS ", "NXLL", "CX ")
                     prop_ct = sum(1 for f in forms if isinstance(f, dict) and
                                  str(f.get("form_number", "")).upper().startswith(_prop_pfx))
                     rel_ct = 0
@@ -1962,6 +1967,23 @@ DOCUMENT TEXT:
                         filtered = [f for f in forms if isinstance(f, dict) and
                                    not str(f.get("form_number", "")).upper().startswith(_prop_pfx)]
                         logger.info(f"Pass 2: Filtered {len(forms) - len(filtered)} property forms from {cov_key}, keeping {len(filtered)}")
+                        forms = filtered
+                # Inverse: reject GL/liquor/auto/umbrella forms leaking into property coverage
+                if forms and cov_key in ("property", "excess_property", "excess_property_2"):
+                    _nonprop = _gl_pfx + _umb_pfx + _liq_pfx + _auto_pfx + _gl_pkg_pfx
+                    nonprop_ct = sum(1 for f in forms if isinstance(f, dict) and
+                                    str(f.get("form_number", "")).upper().startswith(_nonprop))
+                    prop_ct2 = sum(1 for f in forms if isinstance(f, dict) and
+                                  str(f.get("form_number", "")).upper().startswith(_prop_pfx))
+                    if nonprop_ct > 5 and prop_ct2 < 3:
+                        logger.warning(f"Pass 2: REJECTED {len(forms)} forms for {cov_key} - "
+                                      f"{nonprop_ct} non-property prefixes vs {prop_ct2} property. "
+                                      f"These are GL/liquor/auto forms incorrectly extracted for property.")
+                        forms = []
+                    elif nonprop_ct > 0:
+                        filtered = [f for f in forms if isinstance(f, dict) and
+                                   not str(f.get("form_number", "")).upper().startswith(_nonprop)]
+                        logger.info(f"Pass 2: Filtered {len(forms) - len(filtered)} non-property forms from {cov_key}, keeping {len(filtered)}")
                         forms = filtered
                 existing_count = len(cov.get("forms_endorsements", []) or [])
                 if forms and isinstance(forms, list) and len(forms) > existing_count:
