@@ -1373,6 +1373,29 @@ def _run_extraction(session_id):
                 # Fill name if missing: use GPT-extracted name, corporate_entity, or client name
                 if not loc.get("name"):
                     loc["name"] = (loc.get("corporate_entity") or client_name or "").strip()
+                # Fill address/city/state/zip if missing: try property.coverage_by_location[0], then property.address
+                if not (loc.get("address") or loc.get("city") or loc.get("state")):
+                    _addr_full = ""
+                    _cbl = prop_data.get("coverage_by_location") if isinstance(prop_data, dict) else None
+                    if isinstance(_cbl, list) and _cbl and isinstance(_cbl[0], dict):
+                        _addr_full = str(_cbl[0].get("address") or "").strip()
+                    if not _addr_full:
+                        for _fld in ("address", "property_address", "location_address"):
+                            _v = prop_data.get(_fld) if isinstance(prop_data, dict) else None
+                            if _v:
+                                _addr_full = str(_v).strip()
+                                break
+                    if _addr_full:
+                        import re as _re_addr
+                        _m = _re_addr.match(r'^(.+?),\s*(.+?),\s*([A-Z]{2})\s*(\d{5}(?:-\d{4})?)?', _addr_full)
+                        if _m:
+                            loc["address"] = loc.get("address") or _m.group(1).strip()
+                            loc["city"] = loc.get("city") or _m.group(2).strip()
+                            loc["state"] = loc.get("state") or _m.group(3).strip()
+                            if _m.group(4):
+                                loc["zip"] = loc.get("zip") or _m.group(4).strip()
+                        else:
+                            loc["address"] = loc.get("address") or _addr_full
                 # Fill tiv if missing: use GPT-extracted tiv, or property coverage tiv for single-loc
                 loc_tiv = loc.get("tiv", 0) or 0
                 if isinstance(loc_tiv, str):
