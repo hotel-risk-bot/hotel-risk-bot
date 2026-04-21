@@ -163,6 +163,15 @@ def _score_page(page_text: str) -> float:
         "BUILDING DESCRIPTION",
         "ADDITIONAL COVERAGES INCLUDED",
         "POLICY COVERAGES",
+        "EXCESS LIABILITY POLICY",
+        "ATTACHING EXCESS",
+        "UNDERLYING LIMITS",
+        "UNDERLYING INSURANCE",
+        "ATTACHMENT POINT",
+        "FOLLOWING FORM",
+        "EXCESS OF $",
+        "EXCESS LIABILITY QUOTATION",
+        "LIMITS OF LIABILITY",
     ]
     is_critical = False
     for kw in _critical_page_keywords:
@@ -1040,6 +1049,7 @@ IMPORTANT:
 - LAYERED PROPERTY PROGRAMS: When a property quote contains multiple carriers in a layered/shared program (e.g., Lexington primary + Kinsale excess + Gotham/Coaction excess), extract EACH layer separately. Use "property" for the primary layer, "excess_property" for the first excess layer, and "excess_property_2" for the second excess layer. Each layer has its own carrier, premium, limits, deductibles, forms, subjectivities, and coinsurance. The layer_description should show the attachment point (e.g., "$10,000,000 xs $10,000,000"). Look for terms like "Excess", "xs", "excess of", or "Per Schedule" to identify excess layers. Common excess property carriers include Kinsale, Gotham (via Coaction), and others.
 - COINSURANCE & VALUATION: For ALL property layers (primary and excess), extract the coinsurance percentage for Building, Business Income, and BPP. Also extract the Monthly Limitation for Business Income (e.g., "1/4 Monthly", "1/3 Monthly"). This is a CRITICAL field that must ALWAYS be included in property quotes. Look for "Coinsurance", "Monthly Limitation", "Coinsurance & Valuation" sections. If coinsurance is waived or 0%, still include it as "0%". Also extract the valuation basis (Replacement Cost, Actual Cash Value, Agreed Value).
 - UMBRELLA/EXCESS LAYERS: When multiple umbrella/excess liability quotes are provided (e.g., separate PDFs for different layers), extract EACH layer as a separate coverage entry. Use "umbrella" for the primary excess layer, "umbrella_layer_2" for the second excess layer ($XM xs $XM), and "umbrella_layer_3" for the third excess layer ($XM xs $XM). Each layer has its own carrier, premium, limits, forms, and subjectivities. The tower_structure field should show that layer's position. Look for "Controlling Underlying" or "Schedule of Underlying" to determine the layer position. If a quote says it sits excess of another carrier's layer, it is a higher layer.
+- EXCESS LAYER COUNTING (MANDATORY): Before finalizing your output, COUNT the distinct excess/umbrella PDFs in the document set. Each separate PDF with its own carrier for "Excess Liability", "Commercial Excess Liability", "Excess Umbrella", or "XS Liability" is a SEPARATE layer. If N such PDFs exist, your output MUST contain exactly N layer entries: 1 PDF = umbrella only; 2 PDFs = umbrella + umbrella_layer_2; 3 PDFs = umbrella + umbrella_layer_2 + umbrella_layer_3. NEVER merge two separate excess PDFs into one layer. NEVER drop a layer because you cannot determine the attachment point — if unsure, place it at the next open layer slot and mark tower_structure as "position uncertain". The attachment order from lowest to highest is determined by the "xs $X" or "excess of $X" amount shown on each quote (e.g., "$5M x P" = primary = umbrella; "$5M x $5M" = second layer; "$5M x $10M" = third layer).
 - CRITICAL DISTINCTION - EXCESS LIABILITY vs EXCESS PROPERTY: "Excess Liability" is NOT the same as "Excess Property". If a quote says "Excess Liability", "Excess Liability Quotation", or "XS Liability" and its Schedule of Underlying Insurance references an Umbrella or General Liability policy, it is an UMBRELLA/EXCESS LIABILITY layer - use "umbrella" or "umbrella_layer_2" or "umbrella_layer_3". Do NOT classify it as "property" or "excess_property". Excess Property layers sit excess of a primary PROPERTY policy and cover physical damage to buildings/contents. Excess Liability layers sit excess of an Umbrella or GL policy and cover bodily injury/property damage liability claims. If the underlying schedule shows an umbrella or GL carrier, it is ALWAYS an excess liability layer, never excess property.
 - SAME CARRIER FOR GL AND EXCESS: When the SAME carrier (e.g., Admiral Insurance Company) provides BOTH a General Liability quote AND an Excess Liability/Umbrella quote in separate PDF files, these MUST be extracted as SEPARATE coverage entries. Extract the GL quote under "general_liability" and the Excess Liability quote under "umbrella". Do NOT merge or combine them into one entry just because they share a carrier name. Look at the coverage type stated on each document ("Coverage: Excess Liability" vs "Coverage: General Liability") and the document title ("Commercial Excess Liability Quote" vs "Commercial General Liability Quote") to distinguish them.
 - MULTI-OPTION EXCESS QUOTES: Some excess liability quotes present multiple limit options in columns (e.g., $1M/$2M/$3M Each Loss Event with different premiums for each). Extract the HIGHEST limit option as the primary "umbrella" entry. If the user needs a different option, they can adjust in the editor.
@@ -1739,6 +1749,62 @@ class ProposalExtractor:
                                 logger.warning(f"Umbrella re-extraction did not return umbrella key. Keys: {list(_xs_data.keys())}")
                     except Exception as e:
                         logger.error(f"Umbrella re-extraction failed: {e}")
+            # ===== TOWER VALIDATION (MULTI-LAYER EXCESS) =====
+            # If the source contains multiple distinct excess PDFs but fewer layers were
+            # extracted, re-run a targeted GPT call to recover missing layers.
+            try:
+                _covs_tv = data.get("coverages", {}) if isinstance(data.get("coverages"), dict) else {}
+                _layer_keys = [k for k in _covs_tv.keys() if k == "umbrella" or k.startswith("umbrella_layer_")]
+                _layer_count = len(_layer_keys)
+                _text_lower_tv = combined_text.lower()
+                # Count distinct excess PDFs via FILE: markers
+                _file_markers = re.findall(r"file:\s*([^\n]+\.pdf)", _text_lower_tv)
+                _excess_file_count = sum(1 for f in _file_markers if any(w in f for w in ("excess", " xs ", "umbrella", "x p", "x $", "x5m", "x10m")))
+                # Count distinct attachment points
+                _attach_matches = re.findall(r"(?:xs|x\s|excess\s+of)\s*\$?\s*(\d{1,3})\s*m", _text_lower_tv)
+                _distinct_attach = set(_attach_matches)
+                _expected_layers = max(_excess_file_count, len(_distinct_attach))
+                if _expected_layers > _layer_count and _expected_layers >= 2 and _expected_layers <= 5:
+                    logger.warning(f"TOWER MISMATCH: expected {_expected_layers} excess layers but only {_layer_count} extracted ({_layer_keys}). Re-running tower extraction.")
+                    _tower_kw = ["excess liability", "excess of", "underlying insurance",
+                                 "attachment point", "attaching excess", "xs of",
+                                 "following form", "each loss event", "policy aggregate",
+                                 "ascot", "markel", "endurance", "arch", "scottsdale",
+                                 "partnerre", "summit", "alta", "dual", "apollo"]
+                    _tower_text = self._extract_relevant_sections(combined_text, _tower_kw, context_chars=25000)
+                    if len(_tower_text) > 500:
+                        _tower_prompt = (
+                            f"The main extraction found only {_layer_count} excess/umbrella layer(s) but the document set appears to contain {_expected_layers} distinct excess quotes.\n\n"
+                            "Extract ALL excess/umbrella layers from the text below. Return a JSON object with keys \"umbrella\", \"umbrella_layer_2\", \"umbrella_layer_3\" as applicable.\n"
+                            "- \"umbrella\" = primary excess (sits above GL, typical attachment $1M)\n"
+                            "- \"umbrella_layer_2\" = second excess layer (e.g., $5M xs $5M)\n"
+                            "- \"umbrella_layer_3\" = third excess layer (e.g., $5M xs $10M)\n"
+                            "For each layer include: carrier, premium, total_premium, limits (Each Occurrence, Aggregate), attachment_point, tower_structure, forms_endorsements, subjectivities.\n"
+                            "Do NOT merge separate quotes into one layer. Each quote with its own carrier = one layer.\n\n"
+                            f"TEXT:\n{_tower_text}"
+                        )
+                        _tower_response = _get_openai_client().chat.completions.create(
+                            model=GPT_MODEL,
+                            messages=[
+                                {"role": "system", "content": "You are an insurance data extraction specialist. Extract all excess/umbrella tower layers as separate entries. Never merge distinct quotes."},
+                                {"role": "user", "content": _tower_prompt},
+                            ],
+                            response_format={"type": "json_object"},
+                            temperature=0.1,
+                            max_tokens=8000,
+                        )
+                        _tower_data = json.loads(_tower_response.choices[0].message.content)
+                        for _lk in ("umbrella", "umbrella_layer_2", "umbrella_layer_3"):
+                            if _lk in _tower_data and isinstance(_tower_data[_lk], dict):
+                                _lay = _tower_data[_lk]
+                                if _lay.get("carrier") or _lay.get("premium"):
+                                    _existing = data.get("coverages", {}).get(_lk, {})
+                                    if not isinstance(_existing, dict) or not _existing.get("carrier"):
+                                        data.setdefault("coverages", {})[_lk] = _lay
+                                        logger.info(f"TOWER LAYER RECOVERED [{_lk}]: carrier={_lay.get('carrier','N/A')}, premium={_lay.get('premium',0)}")
+            except Exception as _e_tv:
+                logger.error(f"Tower validation failed: {_e_tv}")
+
 
             # ===== MULTI-PASS EXTRACTION =====
             # Pass 2: Focused forms & endorsements extraction for coverages missing them
