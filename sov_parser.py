@@ -522,14 +522,32 @@ def aggregate_locations(sov_data: dict) -> dict:
         result["locations_raw"] = raw_locations
         return result
     
-    # Strategy 3: location_num values repeat — aggregate by location_num
+    # Strategy 3: location_num values repeat — aggregate by (location_num, street)
+    # Using street in the key prevents collapsing two genuinely different properties
+    # that happen to share the same Loc# (e.g., Elite Lodging at 5635 Windhover Dr
+    # and Premier Hotels at 7495 Canada Ave both carrying Loc#1 on a combined SOV).
+    # Same-street multi-building rows (Days Inn with 4 buildings, or Office Condos
+    # at 9015 Americana Rd #1/#2/#3) still aggregate because their street portion
+    # matches after unit-suffix stripping.
+    import re as _re_agg
+    def _street_key(addr: str) -> str:
+        s = (addr or "").strip().lower()
+        # Strip trailing unit/apt/suite suffixes like " #1", " #2", " unit 3", " apt 4"
+        s = _re_agg.sub(r'\s*(#|no\.?\s*|unit\s+|apt\s+|ste\s+|suite\s+)\S+\s*$', '', s)
+        # Remove all non-alphanumerics for a fuzzy match
+        return _re_agg.sub(r'[^a-z0-9]', '', s)
+
     agg = OrderedDict()
-    
+
     for loc in raw_locations:
-        key = loc.get("location_num", loc.get("building_num", 0))
+        loc_num = loc.get("location_num", loc.get("building_num", 0))
+        street = _street_key(loc.get("address", ""))
+        # Composite key: (location_num, street). Fallback to id(loc) when street is
+        # blank, so we don't accidentally merge two blank-address rows together.
+        key = (loc_num, street) if street else (loc_num, id(loc))
         if key not in agg:
             agg[key] = {
-                "location_num": key,
+                "location_num": loc_num,
                 "dba": loc.get("dba", ""),
                 "hotel_flag": loc.get("hotel_flag", ""),
                 "corporate_name": loc.get("corporate_name", ""),
