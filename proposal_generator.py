@@ -61,6 +61,62 @@ def _clean_carrier_name(name):
     return name
 
 
+def _short_carrier_label(carrier):
+    """Condense a full carrier name for use inside a table/section header.
+    Keeps the first brand word(s) and strips suffixes like 'Insurance Company',
+    'Specialty', 'Underwriters', 'Surplus Lines', legal suffixes, etc."""
+    if not carrier:
+        return ""
+    import re
+    c = _clean_carrier_name(str(carrier))
+    # Drop trailing legal/structural terms — keep the recognizable brand.
+    c = re.sub(r'\s*\bInsurance Company\b', '', c, flags=re.IGNORECASE)
+    c = re.sub(r'\s*\bInsurance Co\.?\b', '', c, flags=re.IGNORECASE)
+    c = re.sub(r'\s*\bSpecialty Underwriters?\b', ' Specialty', c, flags=re.IGNORECASE)
+    c = re.sub(r'\s*\bIndemnity Company\b', '', c, flags=re.IGNORECASE)
+    c = re.sub(r'\s*\bCompany\b', '', c, flags=re.IGNORECASE)
+    c = re.sub(r'\s*\bIns\.?\b', '', c, flags=re.IGNORECASE)
+    c = re.sub(r'\s*,?\s*(LLC|Ltd|Inc|Corp|LLP|PLC|SE)\.?\b', '', c, flags=re.IGNORECASE)
+    c = re.sub(r'\s{2,}', ' ', c).strip(' ,')
+    return c
+
+
+def _gl_alt_label(coverages, alt_key, fallback_option_number):
+    """Return the friendly label for a secondary GL coverage key.
+
+    A secondary GL quote may be either:
+      (a) a competing alternative for the same risk — legitimate 'Option 2'
+          language applies, OR
+      (b) a split-panel placement where two GL carriers each cover a DIFFERENT
+          subset of locations.
+
+    We can't always know which from extracted data alone, but in both cases the
+    most informative label for the broker/client is the CARRIER NAME. That
+    avoids the prior bug where a split panel was misrepresented as 'Option 2'.
+
+    Returns strings suitable for inline use like "General Liability (Travelers)"
+    or — if carrier is unknown — the legacy 'Option N' fallback.
+    """
+    if not isinstance(coverages, dict):
+        return f"General Liability (Option {fallback_option_number})"
+    cov = coverages.get(alt_key) or {}
+    carrier = _short_carrier_label(cov.get("carrier", "") if isinstance(cov, dict) else "")
+    if not carrier:
+        return f"General Liability (Option {fallback_option_number})"
+    return f"General Liability ({carrier})"
+
+
+def _gl_alt_section_title(coverages, alt_key, fallback_option_number):
+    """Section-header variant of _gl_alt_label — longer prefix ('Coverage')."""
+    if not isinstance(coverages, dict):
+        return f"General Liability Coverage — Option {fallback_option_number}"
+    cov = coverages.get(alt_key) or {}
+    carrier = _short_carrier_label(cov.get("carrier", "") if isinstance(cov, dict) else "")
+    if not carrier:
+        return f"General Liability Coverage — Option {fallback_option_number}"
+    return f"General Liability Coverage — {carrier}"
+
+
 def lookup_am_best(carrier_name):
     """Look up AM Best rating for a carrier. Returns rating or None."""
     if not carrier_name:
@@ -722,7 +778,14 @@ def generate_premium_summary(doc, data):
         "active_assailant": "Active Assailant",
         "deductible_buydown": "Deductible Buy Down",
     }
-    
+    # Dynamically relabel secondary GL quotes by carrier so split-panel
+    # placements (different carriers covering different locations) aren't
+    # mis-represented as competing 'Option 2' alternatives.
+    if "general_liability_alt_1" in coverages:
+        coverage_names["general_liability_alt_1"] = _gl_alt_label(coverages, "general_liability_alt_1", 2)
+    if "general_liability_alt_2" in coverages:
+        coverage_names["general_liability_alt_2"] = _gl_alt_label(coverages, "general_liability_alt_2", 3)
+
     # Determine if we have expiring data
     has_expiring = bool(expiring) or bool(expiring_details)
 
@@ -997,7 +1060,12 @@ def generate_subjectivities(doc, data):
         "active_assailant": "Active Assailant",
         "deductible_buydown": "Deductible Buy Down",
     }
-    
+    # Dynamically relabel secondary GL quotes by carrier (see _gl_alt_label).
+    if "general_liability_alt_1" in coverages:
+        coverage_names["general_liability_alt_1"] = _gl_alt_label(coverages, "general_liability_alt_1", 2)
+    if "general_liability_alt_2" in coverages:
+        coverage_names["general_liability_alt_2"] = _gl_alt_label(coverages, "general_liability_alt_2", 3)
+
     has_subjectivities = False
     for key, display_name in coverage_names.items():
         cov = coverages.get(key)
@@ -1093,7 +1161,93 @@ def generate_named_insureds(doc, data):
     ci_dba = ci.get("dba", "")
     if named and ci_dba and "DBA" not in named[0].upper():
         named[0] = f"{named[0]} DBA {_proper_case(ci_dba)}"
-    
+
+    # --- Supplement Named Insureds BEFORE rendering the table. ---
+    # Pull corporate entities from (a) each liability-quote's named_insured
+    # /additional_named_insureds lists, and (b) the SOV's corporate_name column.
+    # This ensures all carrier-recognized insured LLCs make it into Table 6,
+    # instead of being orphaned into a later "supplementation" block that the
+    # primary table never saw.
+    _corp_suffix_re = None
+    try:
+        import re as _re_corp
+        _corp_suffix_re = _re_corp.compile(
+            r'\b(LLC|L\.L\.C\.?|L\.?P\.?|LLP|Inc\.?|Incorporated|Corp\.?|Corporation|'
+            r'Ltd\.?|Limited|Co\.?|Company|PLLC|PC|P\.C\.?|Trust|Partnership)\b',
+            _re_corp.IGNORECASE)
+    except Exception:
+        _corp_suffix_re = None
+
+    def _has_corp_suffix(nm):
+        if not nm:
+            return False
+        return bool(_corp_suffix_re and _corp_suffix_re.search(nm))
+
+    def _ni_norm(s):
+        """Normalize a named-insured string for dedup: strip punctuation,
+        collapse whitespace, uppercase, drop common legal-suffix punctuation."""
+        if not s:
+            return ""
+        import re as _re_norm
+        t = _re_norm.sub(r'[.,\'"&]+', ' ', str(s).upper())
+        t = _re_norm.sub(r'\s+', ' ', t).strip()
+        return t
+
+    # Re-seed `seen` with normalized keys so existing entries dedup against
+    # near-matches that differ only by punctuation/whitespace.
+    seen = {_ni_norm(n) for n in named}
+
+    def _try_add_entity(entity_name, entity_dba=""):
+        """Add entity to `named` if it has a corp suffix and isn't already present."""
+        entity_name = _sanitize_named_insured((entity_name or "").strip())
+        if not entity_name or not _has_corp_suffix(entity_name):
+            return
+        key = _ni_norm(entity_name)
+        if not key:
+            return
+        for existing_key in seen:
+            if key == existing_key or key in existing_key or existing_key in key:
+                return
+        seen.add(key)
+        display = _proper_case(entity_name)
+        entity_dba = (entity_dba or "").strip()
+        if entity_dba:
+            display += f" DBA {_proper_case(entity_dba)}"
+        named.append(display)
+
+    # (a) Liability quotes: named_insured, additional_named_insureds
+    _liab_keys = ("general_liability", "general_liability_alt_1", "general_liability_alt_2",
+                  "umbrella", "umbrella_layer_2", "umbrella_layer_3", "umbrella_layer_4",
+                  "crime", "workers_comp", "workers_compensation", "commercial_auto",
+                  "epli", "cyber", "liquor_liability", "innkeepers_liability")
+    _coverages_for_ni = data.get("coverages", {}) or {}
+    for _lk in _liab_keys:
+        _cov = _coverages_for_ni.get(_lk)
+        if not isinstance(_cov, dict):
+            continue
+        # Primary named insured on the coverage
+        _try_add_entity(_cov.get("named_insured", ""))
+        for _ani in (_cov.get("additional_named_insureds", []) or []):
+            if isinstance(_ani, dict):
+                _try_add_entity(_ani.get("name", ""), _ani.get("dba", ""))
+            elif isinstance(_ani, str):
+                _try_add_entity(_ani)
+        # Some carriers list LLCs on schedule_of_classes brand_dba/entity fields
+        for _entry in (_cov.get("schedule_of_classes", []) or []):
+            if isinstance(_entry, dict):
+                for _ef in ("corporate_name", "named_insured", "entity", "insured_name"):
+                    if _entry.get(_ef):
+                        _try_add_entity(_entry.get(_ef))
+
+    # (b) SOV corporate_name column (already filtered to corp suffixes by parser)
+    sov_data_ni_pre = data.get("sov_data")
+    if sov_data_ni_pre and sov_data_ni_pre.get("locations"):
+        for _sov_loc in sov_data_ni_pre["locations"]:
+            _try_add_entity(
+                (_sov_loc.get("corporate_name") or _sov_loc.get("client_name") or "").strip(),
+                (_sov_loc.get("dba") or _sov_loc.get("hotel_flag") or "").strip()
+            )
+
     if named:
         headers = ["#", "Named Insured"]
         rows = [[str(i), ni] for i, ni in enumerate(named, 1)]
@@ -1172,27 +1326,9 @@ def generate_named_insureds(doc, data):
         else:
             _all_shown_names.add(str(ai).strip().upper())
 
-    # Supplement named insureds from SOV corporate names (may have more entities)
-    sov_data_ni = data.get("sov_data")
-    if sov_data_ni and sov_data_ni.get("locations"):
-        for loc in sov_data_ni["locations"]:
-            corp = (loc.get("corporate_name", "") or "").strip()
-            if not corp:
-                continue
-            corp_upper = corp.strip().upper()
-            already = False
-            for existing_key in seen:
-                if corp_upper in existing_key or existing_key in corp_upper:
-                    already = True
-                    break
-            if not already:
-                seen.add(corp_upper)
-                display = _proper_case(corp)
-                dba = (loc.get("dba", "") or loc.get("hotel_flag", "") or "").strip()
-                if dba:
-                    display += f" DBA {_proper_case(dba)}"
-                named.append(display)
-
+    # (SOV corporate_name supplementation was moved up before the Named Insureds
+    # table render so all SOV-derived LLCs appear in Table 6. See the
+    # `_try_add_entity` block above.)
 
     _coverage_ani_rows = []
     _coverage_display_names = {
@@ -3328,11 +3464,14 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                         "classification": "",
                     })
         
-        # Source 4: If GL covered locations list is incomplete compared to SOV,
-        # supplement with SOV locations (which have corporate names and addresses)
+        # Source 4: LAST-RESORT fallback — only used if the GL carrier's quote
+        # produced ZERO covered locations from any of the preceding sources.
+        # Previously this padded to match SOV count, which incorrectly merged
+        # split-panel GL placements (e.g., Southlake on 1 location) with the
+        # full SOV. Each carrier's covered-locations list must reflect its own
+        # quote schedule, not the SOV.
         sov_data = data.get("sov_data")
-        _sov_loc_count = len(sov_data.get("locations", [])) if sov_data else 0
-        if len(gl_loc_list) < max(3, _sov_loc_count):
+        if not gl_loc_list:
             all_locs = data.get("locations", [])
             if sov_data and sov_data.get("locations"):
                 for sov_loc in sov_data["locations"]:
@@ -3357,7 +3496,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                             "brand": brand,
                             "classification": "",
                         })
-                logger.info(f"GL covered locations: added {len(gl_loc_list)} from SOV fallback")
+                logger.info(f"GL covered locations: empty quote schedule — used SOV fallback, {len(gl_loc_list)} locations")
             elif all_locs:
                 for loc in all_locs:
                     addr = loc.get("address", "")
@@ -3725,7 +3864,12 @@ def generate_carrier_rating(doc, data):
         "active_assailant": "Active Assailant",
         "deductible_buydown": "Deductible Buy Down",
     }
-    
+    # Dynamically relabel secondary GL quotes by carrier (see _gl_alt_label).
+    if "general_liability_alt_1" in coverages:
+        coverage_names["general_liability_alt_1"] = _gl_alt_label(coverages, "general_liability_alt_1", 2)
+    if "general_liability_alt_2" in coverages:
+        coverage_names["general_liability_alt_2"] = _gl_alt_label(coverages, "general_liability_alt_2", 3)
+
     for key, display_name in coverage_names.items():
         cov = coverages.get(key)
         if cov:
@@ -4042,9 +4186,11 @@ def generate_proposal(data: dict, output_path: str) -> str:
     if "general_liability" in coverages:
         generate_coverage_section(doc, data, "general_liability", "General Liability Coverage")
     if "general_liability_alt_1" in coverages:
-        generate_coverage_section(doc, data, "general_liability_alt_1", "General Liability Coverage — Option 2")
+        generate_coverage_section(doc, data, "general_liability_alt_1",
+                                  _gl_alt_section_title(coverages, "general_liability_alt_1", 2))
     if "general_liability_alt_2" in coverages:
-        generate_coverage_section(doc, data, "general_liability_alt_2", "General Liability Coverage — Option 2")
+        generate_coverage_section(doc, data, "general_liability_alt_2",
+                                  _gl_alt_section_title(coverages, "general_liability_alt_2", 3))
     # Support both workers_comp and workers_compensation keys
     _wc_key = "workers_comp" if "workers_comp" in coverages else ("workers_compensation" if "workers_compensation" in coverages else None)
     if _wc_key:

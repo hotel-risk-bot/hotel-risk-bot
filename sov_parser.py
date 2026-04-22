@@ -28,6 +28,10 @@ COLUMN_MAP = {
     "client name": "client_name",
     "corporate name": "corporate_name",
     "corporate name (llc)": "corporate_name",
+    "named insured": "corporate_name",
+    "first named insured": "corporate_name",
+    "insured": "corporate_name",
+    "property name": "property_name",
     "dba": "dba",
     "hotel flag": "hotel_flag",
     "brand": "hotel_flag",
@@ -70,6 +74,8 @@ COLUMN_MAP = {
     "bldg pol limit": "building_value",
     "bldg pol limit ($)": "building_value",
     "bldg limit": "building_value",
+    "building limit": "building_value",
+    "building limit ($)": "building_value",
     "building pol limit": "building_value",
     "contents value": "contents_value",
     "*contents value": "contents_value",
@@ -81,6 +87,8 @@ COLUMN_MAP = {
     "bpp pol limit ($)": "contents_value",
     "bpp limit": "contents_value",
     "bpp limit ($)": "contents_value",
+    "contents limit": "contents_value",
+    "contents limit ($)": "contents_value",
     "business income/rents": "bi_value",
     "buisness income/rents": "bi_value",  # common typo in templates
     "*buisness income/rents": "bi_value",
@@ -94,12 +102,20 @@ COLUMN_MAP = {
     "bi pol limit": "bi_value",
     "bi pol limit ($)": "bi_value",
     "bi limit": "bi_value",
+    "business income limit": "bi_value",
+    "business income limit ($)": "bi_value",
     "pool value": "pool_value",
     "pools": "pool_value",
+    "pool limit": "pool_value",
+    "pool limit ($)": "pool_value",
     "sign value": "sign_value",
     "signs": "sign_value",
+    "sign limit": "sign_value",
+    "sign limit ($)": "sign_value",
     "other values": "other_value",
     "other": "other_value",
+    "other limit": "other_value",
+    "other limit ($)": "other_value",
     "tiv": "tiv",
     "total insured value": "tiv",
     "*total tiv": "tiv",
@@ -456,6 +472,25 @@ def parse_sov(file_path: str) -> dict:
             location["location_num"] = len(locations) + 1
 
         locations.append(location)
+
+    # Post-process: if corporate_name is empty, promote any co-captured field
+    # (property_name, client_name, dba) whose value carries a corporate suffix
+    # (LLC, Inc, Corp, etc.). Handles SOVs that put the insured LLC in a column
+    # named "Property Name" or similar.
+    _corp_suffix_pat = re.compile(
+        r'\b(LLC|L\.L\.C\.?|L\.?P\.?|LLP|Inc\.?|Incorporated|Corp\.?|Corporation|'
+        r'Ltd\.?|Limited|PLLC|PC|P\.C\.?|Trust|Partnership)\b',
+        re.IGNORECASE,
+    )
+    _corp_fallback_fields = ("corporate_name", "client_name", "property_name", "dba", "hotel_flag")
+    for loc in locations:
+        if (loc.get("corporate_name") or "").strip():
+            continue
+        for _f in _corp_fallback_fields:
+            val = (loc.get(_f) or "").strip()
+            if val and _corp_suffix_pat.search(val):
+                loc["corporate_name"] = val
+                break
 
     # Calculate totals
     totals = {
