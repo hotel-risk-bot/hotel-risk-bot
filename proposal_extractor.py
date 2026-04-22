@@ -1830,6 +1830,167 @@ class ProposalExtractor:
             except Exception as _e_tv:
                 logger.error(f"Tower validation failed: {_e_tv}")
 
+            # ===== COMPETING GL DETECTION =====
+            # If the document set contains more than one General Liability PDF but
+            # only one general_liability coverage was extracted, run targeted GPT
+            # passes to recover the other standalone GL quotes into
+            # general_liability_alt_1 / general_liability_alt_2 slots.
+            # Common case: Jasmin Hospitality submits a master GL quote (CSU) PLUS
+            # a standalone carve-out GL for a single property (Premier Hotels) that
+            # the carrier would not include on the master due to loss experience.
+            try:
+                _covs_gl = data.get("coverages", {}) if isinstance(data.get("coverages"), dict) else {}
+                _gl_primary = _covs_gl.get("general_liability", {}) if isinstance(_covs_gl.get("general_liability"), dict) else {}
+                _gl_alt_keys = [k for k in _covs_gl.keys() if k.startswith("general_liability_alt_")]
+                _gl_slots_filled = (1 if _gl_primary.get("carrier") else 0) + len(_gl_alt_keys)
+
+                _text_lower_gl = combined_text.lower()
+                _file_markers_gl = re.findall(r"file:\s*([^\n]+\.pdf)", _text_lower_gl)
+
+                # Identify candidate GL filenames: must look like liability/GL quotes
+                # and must NOT be excess, property, crime, EPLI, umbrella, etc.
+                def _is_gl_file(fn: str) -> bool:
+                    fl = fn.lower()
+                    # Disqualifiers — excess or non-GL lines
+                    if any(w in fl for w in (
+                        "excess", " xs ", "x p", "umbrella", "property",
+                        "epli", "crime", "cyber", "bond", "auto", "wc ",
+                        "workers", "flood", "earthquake", "d&o", "pollution",
+                        "breach", "management liability", "proex", "following form",
+                    )):
+                        return False
+                    # Qualifiers — explicit GL-ish markers
+                    if any(w in fl for w in (
+                        "general liability", " gl ", "gl-", "_gl", " gl.",
+                        "liability", "quote letter", "csu", "commercial gl",
+                        "premises liability", "cgl",
+                    )):
+                        return True
+                    return False
+
+                _gl_files = [f.strip() for f in _file_markers_gl if _is_gl_file(f)]
+                # Dedupe while preserving order
+                _seen_gl = set(); _gl_files_unique = []
+                for _f in _gl_files:
+                    if _f not in _seen_gl:
+                        _seen_gl.add(_f); _gl_files_unique.append(_f)
+
+                _expected_gl = len(_gl_files_unique)
+                if _expected_gl > _gl_slots_filled and _expected_gl >= 2 and _expected_gl <= 4:
+                    logger.warning(f"COMPETING GL MISMATCH: expected {_expected_gl} GL quotes but only {_gl_slots_filled} extracted. Files: {_gl_files_unique}")
+
+                    # Identify which file the primary GL came from (by carrier match)
+                    _primary_carrier = (_gl_primary.get("carrier") or "").lower()
+                    _primary_carrier_tokens = set()
+                    for _tok in re.split(r"[^a-z0-9]+", _primary_carrier):
+                        if len(_tok) >= 3:
+                            _primary_carrier_tokens.add(_tok)
+
+                    def _file_matches_primary(fn: str) -> bool:
+                        if not _primary_carrier_tokens:
+                            return False
+                        fl = fn.lower()
+                        return any(tok in fl for tok in _primary_carrier_tokens)
+
+                    _unclaimed_gl_files = [f for f in _gl_files_unique if not _file_matches_primary(f)]
+                    # If we cannot identify the primary's source file (or everything matches),
+                    # still treat any files beyond the first as unclaimed
+                    if not _unclaimed_gl_files and len(_gl_files_unique) > 1:
+                        _unclaimed_gl_files = _gl_files_unique[1:]
+
+                    # Run targeted GPT extraction per unclaimed file
+                    _alt_index = 1
+                    for _fname in _unclaimed_gl_files:
+                        if _alt_index > 2:  # only two alt slots available
+                            break
+                        _alt_key = f"general_liability_alt_{_alt_index}"
+                        if _alt_key in _covs_gl and _covs_gl[_alt_key].get("carrier"):
+                            _alt_index += 1
+                            continue
+
+                        # Extract text sections relevant to this specific file
+                        _fname_base = _fname.lower().replace(".pdf", "").strip()
+                        _fname_tokens = [t for t in re.split(r"[^a-z0-9]+", _fname_base) if len(t) >= 3]
+                        _gl_kw = ["general liability", "commercial general liability", "cgl",
+                                  "per occurrence", "each occurrence", "aggregate limit",
+                                  "products completed operations", "damage to premises",
+                                  "personal and advertising", "medical expense",
+                                  "assault and battery", "assault & battery",
+                                  "sexual abuse", "abuse and molestation",
+                                  "employee benefits", "hired and non-owned",
+                                  "liquor liability", "named insured"] + _fname_tokens
+
+                        # Bias the extraction window toward the specific filename
+                        _sections = self._extract_relevant_sections(combined_text, _gl_kw, context_chars=25000)
+                        # Additionally, pull the whole block for this FILE: marker if possible
+                        _file_marker = f"FILE: {_fname}"
+                        _idx = combined_text.find(_file_marker)
+                        if _idx < 0:
+                            # Case-insensitive fallback
+                            _lower = combined_text.lower()
+                            _lidx = _lower.find(f"file: {_fname.lower()}")
+                            if _lidx >= 0:
+                                _idx = _lidx
+                        if _idx >= 0:
+                            # Grab up to next FILE: marker or 40000 chars, whichever is smaller
+                            _next_marker = re.search(r"\n={10,}\nFILE:\s", combined_text[_idx + 10:])
+                            _end = _idx + 10 + _next_marker.start() if _next_marker else min(len(combined_text), _idx + 40000)
+                            _file_block = combined_text[_idx:_end]
+                            # Prepend the file block so GPT sees the specific quote first
+                            _sections = _file_block + "\n\n--- ADDITIONAL CONTEXT ---\n\n" + _sections
+
+                        if len(_sections) < 300:
+                            logger.warning(f"COMPETING GL: too little text for {_fname}; skipping")
+                            continue
+
+                        _alt_prompt = (
+                            f"The main extraction captured only the primary General Liability quote. The document set "
+                            f"contains ANOTHER standalone General Liability quote in the file '{_fname}' — this is a "
+                            f"COMPETING or CARVE-OUT quote for a different named insured or a specific location that is "
+                            f"underwritten separately from the master GL policy. Extract it as a fresh general_liability "
+                            f"coverage entry.\n\n"
+                            f"Return a JSON object with a single key \"general_liability\" containing the full coverage "
+                            f"shape: carrier, am_best_rating, premium, surplus_lines_tax, broker_fee, total_premium, "
+                            f"policy_form (Occurrence vs Claims-Made), defense_provision, retroactive_date, deductible, "
+                            f"retention, total_sales, rate_basis, limits (array of {{description, limit}} pairs — include "
+                            f"the 6 standard CGL limits plus any sublimits like Assault & Battery, Sexual Abuse, HNOA, "
+                            f"Employee Benefits), additional_coverages, forms_endorsements, subjectivities, "
+                            f"schedule_of_classes, designated_premises (array of addresses covered by this quote), "
+                            f"named_insured (the specific entity this carve-out covers).\n\n"
+                            f"IMPORTANT: This is the quote in file '{_fname}', NOT the primary GL already extracted "
+                            f"(carrier='{_gl_primary.get('carrier', 'UNKNOWN')}'). Do NOT re-emit the primary quote's data.\n\n"
+                            f"TEXT:\n{_sections}"
+                        )
+                        try:
+                            _alt_response = _get_openai_client().chat.completions.create(
+                                model=GPT_MODEL,
+                                messages=[
+                                    {"role": "system", "content": "You are an insurance data extraction specialist. Extract the SPECIFIC General Liability quote identified by the target filename. Do not merge it with other GL quotes in the document set."},
+                                    {"role": "user", "content": _alt_prompt},
+                                ],
+                                response_format={"type": "json_object"},
+                                temperature=0.1,
+                                max_tokens=8000,
+                            )
+                            _alt_data = json.loads(_alt_response.choices[0].message.content)
+                            _alt_gl = _alt_data.get("general_liability") if isinstance(_alt_data, dict) else None
+                            if isinstance(_alt_gl, dict) and _alt_gl.get("carrier"):
+                                # Refuse if carrier matches primary (duplicate)
+                                _alt_carrier_lower = (_alt_gl.get("carrier") or "").lower()
+                                if _primary_carrier and (_alt_carrier_lower == _primary_carrier or
+                                                          any(tok in _alt_carrier_lower for tok in _primary_carrier_tokens if len(tok) >= 4)):
+                                    logger.warning(f"COMPETING GL: alt carrier '{_alt_carrier_lower}' matches primary '{_primary_carrier}' — skipping {_fname}")
+                                    continue
+                                data.setdefault("coverages", {})[_alt_key] = _alt_gl
+                                logger.info(f"COMPETING GL RECOVERED [{_alt_key}]: carrier={_alt_gl.get('carrier','N/A')}, premium={_alt_gl.get('premium',0)}, file={_fname}")
+                                _alt_index += 1
+                            else:
+                                logger.warning(f"COMPETING GL: extraction for {_fname} returned no carrier")
+                        except Exception as _e_alt:
+                            logger.error(f"COMPETING GL extraction failed for {_fname}: {_e_alt}")
+            except Exception as _e_gl:
+                logger.error(f"Competing GL detection failed: {_e_gl}")
+
 
             # ===== MULTI-PASS EXTRACTION =====
             # Pass 2: Focused forms & endorsements extraction for coverages missing them
