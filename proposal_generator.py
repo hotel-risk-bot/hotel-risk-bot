@@ -1415,20 +1415,30 @@ def generate_information_summary(doc, data):
     if ci.get("dba"):
         rows.insert(1, ["DBA", _proper_case(ci["dba"])])
     
-    # Calculate total sales from GL schedule_of_classes exposures
+    # PATCH I: Aggregate Total Sales and Liquor Exposure across ALL GL variants
+    # (primary + alt_1 + alt_2) so split-panel placements (e.g., Southlake +
+    # Cincinnati) roll up to one accurate Information Summary figure.
     coverages = data.get("coverages", {})
     gl_cov = coverages.get("general_liability", {})
     designated_premises = gl_cov.get("designated_premises", []) if isinstance(gl_cov, dict) else []
-    if isinstance(gl_cov, dict):
-        gl_classes = gl_cov.get("schedule_of_classes", [])
-        total_sales = 0
-        liquor_exposure = 0
+    _gl_keys_for_sales = ("general_liability", "general_liability_alt_1", "general_liability_alt_2")
+    _gl_covs_for_sales = []
+    for _k in _gl_keys_for_sales:
+        _c = coverages.get(_k)
+        if isinstance(_c, dict) and _c.get("carrier"):
+            _gl_covs_for_sales.append(_c)
+    if _gl_covs_for_sales:
         import re as _re
         _liquor_classes = {"liquor", "restaurant", "tavern", "bar", "lounge"}
-        # Only sum class-code-based entries to avoid double-counting location entries
-        _has_class_codes = any(isinstance(e, dict) and e.get("class_code") for e in gl_classes)
-        for entry in gl_classes:
-            if isinstance(entry, dict):
+        total_sales = 0
+        liquor_exposure = 0
+        for _c in _gl_covs_for_sales:
+            gl_classes = _c.get("schedule_of_classes", []) or []
+            _has_class_codes = any(isinstance(e, dict) and e.get("class_code") for e in gl_classes)
+            _this_policy_total = 0
+            for entry in gl_classes:
+                if not isinstance(entry, dict):
+                    continue
                 if _has_class_codes and not entry.get("class_code"):
                     continue  # Skip location-based entries when class codes exist
                 exposure = entry.get("exposure", "")
@@ -1436,31 +1446,26 @@ def generate_information_summary(doc, data):
                 if isinstance(exposure, (int, float)):
                     exp_val = exposure
                 elif isinstance(exposure, str):
-                    # Parse dollar amounts like "$8,748,612" or "8748612"
                     cleaned = _re.sub(r'[^\d.]', '', exposure.replace(',', ''))
                     if cleaned:
                         try:
                             exp_val = float(cleaned)
                         except ValueError:
                             pass
-                total_sales += exp_val
-                # Track liquor/restaurant exposure separately
+                _this_policy_total += exp_val
                 classification = (entry.get("classification", "") or "").lower()
                 class_code = str(entry.get("class_code", "") or "")
                 if class_code in ("16910", "58173") or any(lk in classification for lk in _liquor_classes):
                     liquor_exposure += exp_val
-        # Prioritize total_sales from GL coverage (authoritative) over summed per-class exposures
-        _gl_total_sales = gl_cov.get("total_sales", "") if isinstance(gl_cov, dict) else ""
-        if _gl_total_sales:
-            # Parse the total_sales value
-            _ts_val = _parse_currency(str(_gl_total_sales)) if _gl_total_sales else 0
-            if _ts_val and _ts_val > 0:
-                rows.append(["Total Sales / Exposure", fmt_currency(_ts_val)])
-            elif isinstance(_gl_total_sales, str) and _gl_total_sales.strip():
-                rows.append(["Total Sales / Exposure", _gl_total_sales])
-            elif total_sales > 0:
-                rows.append(["Total Sales / Exposure", fmt_currency(total_sales)])
-        elif total_sales > 0:
+            # Per policy: prefer carrier-reported total_sales (authoritative)
+            # over the summed per-class exposures.
+            _auth = _c.get("total_sales", "")
+            _auth_val = _parse_currency(str(_auth)) if _auth else 0
+            if _auth_val and _auth_val > 0:
+                total_sales += _auth_val
+            else:
+                total_sales += _this_policy_total
+        if total_sales > 0:
             rows.append(["Total Sales / Exposure", fmt_currency(total_sales)])
         if liquor_exposure > 0:
             rows.append(["Liquor Liability Exposure", fmt_currency(liquor_exposure)])
@@ -3362,11 +3367,11 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                            header_size=9, body_size=8,
                            header_alignments={0: L, 1: L, 2: L})
 
-    # Schedule of Locations reference (GL and Crime — critical E&O requirement)
-    if coverage_key in ("general_liability", "crime"):
+    # Schedule of Locations reference (GL variants and Crime — critical E&O requirement)
+    if coverage_key in ("general_liability", "general_liability_alt_1", "general_liability_alt_2", "crime"):
         # Count locations from GL schedule_of_classes or designated_premises
         _loc_count = 0
-        if coverage_key == "general_liability":
+        if coverage_key in ("general_liability", "general_liability_alt_1", "general_liability_alt_2"):
             _gl_classes = cov.get("schedule_of_classes", []) or []
             _gl_premises = cov.get("designated_premises", []) or []
             _skip_classes = {"hired auto", "non-owned auto", "loss control", "package store",
@@ -3387,8 +3392,8 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                 "See the Schedule of Locations section for the complete list with addresses.",
                 size=9, italic=True, color=CHARCOAL, space_before=6, space_after=6)
 
-    # Covered Locations (GL only) - backup list of liability locations from GL quote
-    if coverage_key == "general_liability":
+    # Covered Locations (GL and GL alt variants) - backup list of liability locations from GL quote
+    if coverage_key in ("general_liability", "general_liability_alt_1", "general_liability_alt_2"):
         import re as _re_gl
         gl_loc_list = []
         gl_loc_seen = set()

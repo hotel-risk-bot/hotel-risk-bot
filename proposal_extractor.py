@@ -2042,7 +2042,7 @@ class ProposalExtractor:
                                 ],
                                 response_format={"type": "json_object"},
                                 temperature=0.1,
-                                max_tokens=8000,
+                                max_tokens=16000,
                             )
                             _alt_data = json.loads(_alt_response.choices[0].message.content)
                             _alt_gl = _alt_data.get("general_liability") if isinstance(_alt_data, dict) else None
@@ -2053,6 +2053,58 @@ class ProposalExtractor:
                                                           any(tok in _alt_carrier_lower for tok in _primary_carrier_tokens if len(tok) >= 4)):
                                     logger.warning(f"COMPETING GL: alt carrier '{_alt_carrier_lower}' matches primary '{_primary_carrier}' — skipping {_fname}")
                                     continue
+                                # PATCH I: Targeted re-extraction of schedule_of_classes +
+                                # designated_premises on this alt GL's file text. The main
+                                # competing-GL call often misses CSGA 408 04 08 Liability
+                                # Premises Schedule tables because the keyword window does
+                                # not include schedule-specific terms.
+                                _alt_soc = _alt_gl.get("schedule_of_classes") or []
+                                _alt_dp = _alt_gl.get("designated_premises") or []
+                                if len(_alt_soc) < 2 or len(_alt_dp) < 1:
+                                    try:
+                                        _alt_schedule_text = _file_block if (_idx >= 0 and len(_file_block) > 1000) else _sections
+                                        _alt_schedule_prompt = (
+                                            f"From the General Liability quote in file '{_fname}', extract TWO things:\n\n"
+                                            f"1. ALL physical street addresses that represent covered locations (designated_premises)\n"
+                                            f"2. The COMPLETE Liability Premises Schedule / Schedule of Classes — EVERY row, EVERY location\n\n"
+                                            f"Common form numbers: CSGA 408 04 08, CG 21 44, NXLL 110, FUT 1004, FUT 1005.\n"
+                                            f"Common headers: 'Liability Premises Schedule', 'Schedule of Classes', 'Classification', "
+                                            f"'Class Code', 'Exposure Basis', 'Rate', 'Premium'.\n\n"
+                                            f"For Schedule of Classes, each row has: Location (e.g. 'Primary', 'Location 2', '1 of 7'), "
+                                            f"Address, Classification (e.g. 'Hotels/Motels with pools 4+ stories'), Class Code (e.g. 45191, "
+                                            f"58161, 61224, 45190, 47051, 20156), Exposure Basis (Gross Sales / Sales / Receipts / Each), "
+                                            f"Exposure amount ($X), Rate, Premium ($X).\n\n"
+                                            f"CRITICAL: Do NOT stop after 2-3 rows — extract the ENTIRE table. Hotels with 5+ locations "
+                                            f"commonly have 9-15 rows (one per location, plus restaurant/liquor sublines).\n\n"
+                                            f"Return JSON:\n"
+                                            f'{{"designated_premises": ["Full address 1", "Full address 2", ...],\n'
+                                            f'  "schedule_of_classes": [\n'
+                                            f'    {{"location": "1 of 7", "address": "Street, City, ST Zip", "brand_dba": "Hotel name", '
+                                            f'"classification": "Hotels/Motels with pools 4+ stories", "class_code": "45191", '
+                                            f'"exposure_basis": "Gross Sales", "exposure": "$X", "rate": "X.XXXX", "premium": "$X"}}]}}\n\n'
+                                            f"DOCUMENT TEXT:\n{_alt_schedule_text[:40000]}"
+                                        )
+                                        _alt_sched_resp = _get_openai_client().chat.completions.create(
+                                            model="gpt-4.1",
+                                            messages=[
+                                                {"role": "system", "content": "You are an expert at extracting per-location liability exposure tables from insurance quotes. Return EVERY row of the Liability Premises Schedule."},
+                                                {"role": "user", "content": _alt_schedule_prompt},
+                                            ],
+                                            response_format={"type": "json_object"},
+                                            temperature=0.0,
+                                            max_tokens=16000,
+                                        )
+                                        _alt_sched_data = json.loads(_alt_sched_resp.choices[0].message.content)
+                                        _new_soc = _alt_sched_data.get("schedule_of_classes", []) or []
+                                        _new_dp = _alt_sched_data.get("designated_premises", []) or []
+                                        if isinstance(_new_soc, list) and len(_new_soc) > len(_alt_soc):
+                                            _alt_gl["schedule_of_classes"] = _new_soc
+                                            logger.info(f"PATCH-I | alt GL {_alt_key}: schedule_of_classes = {len(_new_soc)} entries (was {len(_alt_soc)})")
+                                        if isinstance(_new_dp, list) and len(_new_dp) > len(_alt_dp):
+                                            _alt_gl["designated_premises"] = _new_dp
+                                            logger.info(f"PATCH-I | alt GL {_alt_key}: designated_premises = {len(_new_dp)} entries (was {len(_alt_dp)})")
+                                    except Exception as _e_sched:
+                                        logger.error(f"PATCH-I | alt GL {_alt_key} schedule re-extraction failed: {_e_sched}")
                                 data.setdefault("coverages", {})[_alt_key] = _alt_gl
                                 logger.info(f"COMPETING GL RECOVERED [{_alt_key}]: carrier={_alt_gl.get('carrier','N/A')}, premium={_alt_gl.get('premium',0)}, file={_fname}")
                                 _alt_index += 1
