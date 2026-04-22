@@ -1846,6 +1846,9 @@ class ProposalExtractor:
 
                 _text_lower_gl = combined_text.lower()
                 _file_markers_gl = re.findall(r"file:\s*([^\n]+\.pdf)", _text_lower_gl)
+                logger.warning(f"PATCH-G v5 | GL DETECTION START | combined_text len={len(combined_text)} | gl_slots_filled={_gl_slots_filled} | files_found={len(_file_markers_gl)}")
+                for _fm in _file_markers_gl:
+                    logger.warning(f"PATCH-G |   file-marker: {_fm.strip()}")
 
                 # Identify candidate GL filenames: must look like liability/GL quotes
                 # and must NOT be excess, property, crime, EPLI, umbrella, etc.
@@ -1872,44 +1875,52 @@ class ProposalExtractor:
                 # filenames like "Premier Hotels LLC Renewal Quote with Bed Bug
                 # Sublimit.pdf" that contain no "GL"/"liability" marker. Inspect
                 # the per-file text block to catch these.
+                # Patch G: verbose diagnostics to make failure cause visible.
                 def _file_block_is_gl_by_content(fn: str) -> bool:
                     fl = fn.lower()
                     # Hard-exclude non-GL lines even if content references "general liability"
-                    if any(w in fl for w in (
+                    _disqualifiers = (
                         "excess", " xs ", "x p", "umbrella",
                         "epli", "crime", "cyber", "bond", "auto", "wc ",
                         "workers", "flood", "earthquake", "d&o", "pollution",
                         "breach", "management liability", "proex", "following form",
-                    )):
-                        return False
+                    )
+                    for _dq in _disqualifiers:
+                        if _dq in fl:
+                            logger.warning(f"PATCH-G | content-check {fn!r}: DISQUALIFIED by filename token {_dq!r}")
+                            return False
                     # Locate the FILE: block (case-insensitive) in combined_text
                     _ltxt = combined_text.lower()
                     _marker = f"file: {fl}"
                     _start = _ltxt.find(_marker)
                     if _start < 0:
+                        logger.warning(f"PATCH-G | content-check {fn!r}: FILE marker {_marker!r} NOT FOUND in combined_text")
                         return False
                     # Grab up to next FILE: marker or 40,000 chars, whichever first
                     _nxt = re.search(r"\n={10,}\nfile:\s", _ltxt[_start + 10:])
                     _end = _start + 10 + _nxt.start() if _nxt else min(len(_ltxt), _start + 40000)
                     _block = _ltxt[_start:_end]
+                    logger.warning(f"PATCH-G | content-check {fn!r}: block found at {_start}, len={len(_block)}")
                     # Strong primary-GL signals — "Total General Liability Premium"
                     # or GL limits combined with Each Occurrence / Aggregate
                     _primary_gl_signals = [
                         "total general liability premium",
-                        "coverage – general liability",
+                        "coverage \u2013 general liability",
                         "coverage - general liability",
                         "coverage general liability",
                         "general liability limits",
                         "commercial general liability declarations",
                     ]
-                    if any(sig in _block for sig in _primary_gl_signals):
-                        # Reject if the block is dominantly an excess tower (references
-                        # "excess of $" or "attachment point" AND lacks primary GL premium line)
+                    _hits = [sig for sig in _primary_gl_signals if sig in _block]
+                    logger.warning(f"PATCH-G | content-check {fn!r}: primary-signal hits={_hits}")
+                    if _hits:
                         _excess_markers = ("excess of $", "attachment point", "underlying limits")
                         _has_excess = any(m in _block for m in _excess_markers)
                         _has_primary_premium = "total general liability premium" in _block
                         if _has_excess and not _has_primary_premium:
+                            logger.warning(f"PATCH-G | content-check {fn!r}: rejected (excess markers without primary premium)")
                             return False
+                        logger.warning(f"PATCH-G | content-check {fn!r}: ACCEPTED via primary signals")
                         return True
                     # Weaker combo: "general liability" + "each occurrence" + a premium dollar figure
                     if ("general liability" in _block
@@ -1917,13 +1928,18 @@ class ProposalExtractor:
                         and re.search(r"\$\s*[\d,]+(?:\.\d{2})?", _block)):
                         _excess_markers = ("excess of $", "attachment point")
                         if not any(m in _block for m in _excess_markers):
+                            logger.warning(f"PATCH-G | content-check {fn!r}: ACCEPTED via weak combo")
                             return True
+                    logger.warning(f"PATCH-G | content-check {fn!r}: REJECTED (no signals matched)")
                     return False
 
-                _gl_files = [
-                    f.strip() for f in _file_markers_gl
-                    if _is_gl_file(f) or _file_block_is_gl_by_content(f)
-                ]
+                _gl_files = []
+                for f in _file_markers_gl:
+                    _name_ok = _is_gl_file(f)
+                    _content_ok = False if _name_ok else _file_block_is_gl_by_content(f)
+                    logger.warning(f"PATCH-G | filter {f.strip()!r}: is_gl_file={_name_ok}, content_gl={_content_ok}")
+                    if _name_ok or _content_ok:
+                        _gl_files.append(f.strip())
                 # Dedupe while preserving order
                 _seen_gl = set(); _gl_files_unique = []
                 for _f in _gl_files:
@@ -1931,6 +1947,7 @@ class ProposalExtractor:
                         _seen_gl.add(_f); _gl_files_unique.append(_f)
 
                 _expected_gl = len(_gl_files_unique)
+                logger.warning(f"PATCH-G | SUMMARY | expected_gl={_expected_gl} | slots_filled={_gl_slots_filled} | unique_files={_gl_files_unique}")
                 if _expected_gl > _gl_slots_filled and _expected_gl >= 2 and _expected_gl <= 4:
                     logger.warning(f"COMPETING GL MISMATCH: expected {_expected_gl} GL quotes but only {_gl_slots_filled} extracted. Files: {_gl_files_unique}")
 
