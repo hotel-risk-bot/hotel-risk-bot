@@ -1868,7 +1868,62 @@ class ProposalExtractor:
                         return True
                     return False
 
-                _gl_files = [f.strip() for f in _file_markers_gl if _is_gl_file(f)]
+                # Patch F: content-based fallback. Some GL carve-out quotes have
+                # filenames like "Premier Hotels LLC Renewal Quote with Bed Bug
+                # Sublimit.pdf" that contain no "GL"/"liability" marker. Inspect
+                # the per-file text block to catch these.
+                def _file_block_is_gl_by_content(fn: str) -> bool:
+                    fl = fn.lower()
+                    # Hard-exclude non-GL lines even if content references "general liability"
+                    if any(w in fl for w in (
+                        "excess", " xs ", "x p", "umbrella",
+                        "epli", "crime", "cyber", "bond", "auto", "wc ",
+                        "workers", "flood", "earthquake", "d&o", "pollution",
+                        "breach", "management liability", "proex", "following form",
+                    )):
+                        return False
+                    # Locate the FILE: block (case-insensitive) in combined_text
+                    _ltxt = combined_text.lower()
+                    _marker = f"file: {fl}"
+                    _start = _ltxt.find(_marker)
+                    if _start < 0:
+                        return False
+                    # Grab up to next FILE: marker or 40,000 chars, whichever first
+                    _nxt = re.search(r"\n={10,}\nfile:\s", _ltxt[_start + 10:])
+                    _end = _start + 10 + _nxt.start() if _nxt else min(len(_ltxt), _start + 40000)
+                    _block = _ltxt[_start:_end]
+                    # Strong primary-GL signals — "Total General Liability Premium"
+                    # or GL limits combined with Each Occurrence / Aggregate
+                    _primary_gl_signals = [
+                        "total general liability premium",
+                        "coverage – general liability",
+                        "coverage - general liability",
+                        "coverage general liability",
+                        "general liability limits",
+                        "commercial general liability declarations",
+                    ]
+                    if any(sig in _block for sig in _primary_gl_signals):
+                        # Reject if the block is dominantly an excess tower (references
+                        # "excess of $" or "attachment point" AND lacks primary GL premium line)
+                        _excess_markers = ("excess of $", "attachment point", "underlying limits")
+                        _has_excess = any(m in _block for m in _excess_markers)
+                        _has_primary_premium = "total general liability premium" in _block
+                        if _has_excess and not _has_primary_premium:
+                            return False
+                        return True
+                    # Weaker combo: "general liability" + "each occurrence" + a premium dollar figure
+                    if ("general liability" in _block
+                        and "each occurrence" in _block
+                        and re.search(r"\$\s*[\d,]+(?:\.\d{2})?", _block)):
+                        _excess_markers = ("excess of $", "attachment point")
+                        if not any(m in _block for m in _excess_markers):
+                            return True
+                    return False
+
+                _gl_files = [
+                    f.strip() for f in _file_markers_gl
+                    if _is_gl_file(f) or _file_block_is_gl_by_content(f)
+                ]
                 # Dedupe while preserving order
                 _seen_gl = set(); _gl_files_unique = []
                 for _f in _gl_files:
