@@ -153,6 +153,10 @@ def _score_page(page_text: str) -> float:
         "PREMIUM DETAIL",
         "PREMIUM BREAKDOWN",
         "TOTAL COST OF POLICY",
+        "TOTAL POLICY COST",
+        "COST SUMMARY",
+        "COST BREAK OUT BY LOCATION",
+        "PREMIUM AND FEES",
         "SCHEDULE OF UNDERLYING",
         "DESIGNATED PREMISES",
         "PREMISES AND BUILDINGS",
@@ -625,6 +629,256 @@ def extract_document_smart(file_path: str) -> str:
         return ""
 
 
+def _parse_hotelbound_costs(combined_text: str) -> dict:
+    """
+    Deterministic parser for HotelBound / RT Specialty property quotes.
+
+    HotelBound quotes contain TWO different "totals":
+      - RT cover "Cost Summary" → Total Policy Cost (all-in incl. SLT, stamp, EMPA, carrier policy fee)
+      - Lloyd's "Quotation Memorandum" → PREMIUM AND FEES Total (Lloyd's-side: premium + brokerage + assoc)
+
+    The RT cover Total Policy Cost is the number the insured actually pays. GPT often grabs the
+    Lloyd's memo total instead, so this parser scans the raw text directly and returns authoritative
+    values that override GPT for HotelBound/RT Specialty quotes.
+
+    Returns:
+        {
+            "detected": bool,                        # True if HotelBound markers present
+            "base_premium": float,                   # Property Premium / Non-Admitted Premium
+            "total_policy_cost": float,              # RT cover Total Policy Cost (all-in)
+            "fl_surplus_lines_tax": float,
+            "fl_stamp_fee": float,
+            "empa_surcharge": float,
+            "carrier_policy_fee": float,
+            "lloyd_memo_total": float,               # Quotation Memorandum total (for reference)
+            "locations": [                            # Per-location Cost Break Out (if multi-location)
+                {"lid": str, "street": str, "city": str, "state": str, "zip": str,
+                 "county": str, "agg_premium": float, "premium": float, "fee": float,
+                 "bldg_value": float, "bpp_value": float, "bi_value": float, "tiv": float}
+            ]
+        }
+    """
+    result = {
+        "detected": False,
+        "base_premium": 0.0,
+        "total_policy_cost": 0.0,
+        "fl_surplus_lines_tax": 0.0,
+        "fl_stamp_fee": 0.0,
+        "empa_surcharge": 0.0,
+        "carrier_policy_fee": 0.0,
+        "lloyd_memo_total": 0.0,
+        "locations": [],
+    }
+    if not combined_text:
+        return result
+
+    text_upper = combined_text.upper()
+    # Marker detection: must have at least one HotelBound/RT marker AND a Cost Summary or Quotation Memorandum
+    markers = ("HOTELBOUND", "RT SPECIALTY", "RYAN TURNER SPECIALTY", "RYAN SPECIALTY", "OWNERS FIRST ASSOCIATION")
+    has_marker = any(m in text_upper for m in markers)
+    has_structure = ("COST SUMMARY" in text_upper) or ("QUOTATION MEMORANDUM" in text_upper)
+    if not (has_marker and has_structure):
+        return result
+    result["detected"] = True
+
+    def _to_num(s):
+        try:
+            return float(str(s).replace(",", "").replace("$", "").strip())
+        except (ValueError, TypeError, AttributeError):
+            return 0.0
+
+    # --- Cost Summary line-item patterns (RT cover, page 2) ---
+    _money = r"\$?\s*([\d,]+(?:\.\d{1,2})?)"
+    _patterns = {
+        "base_premium": [
+            rf"Property\s+Premium\s+{_money}",
+            rf"Non[-\s]?Admitted\s+Premium\s*:?\s*{_money}",
+        ],
+        "fl_surplus_lines_tax": [
+            rf"FL\s+Surplus\s+Lines?\s+Tax\s+{_money}",
+            rf"Surplus\s+Lines?\s+Tax\s*:?\s*{_money}",
+        ],
+        "fl_stamp_fee": [
+            rf"FL\s+Stamp\s+Fee\s+{_money}",
+            rf"Stamp\s+Fee\s*:?\s*{_money}",
+            rf"FSLSO\s+Service\s+Fee\s*:?\s*{_money}",
+        ],
+        "empa_surcharge": [
+            rf"Florida\s+Non[-\s]?Residential\s+Surcharge\s+{_money}",
+            rf"EMPA\s+Surcharge\s*:?\s*{_money}",
+        ],
+        "carrier_policy_fee": [
+            rf"Carrier\s+Policy\s+Fee\s+{_money}",
+            rf"Other\s+Policy\s+Fees\s*:?\s*{_money}",
+        ],
+        "total_policy_cost": [
+            rf"Total\s+Policy\s+Cost\s+{_money}",
+        ],
+        "lloyd_memo_total": [
+            # PREMIUM AND FEES block: "Total: $84,795"
+            rf"PREMIUM\s+AND\s+FEES[\s\S]{{0,1200}}?Total\s*:?\s*{_money}",
+        ],
+    }
+    for field, pats in _patterns.items():
+        for pat in pats:
+            m = re.search(pat, combined_text, re.IGNORECASE)
+            if m:
+                val = _to_num(m.group(1))
+                if val > 0:
+                    result[field] = val
+                    break
+
+    # Sanity check: Total Policy Cost should be >= base premium. If not, drop it.
+    if 0 < result["total_policy_cost"] < result["base_premium"]:
+        logger.warning(
+            f"HotelBound parser: Total Policy Cost ({result['total_policy_cost']}) < base premium "
+            f"({result['base_premium']}) — likely mis-parse, discarding."
+        )
+        result["total_policy_cost"] = 0.0
+
+    # --- Cost Break Out By Location (multi-location HotelBound quotes) ---
+    # Section header followed by per-location rows. Each row: LID Street City State Zip County
+    # AggPrem Premium Fee Bldg BPP BI TIV
+    _cb_section_match = re.search(
+        r"Cost\s+Break\s+Out\s+By\s+Location([\s\S]{0,15000})",
+        combined_text, re.IGNORECASE,
+    )
+    if _cb_section_match:
+        section = _cb_section_match.group(1)
+        # HotelBound Cost Break Out rows are column-aligned via pdftotext -layout. Each column is
+        # separated by 2+ spaces; tokens within a column (e.g. "Palm Beach Gardens") are single-spaced.
+        # Anchor by State (2 caps) + Zip (5 digits) which uniquely identifies the column join, then
+        # split forward/backward by 2+ space boundaries.
+        row_re = re.compile(
+            r"(?P<lid>\d{10,15})\s{2,}"
+            r"(?P<rest>.+?)\s{2,}"
+            r"(?P<state>[A-Z]{2})\s+(?P<zip>\d{5})\s{2,}"
+            r"(?P<county>[A-Za-z .'-]+?)\s{2,}"
+            r"\$?(?P<agg>[\d,]+(?:\.\d{1,2})?)\s{2,}"
+            r"\$?(?P<prem>[\d,]+(?:\.\d{1,2})?)\s{2,}"
+            r"\$?(?P<fee>[\d,]+(?:\.\d{1,2})?)\s{2,}"
+            r"\$?(?P<bldg>[\d,]+(?:\.\d{1,2})?)\s{2,}"
+            r"\$?(?P<bpp>[\d,]+(?:\.\d{1,2})?)\s{2,}"
+            r"\$?(?P<bi>[\d,]+(?:\.\d{1,2})?)\s{2,}"
+            r"\$?(?P<tiv>[\d,]+(?:\.\d{1,2})?)"
+        )
+        for m in row_re.finditer(section):
+            # Split "rest" (Street + City) by last 2+ space gap: street | city
+            rest = m.group("rest").strip()
+            _sc = re.split(r"\s{2,}", rest, maxsplit=1)
+            if len(_sc) == 2:
+                street, city = _sc[0].strip(), _sc[1].strip()
+            else:
+                # Fallback: single-spaced — split on transition from digit-led street to
+                # all-cap-initial city words.
+                street, city = rest, ""
+            result["locations"].append({
+                "lid": m.group("lid"),
+                "street": street,
+                "city": city,
+                "state": m.group("state"),
+                "zip": m.group("zip"),
+                "county": m.group("county").strip(),
+                "agg_premium": _to_num(m.group("agg")),
+                "premium": _to_num(m.group("prem")),
+                "fee": _to_num(m.group("fee")),
+                "bldg_value": _to_num(m.group("bldg")),
+                "bpp_value": _to_num(m.group("bpp")),
+                "bi_value": _to_num(m.group("bi")),
+                "tiv": _to_num(m.group("tiv")),
+            })
+
+    logger.info(
+        f"HotelBound parser: detected={result['detected']}, base_premium={result['base_premium']}, "
+        f"total_policy_cost={result['total_policy_cost']}, lloyd_memo_total={result['lloyd_memo_total']}, "
+        f"locations={len(result['locations'])}"
+    )
+    return result
+
+
+def _apply_hotelbound_overrides(data: dict, hb: dict) -> None:
+    """
+    Apply HotelBound parser output to the extracted `data` dict, overriding the GPT-extracted
+    property coverage and locations with the authoritative values from _parse_hotelbound_costs.
+
+    Mutates `data` in place. No-op when hb["detected"] is False.
+    """
+    if not hb or not hb.get("detected"):
+        return
+
+    coverages = data.setdefault("coverages", {})
+    prop = coverages.get("property")
+    if not isinstance(prop, dict):
+        return
+
+    base_premium = hb.get("base_premium", 0.0)
+    total_policy_cost = hb.get("total_policy_cost", 0.0)
+
+    # Only override when we have credible numbers.
+    if base_premium > 0:
+        old_prem = prop.get("premium")
+        prop["premium"] = base_premium
+        logger.info(f"HotelBound override: property.premium {old_prem} -> {base_premium}")
+
+    if total_policy_cost > 0:
+        old_total = prop.get("total_premium")
+        prop["total_premium"] = total_policy_cost
+        logger.info(f"HotelBound override: property.total_premium {old_total} -> {total_policy_cost}")
+        if base_premium > 0:
+            prop["taxes_fees"] = round(total_policy_cost - base_premium, 2)
+            logger.info(f"HotelBound override: property.taxes_fees -> {prop['taxes_fees']}")
+
+    # Itemized taxes/fees breakdown — store for downstream proposal generation visibility.
+    breakdown = {}
+    for k in ("fl_surplus_lines_tax", "fl_stamp_fee", "empa_surcharge", "carrier_policy_fee"):
+        v = hb.get(k, 0.0)
+        if v > 0:
+            breakdown[k] = v
+    if breakdown:
+        prop["taxes_fees_breakdown"] = breakdown
+
+    # Multi-location: populate coverage_by_location and top-level locations[] from the
+    # Cost Break Out By Location table.
+    hb_locs = hb.get("locations") or []
+    if hb_locs:
+        cbl = []
+        for loc in hb_locs:
+            cbl.append({
+                "premise": len(cbl) + 1,
+                "building": 1,
+                "lid": loc["lid"],
+                "address": f"{loc['street']}, {loc['city']}, {loc['state']} {loc['zip']}",
+                "building_value": loc["bldg_value"],
+                "bpp_value": loc["bpp_value"],
+                "business_income": loc["bi_value"],
+                "tiv": loc["tiv"],
+                "premium": loc["premium"],
+                "fee": loc["fee"],
+                "agg_premium": loc["agg_premium"],
+            })
+        prop["coverage_by_location"] = cbl
+        logger.info(f"HotelBound override: property.coverage_by_location set with {len(cbl)} locations")
+
+        # Mirror to top-level locations[] when multi-location, otherwise leave the existing
+        # single-location entry alone (it may already have richer name/DBA data).
+        if len(hb_locs) > 1:
+            data["locations"] = [
+                {
+                    "number": str(i + 1),
+                    "name": "",
+                    "corporate_entity": "",
+                    "address": loc["street"],
+                    "city": loc["city"],
+                    "state": loc["state"],
+                    "zip": loc["zip"],
+                    "description": "Hotel/Motel",
+                    "tiv": loc["tiv"],
+                }
+                for i, loc in enumerate(hb_locs)
+            ]
+            logger.info(f"HotelBound override: locations[] populated from Cost Break Out ({len(hb_locs)} entries)")
+
+
 EXTRACTION_SYSTEM_PROMPT = """You are an expert insurance data extraction assistant specializing in hotel and hospitality insurance. You extract structured data from insurance quote documents.
 
 CRITICAL RULES:
@@ -1046,7 +1300,7 @@ IMPORTANT:
 - For additional_named_insureds: CRITICAL - Search ALL pages thoroughly for "Additional Named Insured", "Additional Named Insureds Schedule", "Named Insured Schedule", or similar headings. These are often on a SEPARATE PAGE listing 5-15+ entities (LLCs, management companies with DBAs). You MUST extract EVERY SINGLE entity listed - do NOT stop early or truncate. Count the entities and verify your count matches the document. Each entity is typically an LLC with a DBA hotel brand name (e.g., "PORT PLAZA HOTEL LLC DBA HOME2SUITES BY HILTON"). Extract each one as {{name: "LLC name", dba: "brand name"}}. Do NOT duplicate entities already in named_insureds.
 - For additional_insureds: Search for "Additional Insured", "Additional Insured Schedule", or endorsement pages listing additional insureds (franchisors, mortgagees, managers). Extract all of them.
 - CRIME COVERAGE: For crime/fidelity bond policies (e.g., Chubb ForeFront Portfolio, Travelers Crime), extract ALL insuring clauses with their individual limits and retentions. Common insuring clauses include: Employee Theft, Forgery or Alteration, Inside the Premises (Theft of Money & Securities), Inside the Premises (Robbery/Safe Burglary), Outside the Premises, Computer and Funds Transfer Fraud, Money Orders and Counterfeit Money, Social Engineering Fraud. Also extract all endorsements from the forms schedule. If the policy is claims-made, note the retroactive date.
-- RT SPECIALTY / LLOYD'S OF LONDON PROPERTY QUOTES: RT Specialty quotes have a two-part format: (1) an RT "Insurance Proposal" cover with Cost Summary, and (2) a "Quotation Memorandum" from the actual carrier (Lloyd's via Owners First Association). CRITICAL extraction rules: Use the Quotation Memorandum "PREMIUM AND FEES" section Total as total_premium (this includes brokerage fees and association fees). The RT cover "Total Policy Cost" includes surplus lines tax which should NOT be in total_premium. Extract TIV from "RISK DETAILS" section. Extract deductibles from the lettered A/B/C structure (e.g., A=$10K AOP, B=$25K per building for water damage). Extract ALL lettered sublimits A through FF+ from "SCHEDULE OF SUBLIMITS". If Wind/Hail or Named Windstorm says "EXCLUDED", mark as "NOT COVERED" in additional_coverages. Extract WARRANTIES as subjectivities. Extract SUBJECTIVITIES as binding conditions. The SOV page (Schedule of Values) contains per-location breakdowns with LID, address, year built, construction, stories, units, sprinklered status, gross sq ft, building value, BPP value, BI value, and TIV — use this for coverage_by_location. Set carrier_admitted to false (Lloyd's is non-admitted/surplus lines).
+- RT SPECIALTY / LLOYD'S OF LONDON / HOTELBOUND PROPERTY QUOTES: RT Specialty quotes have a two-part format: (1) an RT "Insurance Proposal" cover with a "Cost Summary" table on page 2, and (2) a "Quotation Memorandum" from the actual carrier (Lloyd's via HotelBound / Owners First Association). CRITICAL extraction rules: total_premium MUST be the "Total Policy Cost" value from the RT cover "Cost Summary" table — this is the all-in number the insured actually pays and includes base premium + FL Surplus Lines Tax + FL Stamp Fee + EMPA / Non-Residential Surcharge + Carrier Policy Fee. Example: Property Premium $73,213 + FL SLT $4,188.87 + FL Stamp $50.88 + EMPA $4 + Carrier Policy Fee $11,582 = Total Policy Cost $89,038.75 → total_premium = 89038.75. Do NOT use the Quotation Memorandum "PREMIUM AND FEES" Total (e.g., $84,795) — that's a Lloyd's-side subtotal that omits state surplus lines tax/stamp/EMPA. Set premium = base property premium (e.g., $73,213) and taxes_fees = total_premium − premium. Extract TIV from "RISK DETAILS" section. Extract deductibles from the lettered A/B/C structure (e.g., A=$10K AOP, B=5% TIV per building for Named Windstorm, G=$25K per building for water damage). Extract ALL lettered sublimits A through FF+ from "SCHEDULE OF SUBLIMITS". If Wind/Hail or Named Windstorm says "EXCLUDED", mark as "NOT COVERED" in additional_coverages. Extract WARRANTIES as subjectivities. Extract SUBJECTIVITIES as binding conditions. The SOV page (Schedule of Values) contains per-location breakdowns with LID, address, year built, construction, stories, units, sprinklered status, gross sq ft, building value, BPP value, BI value, and TIV — use this for coverage_by_location. For HotelBound quotes with MORE THAN ONE LOCATION, the "Cost Break Out By Location" table near the back is the authoritative source for per-location Agg Premium, Premium, Fee, Bldg Value, BPP Value, BI Value, and TIV — emit one entry per LID in coverage_by_location and one location in the locations[] array per LID. Set carrier_admitted to false (Lloyd's is non-admitted/surplus lines).
 - LAYERED PROPERTY PROGRAMS: When a property quote contains multiple carriers in a layered/shared program (e.g., Lexington primary + Kinsale excess + Gotham/Coaction excess), extract EACH layer separately. Use "property" for the primary layer, "excess_property" for the first excess layer, and "excess_property_2" for the second excess layer. Each layer has its own carrier, premium, limits, deductibles, forms, subjectivities, and coinsurance. The layer_description should show the attachment point (e.g., "$10,000,000 xs $10,000,000"). Look for terms like "Excess", "xs", "excess of", or "Per Schedule" to identify excess layers. Common excess property carriers include Kinsale, Gotham (via Coaction), and others.
 - COINSURANCE & VALUATION: For ALL property layers (primary and excess), extract the coinsurance percentage for Building, Business Income, and BPP. Also extract the Monthly Limitation for Business Income (e.g., "1/4 Monthly", "1/3 Monthly"). This is a CRITICAL field that must ALWAYS be included in property quotes. Look for "Coinsurance", "Monthly Limitation", "Coinsurance & Valuation" sections. If coinsurance is waived or 0%, still include it as "0%". Also extract the valuation basis (Replacement Cost, Actual Cash Value, Agreed Value).
 - UMBRELLA/EXCESS LAYERS: When multiple umbrella/excess liability quotes are provided (e.g., separate PDFs for different layers), extract EACH layer as a separate coverage entry. Use "umbrella" for the primary excess layer, "umbrella_layer_2" for the second excess layer ($XM xs $XM), and "umbrella_layer_3" for the third excess layer ($XM xs $XM). Each layer has its own carrier, premium, limits, forms, and subjectivities. The tower_structure field should show that layer's position. Look for "Controlling Underlying" or "Schedule of Underlying" to determine the layer position. If a quote says it sits excess of another carrier's layer, it is a higher layer.
@@ -1258,6 +1512,17 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
 
             logger.info(f"  {key}: carrier={cov.get('carrier', 'N/A')}, premium={premium}, "
                        f"taxes_fees={taxes_fees}, total_premium={total_premium}")
+
+        # HOTELBOUND / RT SPECIALTY OVERRIDE — runs BEFORE the generic _total_cost_patterns pass.
+        # Deterministically parses the RT cover "Cost Summary" so total_premium = all-in Total Policy
+        # Cost (incl. FL SLT/stamp/EMPA/carrier policy fee), not the Lloyd's memo subtotal.
+        # Also populates coverage_by_location + locations[] from the Cost Break Out By Location table
+        # when the HotelBound quote covers more than one location.
+        try:
+            _hb_costs = _parse_hotelbound_costs(combined_text)
+            _apply_hotelbound_overrides(data, _hb_costs)
+        except Exception as _hb_err:
+            logger.warning(f"HotelBound override pass failed (non-fatal): {_hb_err}")
 
         # CRITICAL FIX: Override total_premium with exact values from raw PDF text
         # GPT frequently miscalculates taxes/fees. Scan the raw text for "Total Cost of Policy",
