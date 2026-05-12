@@ -2374,15 +2374,49 @@ def generate_locations(doc, data):
                    _normalize_city(loc.get("city", "")) + "|" +
                    _normalize_state(loc.get("state", "")))
         if addr_key not in seen_addr_keys and loc.get("address"):
-            name = loc.get("description", "") or loc.get("corporate_entity", "")
-            if not name or not name.strip():
-                name = "Pending"
+            # Build "Corporate Name - DBA" format. Prefer the extractor-provided name (DBA / hotel
+            # brand) over the ATC occupancy description so we never display "Hotel/Motel" as the
+            # Property Name in the Schedule of Locations.
+            _loc_name = (loc.get("name") or "").strip()
+            _loc_corp = (loc.get("corporate_entity") or "").strip()
+            _loc_dba = (loc.get("dba") or loc.get("hotel_flag") or "").strip()
+            _loc_desc = (loc.get("description") or "").strip()
+            _placeholder_names = {"hotel/motel", "hotel", "motel", "hotel or motel", "apartments",
+                                  "general commercial", "retail", "office", "condominium", "pending"}
+            if _loc_name.lower() in _placeholder_names:
+                _loc_name = ""
+            if _loc_corp and _loc_dba:
+                name = f"{_loc_corp} - {_loc_dba}"
+            elif _loc_name:
+                name = _loc_name
+            elif _loc_dba:
+                name = _loc_dba
+            elif _loc_corp:
+                name = _loc_corp
+            elif _loc_desc and _loc_desc.lower() not in _placeholder_names:
+                name = _loc_desc
+            else:
+                _ci = data.get("client_info") or {}
+                _ci_corp = (_ci.get("named_insured") or "").strip()
+                _ci_dba = (_ci.get("dba") or "").strip()
+                if _ci_corp and _ci_dba:
+                    name = f"{_ci_corp} - {_ci_dba}"
+                elif _ci_dba:
+                    name = _ci_dba
+                elif _ci_corp:
+                    name = _ci_corp
+                else:
+                    name = "Pending"
+            try:
+                _tiv_val = float(loc.get("tiv") or 0)
+            except (TypeError, ValueError):
+                _tiv_val = 0
             master_locations.append({
                 "name": name,
                 "address": loc.get("address", ""),
                 "city": loc.get("city", ""),
                 "state": loc.get("state", ""),
-                "tiv": 0,
+                "tiv": _tiv_val,
                 "on_property": _is_on_property(addr_key),
                 "on_liability": _is_on_liability(addr_key),
             })
@@ -3018,14 +3052,17 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
             add_subsection_header(doc, "Coverage Limits")
             headers = ["Description", "Limit"]
             rows = [[lim.get("description", "") or lim.get("type", ""), lim.get("limit", "") or lim.get("amount", "")] if isinstance(lim, dict) else [str(lim), ""] for lim in limits]
-            # Left-align headers; center Limit values for umbrella/excess
             L = WD_ALIGN_PARAGRAPH.LEFT
-            limit_body_align = {}
+            C = WD_ALIGN_PARAGRAPH.CENTER
+            R = WD_ALIGN_PARAGRAPH.RIGHT
+            # Right-align numeric Limit values; center the "Limit" header.
             if coverage_key in ("umbrella", "cyber", "epli", "flood", "terrorism"):
-                limit_body_align = {1: WD_ALIGN_PARAGRAPH.CENTER}
-            create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
+                limit_body_align = {1: C}
+            else:
+                limit_body_align = {1: R}
+            create_styled_table(doc, headers, rows, col_widths=[5.0, 2.0],
                                header_size=10, body_size=10,
-                               header_alignments={0: L, 1: L},
+                               header_alignments={0: L, 1: C},
                                col_alignments=limit_body_align)
 
     # Per-location property coverage breakdown
@@ -3541,6 +3578,48 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                         elif corp:
                             gl_loc["brand"] = corp
                         break
+
+        # Fallback when no SOV is available: cross-reference against extracted locations[]
+        # (HotelBound override populates corporate_entity + dba), then against client_info.
+        _all_locs = data.get("locations") or []
+        for gl_loc in gl_loc_list:
+            if gl_loc["brand"]:
+                continue
+            gl_addr_norm = _normalize_addr(gl_loc["address"])
+            if not gl_addr_norm:
+                continue
+            for extr_loc in _all_locs:
+                if not isinstance(extr_loc, dict):
+                    continue
+                extr_addr_norm = _normalize_addr(extr_loc.get("address", ""))
+                if extr_addr_norm and _fuzzy_addr_match(gl_addr_norm, extr_addr_norm):
+                    corp = (extr_loc.get("corporate_entity", "") or "").strip()
+                    dba = (extr_loc.get("dba", "") or extr_loc.get("name", "") or "").strip()
+                    if dba.lower() in ("hotel/motel", "hotel", "motel", "hotel or motel", "pending"):
+                        dba = ""
+                    if corp and dba:
+                        gl_loc["brand"] = f"{corp} - {dba}"
+                    elif dba:
+                        gl_loc["brand"] = dba
+                    elif corp:
+                        gl_loc["brand"] = corp
+                    break
+
+        # Final fallback: client_info for the single-location case.
+        _ci = data.get("client_info") or {}
+        _ci_corp = (_ci.get("named_insured") or "").strip()
+        _ci_dba = (_ci.get("dba") or "").strip()
+        if _ci_corp or _ci_dba:
+            _ci_brand = ""
+            if _ci_corp and _ci_dba:
+                _ci_brand = f"{_ci_corp} - {_ci_dba}"
+            elif _ci_dba:
+                _ci_brand = _ci_dba
+            elif _ci_corp:
+                _ci_brand = _ci_corp
+            for gl_loc in gl_loc_list:
+                if not gl_loc["brand"] and _ci_brand:
+                    gl_loc["brand"] = _ci_brand
         
         if gl_loc_list:
             add_subsection_header(doc, "Covered Locations")

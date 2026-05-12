@@ -651,6 +651,9 @@ def _parse_hotelbound_costs(combined_text: str) -> dict:
             "empa_surcharge": float,
             "carrier_policy_fee": float,
             "lloyd_memo_total": float,               # Quotation Memorandum total (for reference)
+            "tiv": float,                            # TIV from RISK DETAILS section
+            "account_corp": str,                     # Corporate entity from ACCOUNT NAME line
+            "account_dba": str,                      # DBA / hotel brand from ACCOUNT NAME line
             "locations": [                            # Per-location Cost Break Out (if multi-location)
                 {"lid": str, "street": str, "city": str, "state": str, "zip": str,
                  "county": str, "agg_premium": float, "premium": float, "fee": float,
@@ -667,6 +670,9 @@ def _parse_hotelbound_costs(combined_text: str) -> dict:
         "empa_surcharge": 0.0,
         "carrier_policy_fee": 0.0,
         "lloyd_memo_total": 0.0,
+        "tiv": 0.0,
+        "account_corp": "",
+        "account_dba": "",
         "locations": [],
     }
     if not combined_text:
@@ -735,6 +741,38 @@ def _parse_hotelbound_costs(combined_text: str) -> dict:
             f"({result['base_premium']}) — likely mis-parse, discarding."
         )
         result["total_policy_cost"] = 0.0
+
+    # --- ACCOUNT NAME line parse (Quotation Memorandum cover + Cost Break Out pages) ---
+    # Format: "ACCOUNT NAME: RCA Blvd Hotel LLC dba Hampton Inn Palm Beach Gardens"
+    # Also handles "INSURED: RCA Blvd Hotel LLC dba Hampton Inn Palm Beach Gardens and any subsidiary..."
+    _acct_patterns = [
+        r"ACCOUNT\s+NAME\s*:?\s*(.+?)(?:\r?\n|CONTROL\s*#|$)",
+        r"INSURED\s*:?\s*(.+?)(?:\s+and\s+any\s+subsidiary|\r?\n|MAILING\s+ADDRESS|$)",
+        r"Applicant\s*:?\s*(.+?)(?:\r?\n|RCA|\d{4}\s+\w)",
+    ]
+    for pat in _acct_patterns:
+        m = re.search(pat, combined_text, re.IGNORECASE | re.DOTALL)
+        if not m:
+            continue
+        raw = m.group(1).strip()
+        dba_split = re.split(r"\s+dba\s+|\s+d/b/a\s+", raw, maxsplit=1, flags=re.IGNORECASE)
+        if len(dba_split) == 2:
+            corp, dba = dba_split[0].strip(), dba_split[1].strip()
+            dba = re.split(r"\s+and\s+any\s+subsidiary|\s+CONTROL\s*#", dba, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+            if corp and not result["account_corp"]:
+                result["account_corp"] = corp
+            if dba and not result["account_dba"]:
+                result["account_dba"] = dba
+        else:
+            if not result["account_corp"]:
+                result["account_corp"] = raw
+        if result["account_corp"] and result["account_dba"]:
+            break
+
+    # --- TIV from RISK DETAILS section (Quotation Memorandum) ---
+    m_tiv = re.search(r"\bTIV\s*:?\s*\$?\s*([\d,]+(?:\.\d{1,2})?)", combined_text, re.IGNORECASE)
+    if m_tiv:
+        result["tiv"] = _to_num(m_tiv.group(1))
 
     # --- Cost Break Out By Location (multi-location HotelBound quotes) ---
     # Section header followed by per-location rows. Each row: LID Street City State Zip County
@@ -837,6 +875,9 @@ def _apply_hotelbound_overrides(data: dict, hb: dict) -> None:
     if breakdown:
         prop["taxes_fees_breakdown"] = breakdown
 
+    # Property-level TIV from RISK DETAILS (or computed from per-location values below)
+    hb_tiv = hb.get("tiv", 0.0)
+
     # Multi-location: populate coverage_by_location and top-level locations[] from the
     # Cost Break Out By Location table.
     hb_locs = hb.get("locations") or []
@@ -859,24 +900,107 @@ def _apply_hotelbound_overrides(data: dict, hb: dict) -> None:
         prop["coverage_by_location"] = cbl
         logger.info(f"HotelBound override: property.coverage_by_location set with {len(cbl)} locations")
 
-        # Mirror to top-level locations[] when multi-location, otherwise leave the existing
-        # single-location entry alone (it may already have richer name/DBA data).
-        if len(hb_locs) > 1:
-            data["locations"] = [
-                {
-                    "number": str(i + 1),
-                    "name": "",
-                    "corporate_entity": "",
-                    "address": loc["street"],
-                    "city": loc["city"],
-                    "state": loc["state"],
-                    "zip": loc["zip"],
-                    "description": "Hotel/Motel",
-                    "tiv": loc["tiv"],
-                }
-                for i, loc in enumerate(hb_locs)
-            ]
-            logger.info(f"HotelBound override: locations[] populated from Cost Break Out ({len(hb_locs)} entries)")
+        # Sum per-location TIV as a fallback if RISK DETAILS TIV wasn't found
+        if hb_tiv <= 0:
+            hb_tiv = sum(l.get("tiv", 0.0) for l in hb_locs)
+
+    # Set property.tiv so Schedule of Locations / Coverage Summary can render the right number
+    if hb_tiv > 0:
+        prop["tiv"] = hb_tiv
+
+    # Populate top-level locations[] from HotelBound data so Schedule of Locations renders
+    # the correct DBA + TIV. Apply for BOTH single- and multi-location HotelBound quotes —
+    # GPT routinely populates locations[0].name with the ATC occupancy description ("Hotel/Motel")
+    # instead of the DBA, and locations[0].tiv with 0.
+    account_corp = (hb.get("account_corp") or "").strip()
+    account_dba = (hb.get("account_dba") or "").strip()
+
+    if hb_locs:
+        rebuilt = []
+        for i, loc in enumerate(hb_locs):
+            _name = account_dba if account_dba else ""
+            rebuilt.append({
+                "number": str(i + 1),
+                "name": _name,
+                "corporate_entity": account_corp,
+                "dba": account_dba,
+                "address": loc["street"],
+                "city": loc["city"],
+                "state": loc["state"],
+                "zip": loc["zip"],
+                "description": "Hotel/Motel",
+                "tiv": loc["tiv"],
+            })
+        data["locations"] = rebuilt
+        logger.info(f"HotelBound override: locations[] rebuilt with {len(rebuilt)} entries (corp={account_corp!r}, dba={account_dba!r})")
+    else:
+        existing = data.get("locations") or []
+        if existing:
+            first = existing[0] if isinstance(existing[0], dict) else {}
+            _curr_name = (first.get("name") or "").strip()
+            if account_dba and (not _curr_name or _curr_name.lower() in ("hotel/motel", "hotel", "motel", "hotel or motel", "pending", "")):
+                first["name"] = account_dba
+            if account_corp and not (first.get("corporate_entity") or "").strip():
+                first["corporate_entity"] = account_corp
+            if account_dba and not (first.get("dba") or "").strip():
+                first["dba"] = account_dba
+            if hb_tiv > 0 and (not first.get("tiv") or first.get("tiv") == 0):
+                first["tiv"] = hb_tiv
+            existing[0] = first
+            data["locations"] = existing
+            logger.info(f"HotelBound override: locations[0] patched (name={first.get('name')!r}, tiv={first.get('tiv')!r})")
+
+    ci = data.setdefault("client_info", {})
+    if isinstance(ci, dict):
+        if account_corp and not (ci.get("named_insured") or "").strip():
+            ci["named_insured"] = account_corp
+        if account_dba and not (ci.get("dba") or "").strip():
+            ci["dba"] = account_dba
+
+    # Strip Berkley / GL / EPLI / Auto / Liquor / Umbrella forms that bled into property
+    _existing_forms = prop.get("forms_endorsements") or []
+    if isinstance(_existing_forms, list) and _existing_forms:
+        cleaned = _clean_property_forms_endorsements(_existing_forms)
+        if len(cleaned) != len(_existing_forms):
+            logger.info(
+                f"HotelBound override: property.forms_endorsements cleaned "
+                f"{len(_existing_forms)} -> {len(cleaned)} (stripped GL/EPLI/Berkley prefixes)"
+            )
+            prop["forms_endorsements"] = cleaned
+
+
+# Form-number prefixes that should NEVER appear in a property quote's forms_endorsements.
+_NONPROPERTY_FORM_PREFIXES = (
+    "CG ", "CG0", "CG1", "CG2", "CG3", "CG4", "CG5", "CG7", "CG9",
+    "BR0", "BR1", "BR2", "BR3", "BR4", "BR5", "BR6", "BR7", "BR8", "BR9",
+    "BR902", "BR013", "BR014",
+    "EMN", "EMJ", "EMD", "EMO", "EGD",
+    "AD ", "AI ", "DE ", "JA ", "NXLL", "NASC", "GLF", "GL ",
+    "CLOC",
+    "CA ", "CA-",
+    "LL ", "LL-", "LL FLIQL",
+    "EPL", "CYB", "WPA", "EP1", "FLSL", "SSIC", "FUT-SS", "FUT SS", "GL STATE",
+    "CSXC", "EXL ", "HS XS", "FUT ", "XS ", "CX ",
+)
+
+
+def _clean_property_forms_endorsements(forms: list) -> list:
+    """Strip non-property form-number prefixes from a property forms_endorsements list."""
+    if not isinstance(forms, list):
+        return forms or []
+    cleaned = []
+    for f in forms:
+        if not isinstance(f, dict):
+            cleaned.append(f)
+            continue
+        fn = str(f.get("form_number") or "").upper().strip()
+        if not fn:
+            cleaned.append(f)
+            continue
+        if any(fn.startswith(p) for p in _NONPROPERTY_FORM_PREFIXES):
+            continue
+        cleaned.append(f)
+    return cleaned
 
 
 EXTRACTION_SYSTEM_PROMPT = """You are an expert insurance data extraction assistant specializing in hotel and hospitality insurance. You extract structured data from insurance quote documents.
@@ -1523,6 +1647,26 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
             _apply_hotelbound_overrides(data, _hb_costs)
         except Exception as _hb_err:
             logger.warning(f"HotelBound override pass failed (non-fatal): {_hb_err}")
+
+        # UNIVERSAL PROPERTY FORMS CLEANUP — strips GL/EPLI/Auto/Liquor/Umbrella/Berkley forms
+        # that bled into any property coverage's forms_endorsements from a multi-coverage
+        # submission. Idempotent with the HotelBound override above.
+        try:
+            for _pkey in ("property", "excess_property", "excess_property_2"):
+                _pcov = data.get("coverages", {}).get(_pkey)
+                if not isinstance(_pcov, dict):
+                    continue
+                _existing = _pcov.get("forms_endorsements") or []
+                if isinstance(_existing, list) and _existing:
+                    _cleaned = _clean_property_forms_endorsements(_existing)
+                    if len(_cleaned) != len(_existing):
+                        logger.info(
+                            f"Universal cleanup: {_pkey}.forms_endorsements "
+                            f"{len(_existing)} -> {len(_cleaned)} (stripped non-property prefixes)"
+                        )
+                        _pcov["forms_endorsements"] = _cleaned
+        except Exception as _fc_err:
+            logger.warning(f"Property forms cleanup failed (non-fatal): {_fc_err}")
 
         # CRITICAL FIX: Override total_premium with exact values from raw PDF text
         # GPT frequently miscalculates taxes/fees. Scan the raw text for "Total Cost of Policy",
