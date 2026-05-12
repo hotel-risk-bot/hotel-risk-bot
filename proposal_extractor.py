@@ -969,23 +969,151 @@ def _apply_hotelbound_overrides(data: dict, hb: dict) -> None:
             prop["forms_endorsements"] = cleaned
 
 
-# Form-number prefixes that should NEVER appear in a property quote's forms_endorsements.
+# Form-number prefixes that should NEVER appear in a PROPERTY quote's forms_endorsements.
+# Covers: ISO General Liability (CG…), Berkley Specialty liability endorsements (BR…),
+# Berkley jacket / common-policy forms (EMN/EMJ/EMD/EMO/EGD/EMC), ISO Industry Liability
+# common-policy forms used on GL (IL…), AmTrust/AD/AI/DE/JA/NASC/NXLL/GLF/CLOC, Auto (CA),
+# Liquor (LL), package add-ons (EPL/CYB/WPA), Berkley TRIA notice ("EN P5"), umbrella
+# prefixes (CSXC/EXL/HS XS/FUT/XS/CX). Matches both compact ("CG0001") and spaced
+# ("CG 00 01") form-number formats.
 _NONPROPERTY_FORM_PREFIXES = (
+    # ISO General Liability — compact and spaced
     "CG ", "CG0", "CG1", "CG2", "CG3", "CG4", "CG5", "CG7", "CG9",
-    "BR0", "BR1", "BR2", "BR3", "BR4", "BR5", "BR6", "BR7", "BR8", "BR9",
-    "BR902", "BR013", "BR014",
-    "EMN", "EMJ", "EMD", "EMO", "EGD",
+    # ISO Industry Liability common-policy forms (Common Policy Conditions, Nuclear Energy
+    # Exclusion, etc.) — these appear on GL quotes alongside CG forms.
+    "IL ", "IL0", "IL1", "IL2", "IL9",
+    # Berkley liability endorsements
+    "BR ", "BR-", "BR0", "BR1", "BR2", "BR3", "BR4", "BR5", "BR6", "BR7", "BR8", "BR9",
+    "BR013", "BR014", "BR902",
+    # Berkley jackets / Common Policy / Schedule of Forms (always liability-side)
+    "EMN", "EMJ", "EMD", "EMO", "EGD", "EMC",
+    # Berkley TRIA / acceptance notices
+    "EN P5", "ENP5", "EN  P5",
+    "POLICYHOLDER NOTICE", "POLICYHOLDER  NOTICE",
+    # AmTrust / AD / AI / DE / JA / NASC / NXLL / GLF / generic GL / CLOC
     "AD ", "AI ", "DE ", "JA ", "NXLL", "NASC", "GLF", "GL ",
     "CLOC",
+    # Auto
     "CA ", "CA-",
+    # Liquor
     "LL ", "LL-", "LL FLIQL",
+    # GL packages / Cyber / EPL / WC
     "EPL", "CYB", "WPA", "EP1", "FLSL", "SSIC", "FUT-SS", "FUT SS", "GL STATE",
+    # Umbrella / Excess
     "CSXC", "EXL ", "HS XS", "FUT ", "XS ", "CX ",
 )
 
 
+# Form-number prefixes that should NEVER appear in an UMBRELLA / EXCESS quote's
+# forms_endorsements. Covers all property + all GL/EPLI/Liquor/Auto/Cyber prefixes. Anything
+# not on this reject list is allowed through — umbrella carriers use varied form numbering
+# (HS XS, EXL, FUT, NMA, LMA, NUF, NXLL, CSXC, CX, SCU, "Schedule of Underlying", etc.) so
+# the safer approach is to blacklist GL/property forms rather than whitelist a small set.
+_NONUMBRELLA_FORM_PREFIXES = (
+    # Property — ISO + Tower Hill/Vantage Risk + HotelBound jacket
+    "CP ", "CPF", "CFP", "TC ", "VR ", "EC ", "EB-", "EB0",
+    "MS PR", "MS DEC", "MS EBC", "HSIC SP", "HSIC SOS", "MS GEN", "HSIC",
+    "HB ",
+    # ISO General Liability — compact and spaced
+    "CG ", "CG0", "CG1", "CG2", "CG3", "CG4", "CG5", "CG7", "CG9",
+    # ISO Industry Liability common-policy
+    "IL ", "IL0", "IL1", "IL2", "IL9",
+    # Berkley liability + jacket + TRIA
+    "BR ", "BR-", "BR0", "BR1", "BR2", "BR3", "BR4", "BR5", "BR6", "BR7", "BR8", "BR9",
+    "BR013", "BR014", "BR902",
+    "EMN", "EMJ", "EMD", "EMO", "EGD", "EMC",
+    "EN P5", "ENP5", "EN  P5",
+    "POLICYHOLDER NOTICE", "POLICYHOLDER  NOTICE",
+    # AmTrust / AD / AI / DE / JA / NASC / GLF / CLOC
+    "AD ", "AI ", "DE ", "JA ", "NASC", "GLF", "CLOC",
+    # Auto / Liquor / Cyber / EPL / WC
+    "CA ", "CA-",
+    "LL ", "LL-", "LL FLIQL",
+    "EPL", "CYB", "WPA",
+)
+
+
+# Description-text keywords that mark a form as Liability-side regardless of form_number.
+# Catches mis-extracted forms where the form_number field contains the description or where
+# the prefix is unusual. Match is case-insensitive substring.
+_LIABILITY_DESCRIPTION_KEYWORDS = (
+    "general liability coverage form",
+    "commercial general liability",
+    "designated premises",
+    "limitation of coverage to designated",
+    "schedule of classes",
+    "liability premises schedule",
+    "premises schedule",
+    "hired auto",
+    "non-owned auto",
+    "hired and non-owned",
+    "punitive or exemplary damages",
+    "perfluoroalkyl",
+    "communicable or infectious disease",
+    "swimming pool barrier",
+    "lifesaving equipment",
+    "biometric information",
+    "exclusion - asbestos",
+    "exclusion -toxic",
+    "exclusion - cross suits",
+    "exclusion -toxic metals",
+    "exclusion - microorganisms",
+    "exclusion - total liquor",
+    "exclusion - injury to employees",
+    "amendment of definitions -insured contract",
+    "minimum earned premium endorsement",
+    "deductible liability insurance",
+    "additional insured - mortgagee",
+    "additional insured - grantor of franchise",
+    "additional insured - lessor",
+    "additional insured - manager",
+    "additional insured - vendor",
+    "policy jacket",
+    "nuclear energy liability",
+    "amendment of conditions - premium audit",
+    "common policy conditions",
+    "schedule of forms and endorsements",
+    "florida changes - cancellation",
+    "florida changes - canc",
+    "service of suit",
+    "trade sanctions endorsement",
+    "civil union or domestic partnership",
+    "water related hazard sign",
+    "policyholder notice",
+    "terrorism insurance coverage",
+    "acceptance or rejection of terrorism",
+    "rejection of terrorism",
+    "employment-related practices exclusion",
+    "exclusion - specified therapeutic",
+    "exclusion - new entities",
+    "exclusion - access or disclosure",
+    "silica or silica-related dust",
+    "advisory notice to policyholders",
+    "claim reporting information",
+    "notice of privacy policies",
+    "surplus lines producer information",
+    "commercial general liability coverage part declarations",
+    "common policy declarations",
+    "liability for guests' property",
+    "guests' property",
+    "location schedule",
+)
+
+
+def _is_liability_form_by_description(f: dict) -> bool:
+    """True if the form's description matches a known GL/EPLI keyword. Used as a backstop
+    when form_number prefix filtering misses an entry (e.g., descriptive form_numbers)."""
+    desc = str(f.get("description") or "").lower()
+    if not desc:
+        return False
+    return any(kw in desc for kw in _LIABILITY_DESCRIPTION_KEYWORDS)
+
+
 def _clean_property_forms_endorsements(forms: list) -> list:
-    """Strip non-property form-number prefixes from a property forms_endorsements list."""
+    """Strip non-property forms from a property forms_endorsements list. Filters by:
+       (a) form_number prefix against _NONPROPERTY_FORM_PREFIXES,
+       (b) form description against _LIABILITY_DESCRIPTION_KEYWORDS.
+    Either match drops the form."""
     if not isinstance(forms, list):
         return forms or []
     cleaned = []
@@ -994,10 +1122,32 @@ def _clean_property_forms_endorsements(forms: list) -> list:
             cleaned.append(f)
             continue
         fn = str(f.get("form_number") or "").upper().strip()
-        if not fn:
+        # Prefix check
+        if fn and any(fn.startswith(p) for p in _NONPROPERTY_FORM_PREFIXES):
+            continue
+        # Description check (catches descriptive form_numbers and rare prefixes)
+        if _is_liability_form_by_description(f):
+            continue
+        cleaned.append(f)
+    return cleaned
+
+
+def _clean_umbrella_forms_endorsements(forms: list) -> list:
+    """Strip non-umbrella forms from an umbrella forms_endorsements list. Same dual-filter
+    approach as the property cleaner. Umbrella keeps forms with unusual prefixes (HS XS,
+    EXL, FUT, NMA, LMA, NUF, CSXC, CX, SCU, NXLL, etc.) — we blacklist GL/property/EPLI/
+    Liquor/Auto rather than whitelist umbrella prefixes."""
+    if not isinstance(forms, list):
+        return forms or []
+    cleaned = []
+    for f in forms:
+        if not isinstance(f, dict):
             cleaned.append(f)
             continue
-        if any(fn.startswith(p) for p in _NONPROPERTY_FORM_PREFIXES):
+        fn = str(f.get("form_number") or "").upper().strip()
+        if fn and any(fn.startswith(p) for p in _NONUMBRELLA_FORM_PREFIXES):
+            continue
+        if _is_liability_form_by_description(f):
             continue
         cleaned.append(f)
     return cleaned
@@ -2592,6 +2742,40 @@ TEXT:
             
             # Pass 4: Focused sublimits extraction for property missing additional_coverages
             data = self._pass4_sublimits_extraction(data, combined_text)
+
+            # PATCH M: Universal forms cleanup — runs AFTER all extraction passes so it
+            # catches forms that bled through from sibling coverages in multi-quote
+            # submissions. Cleans property AND umbrella (and excess variants). Idempotent.
+            try:
+                _covs = data.get("coverages", {}) if isinstance(data, dict) else {}
+                for _pkey in ("property", "excess_property", "excess_property_2"):
+                    _pcov = _covs.get(_pkey)
+                    if not isinstance(_pcov, dict):
+                        continue
+                    _f = _pcov.get("forms_endorsements") or []
+                    if isinstance(_f, list) and _f:
+                        _c = _clean_property_forms_endorsements(_f)
+                        if len(_c) != len(_f):
+                            logger.info(
+                                f"Patch M cleanup ({_pkey}): {len(_f)} -> {len(_c)} forms "
+                                f"(stripped {len(_f) - len(_c)} non-property entries)"
+                            )
+                            _pcov["forms_endorsements"] = _c
+                for _ukey in ("umbrella", "umbrella_layer_2", "umbrella_layer_3"):
+                    _ucov = _covs.get(_ukey)
+                    if not isinstance(_ucov, dict):
+                        continue
+                    _f = _ucov.get("forms_endorsements") or []
+                    if isinstance(_f, list) and _f:
+                        _c = _clean_umbrella_forms_endorsements(_f)
+                        if len(_c) != len(_f):
+                            logger.info(
+                                f"Patch M cleanup ({_ukey}): {len(_f)} -> {len(_c)} forms "
+                                f"(stripped {len(_f) - len(_c)} non-umbrella entries)"
+                            )
+                            _ucov["forms_endorsements"] = _c
+            except Exception as _cleanup_err:
+                logger.warning(f"Patch M forms cleanup failed (non-fatal): {_cleanup_err}")
 
             return data
 
