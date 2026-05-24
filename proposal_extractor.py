@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 # OpenAI client (lazy initialization)
 _client = None
-GPT_MODEL = "gpt-4.1"
+GPT_MODEL = "gpt-5.4"
 
 
 def _get_openai_client():
@@ -315,7 +315,7 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 100000) -> str:
                             imgs[0].save(buffered, format="JPEG", quality=85)
                             img_b64 = base64.b64encode(buffered.getvalue()).decode()
                             ocr_resp = _get_openai_client().chat.completions.create(
-                                model="gpt-4.1-mini",
+                                model="gpt-5.4-mini",
                                 messages=[
                                     {"role": "system", "content": "Extract ALL text visible in this image, preserving tables, columns, and layout."},
                                     {"role": "user", "content": [
@@ -461,7 +461,7 @@ def _extract_with_ocr(pdf_path: str, total_pages: int = 0, max_pages: int = 20) 
         
         try:
             response = _get_openai_client().chat.completions.create(
-                model="gpt-4.1-mini",  # Faster model for OCR
+                model="gpt-5.4-mini",  # Faster model for OCR
                 messages=[
                     {"role": "system", "content": "You are an expert OCR assistant. Extract all text from the provided insurance document images accurately and completely."},
                     {"role": "user", "content": content_parts}
@@ -2644,7 +2644,7 @@ class ProposalExtractor:
                                             f"DOCUMENT TEXT:\n{_alt_schedule_text[:40000]}"
                                         )
                                         _alt_sched_resp = _get_openai_client().chat.completions.create(
-                                            model="gpt-4.1",
+                                            model="gpt-5.4",
                                             messages=[
                                                 {"role": "system", "content": "You are an expert at extracting per-location liability exposure tables from insurance quotes. Return EVERY row of the Liability Premises Schedule."},
                                                 {"role": "user", "content": _alt_schedule_prompt},
@@ -2715,7 +2715,7 @@ TEXT:
 {_addl_text}"""
                     try:
                         _addl_resp = _get_openai_client().chat.completions.create(
-                            model="gpt-4.1-mini",
+                            model="gpt-5.4-mini",
                             messages=[
                                 {"role": "system", "content": "Extract additional GL limits beyond the standard 6 CGL limits."},
                                 {"role": "user", "content": _addl_prompt}
@@ -2844,12 +2844,12 @@ TEXT:
 
     def _pass2_forms_extraction(self, data: dict, combined_text: str) -> dict:
         """Pass 2: Focused extraction of forms & endorsements for coverages that have too few.
-        Uses gpt-4.1-mini for speed since this is a focused extraction task."""
+        Uses gpt-5.4-mini for speed since this is a focused extraction task."""
         covs = data.get("coverages", {})
         if not isinstance(covs, dict):
             return data
         
-        PASS_MODEL = "gpt-4.1-mini"  # Faster model for focused extraction passes
+        PASS_MODEL = "gpt-5.4-mini"  # Faster model for focused extraction passes
         
         # Check which coverages need forms extraction
         # GL/Property quotes typically have 30-60+ forms - use higher thresholds
@@ -2996,8 +2996,8 @@ DOCUMENT TEXT:
 
     def _pass3_address_extraction(self, data: dict, combined_text: str, all_items: list = None) -> dict:
         """Pass 3: Focused extraction of covered addresses for GL.
-        Uses gpt-4.1-mini for speed since this is a focused extraction task."""
-        PASS_MODEL = "gpt-4.1"      
+        Uses gpt-5.4-mini for speed since this is a focused extraction task."""
+        PASS_MODEL = "gpt-5.4"      
         covs = data.get("coverages", {})
         gl = covs.get("general_liability", {})
         
@@ -3122,8 +3122,8 @@ DOCUMENT TEXT:
 
     def _pass4_sublimits_extraction(self, data: dict, combined_text: str) -> dict:
         """Pass 4: Focused extraction of property sublimits/extensions.
-        Uses gpt-4.1-mini for speed since this is a focused extraction task."""
-        PASS_MODEL = "gpt-4.1-mini"
+        Uses gpt-5.4-mini for speed since this is a focused extraction task."""
+        PASS_MODEL = "gpt-5.4-mini"
         covs = data.get("coverages", {})
         prop = covs.get("property", {})
         
