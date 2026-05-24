@@ -534,6 +534,152 @@ def _strip_country_suffix(addr):
     return cleaned.strip().rstrip(',').strip()
 
 
+# Form-prefix reject lists per coverage. Each entry lists prefixes that should
+# NEVER appear in that coverage's forms_endorsements list — they belong to a
+# sibling coverage in the same submission and have leaked across during GPT
+# extraction. Applied at render time as a safety net regardless of whether the
+# extractor's Pass 2 prefix validation caught the contamination.
+#
+# Prefixes are matched case-insensitively against the start of `form_number`.
+# Keep prefix strings short and specific. When a form number is empty (plain-
+# text exclusion entry), the row is always kept — those carry exclusion names
+# in the description field and are most often the umbrella exclusion list.
+COVERAGE_FORM_REJECT_PREFIXES = {
+    "property": (
+        # GL / Liquor / Auto / EPLI / Cyber / WC don't belong in property
+        "CG ", "CG0", "CG2", "AD ", "AI ", "DE ", "JA ", "GLF", "NXLL", "NASC",
+        "FUT ", "FUT1", "FUT-SS",
+        "LL ", "LL-",
+        "CA ", "CA-",
+        "EMD", "EMO", "EGD", "PN0",
+        "CYB ",
+        "WC ",
+        "CSXC", "EXL ", "HS XS",
+        "FLSL", "FLNOTICE", "GL STATE", "GL ST",
+        "EP100", "EP1",
+    ),
+    "excess_property": (
+        "CG ", "AD ", "AI ", "DE ", "JA ", "GLF", "FUT ", "LL ", "CA ",
+        "EMD", "EMO", "EGD", "CYB ", "WC ",
+    ),
+    "excess_property_2": (
+        "CG ", "AD ", "AI ", "DE ", "JA ", "GLF", "FUT ", "LL ", "CA ",
+        "EMD", "EMO", "EGD", "CYB ", "WC ",
+    ),
+    "general_liability": (
+        # Property / EPLI / Auto / WC / Cyber / Umbrella don't belong in GL
+        "CP ", "CP0", "CP1", "PR 0", "PR 9", "HSIC", "SSPN", "LMA",
+        "6133", "TC ", "VR ", "EC ", "EB ", "EB0", "EB-", "MS PR",
+        "EMD", "EMO", "EGD", "PN0",
+        "CA ", "CA-",
+        "WC ",
+        "CYB ",
+        "CSXC", "EXL ", "HS XS",  # umbrella prefixes
+    ),
+    "umbrella": (
+        # Property
+        "CP ", "CP0", "CP1", "PR 0", "PR 9", "HSIC", "SSPN", "LMA",
+        "6133", "TC ", "VR ", "EC ", "EB ", "EB0", "EB-",
+        # GL
+        "CG ", "CG0", "CG2", "AD ", "AI ", "DE ", "JA ", "GLF",
+        "FUT ", "FUT1", "FUT-SS", "FUT SS",
+        "EP1", "EP100", "EPL ", "CYB ", "WPA ",
+        "FLSL", "FLNOTICE", "GL STATE", "GL ST",
+        # Liquor / Auto / EPLI / WC
+        "LL ", "LL-", "CA ", "CA-", "EMD", "EMO", "EGD", "PN0", "WC ",
+    ),
+    "crime": (
+        "CP", "PR ", "PR0", "PR9", "HSIC", "SSPN", "LMA", "NMA", "6133",
+        "CG", "AD", "AI", "DE", "JA",
+        "SCX", "NXLL", "CSXC",
+        "BR", "EMD", "EMO", "EGD", "PN00",
+        "CA ", "WC ", "LL ", "CYB ",
+    ),
+    "epli": (
+        # Property / GL / Crime / Umbrella / Auto / WC don't belong in EPLI
+        "CP ", "CP0", "PR 0", "PR 9", "HSIC", "SSPN", "LMA", "6133",
+        "TC ", "VR ", "EC ",
+        "CG ", "CG0", "CG2", "AD ", "AI ", "DE ", "JA ", "GLF",
+        "FUT ", "FUT1",
+        "CSXC", "EXL ", "HS XS", "CX ",
+        "CR ", "CR-",  # crime
+        "CA ", "CA-", "WC ", "LL ",
+    ),
+    "workers_comp": (
+        "CP ", "CP0", "PR ", "HSIC", "SSPN", "LMA", "6133",
+        "CG ", "AD ", "AI ", "DE ", "JA ", "GLF", "FUT ", "FUT1",
+        "CSXC", "EXL ", "HS XS",
+        "EMD", "EMO", "EGD",
+        "CA ", "LL ", "CYB ",
+    ),
+    "workers_compensation": (
+        "CP ", "CP0", "PR ", "HSIC", "SSPN", "LMA", "6133",
+        "CG ", "AD ", "AI ", "DE ", "JA ", "GLF", "FUT ", "FUT1",
+        "CSXC", "EXL ", "HS XS",
+        "EMD", "EMO", "EGD",
+        "CA ", "LL ", "CYB ",
+    ),
+    "commercial_auto": (
+        "CP ", "CP0", "PR ", "HSIC", "SSPN", "LMA", "6133",
+        "CG ", "AD ", "AI ", "DE ", "JA ", "GLF", "FUT ", "FUT1",
+        "CSXC", "EXL ", "HS XS",
+        "EMD", "EMO", "EGD",
+        "WC ", "LL ", "CYB ",
+    ),
+    "cyber": (
+        "CP ", "CP0", "PR ", "HSIC", "SSPN", "LMA", "6133",
+        "CG ", "AD ", "AI ", "DE ", "JA ", "GLF", "FUT ", "FUT1",
+        "CSXC", "EXL ", "HS XS",
+        "EMD", "EMO", "EGD",
+        "WC ", "LL ", "CA ",
+    ),
+    "equipment_breakdown": (
+        "CG ", "AD ", "AI ", "DE ", "JA ", "GLF", "FUT ", "FUT1",
+        "CSXC", "EXL ", "HS XS",
+        "EMD", "EMO", "EGD",
+        "WC ", "LL ", "CA ", "CYB ",
+    ),
+    "liquor_liability": (
+        # Property and the non-LL liability prefixes
+        "CP ", "PR ", "HSIC", "SSPN", "LMA", "6133", "TC ", "VR ", "EC ",
+        "CSXC", "EXL ", "HS XS",
+        "EMD", "EMO", "EGD", "WC ", "CA ", "CYB ",
+    ),
+}
+# Alt slots inherit the base coverage's reject list
+for _base in ("property", "general_liability", "umbrella", "workers_compensation", "cyber"):
+    for _n in (1, 2, 3):
+        COVERAGE_FORM_REJECT_PREFIXES[f"{_base}_alt_{_n}"] = COVERAGE_FORM_REJECT_PREFIXES[_base]
+# Umbrella layers share umbrella's reject list
+for _l in (2, 3, 4):
+    COVERAGE_FORM_REJECT_PREFIXES[f"umbrella_layer_{_l}"] = COVERAGE_FORM_REJECT_PREFIXES["umbrella"]
+
+
+def _filter_cross_contaminated_forms(forms, coverage_key):
+    """Strip forms whose prefixes belong to a sibling coverage in the same
+    submission. Rows with an empty form_number are always kept (plain-text
+    exclusion entries common on umbrella schedules). Returns the filtered
+    list and a count of dropped rows for logging."""
+    if not forms:
+        return forms, 0
+    reject = COVERAGE_FORM_REJECT_PREFIXES.get(coverage_key)
+    if not reject:
+        return forms, 0
+    kept = []
+    dropped = 0
+    for f in forms:
+        fn = (f.get("form_number", "") if isinstance(f, dict) else "").upper().strip()
+        # Always keep plain-text entries with no form number (umbrella exclusion list)
+        if not fn:
+            kept.append(f)
+            continue
+        if any(fn.startswith(p.upper()) for p in reject):
+            dropped += 1
+            continue
+        kept.append(f)
+    return kept, dropped
+
+
 # Trigger keywords for high-risk hotel exclusions that brokers/clients need to
 # see at a glance. Any forms_endorsement or exclusion description containing one
 # of these phrases gets a yellow cell highlight + bold red text in the docx.
@@ -3485,48 +3631,13 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     
     # Forms & Endorsements
     forms = cov.get("forms_endorsements", [])
-    # Filter out non-crime forms when rendering crime coverage
-    # Crime forms should NOT contain property (CP/PR/HSIC/SSPN/LMA/NMA/61330-3), GL (CG/AD/AI/DE/JA),
-    # umbrella/excess (SCX), or EPLI (BR/EMD/EMO/EGD) prefixes
-    if coverage_key == "crime":
-        _non_crime_prefixes = ("CP", "PR ", "PR0", "PR9", "HSIC", "SSPN", "LMA", "NMA", "6133",
-                               "CG", "AD", "AI", "DE", "JA",
-                               "SCX", "NXLL", "CSXC",
-                               "BR", "EMD", "EMO", "EGD", "PN00")
-        forms = [f for f in forms if not any(
-            (f.get("form_number", "") if isinstance(f, dict) else str(f)).upper().startswith(p)
-            for p in _non_crime_prefixes)]
-
-    # Filter out cross-contaminated forms from umbrella/excess sections.
-    # GL/Property/Liquor-specific carrier forms frequently bleed into the
-    # umbrella forms list when the same submission contains both GL and
-    # umbrella quotes — strip them so only umbrella-relevant entries render.
-    # Common offenders observed in practice: FUT (Southlake/FUW GL),
-    # FLSL/FLNOTICE/GL STATE (Florida GL surplus-lines notices), EP100
-    # (Enviro Pack — GL property), ILF (carrier claim-instruction jacket),
-    # CP/CG/AI/AD (property + GL ISO), plus any property-only prefixes.
-    if coverage_key in ("umbrella", "umbrella_layer_2", "umbrella_layer_3",
-                         "umbrella_alt_1", "umbrella_alt_2", "umbrella_alt_3"):
-        _non_umb_prefixes = (
-            # Property forms
-            "CP ", "CP0", "CP1", "PR 0", "PR 9", "HSIC", "SSPN", "LMA",
-            "6133", "TC ", "VR ", "EC ", "EB ", "EB0", "EB-",
-            # GL forms (ISO + carrier)
-            "CG ", "CG0", "CG2", "AD ", "AI ", "DE ", "JA ", "GLF",
-            # Southlake / Futuristic Underwriters GL
-            "FUT ", "FUT1", "FUT-SS", "FUT SS",
-            # GL-package add-ons that ride on GL policies
-            "EP1", "EP100", "EPL ", "CYB ", "WPA ",
-            # Florida GL state notices
-            "FLSL", "FLNOTICE", "GL STATE", "GL ST",
-            # Liquor / Auto
-            "LL ", "LL-", "CA ", "CA-",
-            # EPLI
-            "EMD", "EMO", "EGD", "PN0",
-        )
-        forms = [f for f in forms if not any(
-            (f.get("form_number", "") if isinstance(f, dict) else str(f)).upper().startswith(p)
-            for p in _non_umb_prefixes)]
+    # Strip forms whose prefixes belong to a sibling coverage in the same
+    # submission. Table-driven via COVERAGE_FORM_REJECT_PREFIXES so every
+    # coverage gets the same safety-net treatment. Plain-text entries with
+    # no form_number are always kept (umbrella exclusion list pattern).
+    forms, _dropped = _filter_cross_contaminated_forms(forms, coverage_key)
+    if _dropped:
+        logger.info(f"Forms filter: dropped {_dropped} cross-contaminated rows from {coverage_key}")
     # Critical coverages MUST show forms — add placeholder if empty
     _critical_form_coverages = {"property", "general_liability", "crime", "umbrella", "umbrella_layer_2",
                                  "umbrella_layer_3", "umbrella_layer_4", "workers_comp",
