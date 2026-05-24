@@ -490,6 +490,24 @@ def fmt_currency(amount):
     return str(amount)
 
 
+def fmt_currency_cents(amount):
+    """Format a number as currency, ALWAYS showing two decimal places.
+    Used in the Premium Summary section so premiums display with cents
+    (e.g., $478,720.00) regardless of whether the source value is whole."""
+    if isinstance(amount, (int, float)):
+        return f"${amount:,.2f}"
+    if isinstance(amount, str):
+        s = amount.strip()
+        if s.startswith("$"):
+            s = s[1:]
+        try:
+            val = float(s.replace(',', ''))
+            return f"${val:,.2f}"
+        except (ValueError, AttributeError):
+            return amount
+    return str(amount)
+
+
 def _parse_currency(s):
     """Parse a currency string like '$168,411' or '168411' into a float."""
     import re
@@ -865,16 +883,16 @@ def generate_premium_summary(doc, data):
             row_data = [
                 display_name,
                 carrier_short,
-                fmt_currency(exp_prem) if exp_prem else "—",
-                fmt_currency(proposed) if proposed else "—",
-                fmt_currency(dollar_change) if (proposed and exp_prem) else "—",
+                fmt_currency_cents(exp_prem) if exp_prem else "—",
+                fmt_currency_cents(proposed) if proposed else "—",
+                fmt_currency_cents(dollar_change) if (proposed and exp_prem) else "—",
                 f"{pct_change:+.1f}%" if (proposed and exp_prem) else "—",
             ]
         else:
             row_data = [
                 display_name,
                 carrier_short,
-                fmt_currency(proposed) if proposed else "—",
+                fmt_currency_cents(proposed) if proposed else "—",
             ]
 
         if is_optional:
@@ -892,9 +910,9 @@ def generate_premium_summary(doc, data):
         rows.append([
             "TOTAL",
             "",
-            fmt_currency(total_expiring) if total_expiring else "—",
-            fmt_currency(total_proposed) if total_proposed else "—",
-            fmt_currency(total_dollar) if (total_proposed and total_expiring) else "—",
+            fmt_currency_cents(total_expiring) if total_expiring else "—",
+            fmt_currency_cents(total_proposed) if total_proposed else "—",
+            fmt_currency_cents(total_dollar) if (total_proposed and total_expiring) else "—",
             f"{total_pct:+.1f}%" if (total_proposed and total_expiring) else "—",
         ])
         headers = ["Coverage", "Carrier", "Expiring\nPremium", "Proposed\nPremium", "$ Change", "% Change"]
@@ -906,7 +924,7 @@ def generate_premium_summary(doc, data):
         rows.append([
             "TOTAL",
             "",
-            fmt_currency(total_proposed) if total_proposed else "—",
+            fmt_currency_cents(total_proposed) if total_proposed else "—",
         ])
         headers = ["Coverage", "Carrier", "Proposed Premium"]
         col_widths = [2.0, 2.5, 1.5]
