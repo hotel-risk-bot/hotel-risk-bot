@@ -2857,9 +2857,11 @@ TEXT:
         _forms_thresholds = {
             "general_liability": 25,  # GL forms schedules are typically 30-60+ forms
             "property": 25,           # Property typically 20-60+ forms (Starr can have 50+)
-            "umbrella": 10,           # Umbrella typically 10-25 forms
-            "umbrella_layer_2": 10,
-            "umbrella_layer_3": 10,
+            "umbrella": 20,           # Umbrella schedules typically 25-45 entries
+                                      # (StarStone/Navigators/Allianz lead-umbrella
+                                      # quotes carry 30+ plain-text exclusions)
+            "umbrella_layer_2": 20,
+            "umbrella_layer_3": 20,
             "crime": 5,
         }
         needs_forms = []
@@ -2890,7 +2892,8 @@ TEXT:
             cov = covs[cov_key]
             carrier = cov.get("carrier", "unknown")
             display = coverage_display.get(cov_key, cov_key)
-            
+            is_umbrella = cov_key in ("umbrella", "umbrella_layer_2", "umbrella_layer_3")
+
             # Use smart text selection to reduce token usage
             forms_keywords = [
                 "forms schedule", "endorsement schedule", "forms list", "schedule of forms",
@@ -2903,9 +2906,90 @@ TEXT:
                 carrier.split()[0] if carrier else "",
                 display.lower()
             ]
+            # Umbrella PDFs frequently list exclusions/endorsements as plain-text
+            # headings (no form code), so widen the keyword net to capture those
+            # sections (e.g., "Terms and Conditions of Lead Umbrella", "ABUSE OR
+            # MOLESTATION EXCLUSION", "HUMAN TRAFFICKING EXCLUSION").
+            if is_umbrella:
+                forms_keywords += [
+                    "Terms and Conditions of Lead Umbrella",
+                    "Schedule of Endorsements",
+                    "FOLLOWING FORM EXCESS LIABILITY",
+                    "EXCESS LIABILITY - DECLARATIONS",
+                    "EXCESS LIABILITY - JACKET",
+                    "ABUSE OR MOLESTATION EXCLUSION",
+                    "ABUSE AND MOLESTATION EXCLUSION",
+                    "HUMAN TRAFFICKING EXCLUSION",
+                    "ASSAULT AND BATTERY EXCLUSION",
+                    "ASSAULT OR BATTERY EXCLUSION",
+                    "COMMUNICABLE DISEASES EXCLUSION",
+                    "POLLUTION EXCLUSION",
+                    "PROFESSIONAL LIABILITY EXCLUSION",
+                    "DESIGNATED PREMISES",
+                    "CROSS LIABILITY",
+                    "EMPLOYMENT RELATED PRACTICES EXCLUSION",
+                    "TOTAL POLLUTION EXCLUSION",
+                    "PERFLUOROALKYL", "PFAS",
+                    "ANTI STACKING", "ANTI-STACKING",
+                    "MEMBER POLICY LIMITATION",
+                    "GENERAL AGGREGATE ENDORSEMENT",
+                    "COVERAGE ENHANCEMENT ENDORSEMENT",
+                ]
             relevant_text = self._extract_relevant_sections(combined_text, forms_keywords, context_chars=25000)
 
-            prompt = f"""Extract EVERY form number and endorsement from this insurance document for the {display} coverage issued by {carrier}.
+            # For umbrella, build an extended prompt that tells GPT to capture
+            # plain-text exclusion names (no form code) as forms_endorsements
+            # entries — and to reject GL/property forms that leak in from
+            # other quotes in the same submission.
+            if is_umbrella:
+                prompt = f"""Extract EVERY form, endorsement, and EXCLUSION from this insurance document for the {display} coverage issued by {carrier}.
+
+CRITICAL RULES FOR UMBRELLA/EXCESS LIABILITY EXTRACTION:
+
+1. Many umbrella endorsements have NO form code — they appear as plain-text
+   headings under sections like "Terms and Conditions of Lead Umbrella",
+   "Schedule of Endorsements", or "FOLLOWING FORM EXCESS LIABILITY". Capture
+   these too — set form_number to "" (empty string) and put the full heading
+   in the description field.
+
+   Examples of plain-text umbrella exclusions to capture:
+   - "ABUSE OR MOLESTATION EXCLUSION"
+   - "HUMAN TRAFFICKING EXCLUSION"
+   - "ASSAULT AND BATTERY EXCLUSION"
+   - "COMMUNICABLE DISEASES EXCLUSION"
+   - "POLLUTION EXCLUSION WITH HOSTILE FIRE EXCEPTION"
+   - "PROFESSIONAL LIABILITY EXCLUSION"
+   - "EMPLOYMENT RELATED PRACTICES EXCLUSION"
+   - "COVERAGE ENHANCEMENT ENDORSEMENT"
+   - "ANTI STACKING OF LIMITS CONDITION"
+
+2. Do NOT include forms that belong to the underlying GL or Property quotes.
+   Specifically reject these prefixes from the umbrella forms list (they
+   belong to the GL or Property carrier, not the umbrella):
+   - FUT, FUT-SS  (Southlake / Futuristic Underwriters GL)
+   - FLSL, FLNOTICE, GL STATE NOTICE  (Florida GL surplus-lines notices)
+   - EP100, EPL, CYB, WPA  (GL-package add-ons)
+   - CP, PR, HSIC, SSPN, LMA, 6133, TC, VR, EC, EB  (property)
+   - CG, AD, AI, DE, JA, GLF  (GL ISO + carrier)
+   - LL, CA  (liquor, auto)
+   - EMD, EMO, EGD, PN  (EPLI)
+
+3. Include umbrella-native forms with these prefixes/patterns:
+   - CSXC, EXL, HS XS, NXLL  (excess form families)
+   - Carrier-specific forms whose issuer matches "{carrier}"
+   - Any form/endorsement listed under the umbrella's own forms schedule
+   - Plain-text exclusion/endorsement names from the umbrella PDF's
+     endorsement schedule (per rule 1 above)
+
+4. Format: {{"form_number": "XX 00 00 MM/YY" or "", "description": "Full description"}}
+
+Return a JSON object with exactly one key:
+{{"forms_endorsements": [{{"form_number": "...", "description": "..."}}]}}
+
+DOCUMENT TEXT:
+{relevant_text}"""
+            else:
+                prompt = f"""Extract EVERY form number and endorsement from this insurance document for the {display} coverage issued by {carrier}.
 
 Rules:
 - Extract EVERY form/endorsement number with its full description and edition date
@@ -2939,8 +3023,11 @@ DOCUMENT TEXT:
                 # GL uses CG/GLF/AD/AI/DE/JA/NXLL/NASC; Liquor uses LL; Auto uses CA
                 # Umbrella uses CSXC/EXL/HS XS/FUT/XS/CX
                 _prop_pfx = ("CP ", "CPF", "CFP", "TC ", "VR ", "EC ", "EB-", "EB0", "MS PR", "MS DEC", "MS EBC", "HSIC SP", "HSIC SOS", "MS GEN")
-                _gl_pfx = ("CG ", "AD ", "AI ", "DE ", "JA ", "NXLL", "NASC", "GLF", "GL ")
-                _umb_pfx = ("CSXC", "EXL ", "HS XS", "FUT ", "XS ", "NXLL", "CX ")
+                # NOTE: FUT belongs to GL (Southlake/Futuristic Underwriters), NOT umbrella.
+                # Earlier versions of this code listed FUT as an umbrella prefix which caused
+                # FUT GL forms to be accepted into umbrella forms_endorsements. Moved to _gl_pfx.
+                _gl_pfx = ("CG ", "AD ", "AI ", "DE ", "JA ", "NXLL", "NASC", "GLF", "GL ", "FUT ")
+                _umb_pfx = ("CSXC", "EXL ", "HS XS", "XS ", "CX ")
                 _liq_pfx = ("LL ", "LL-", "LL FLIQL")
                 _auto_pfx = ("CA ", "CA-")
                 _gl_pkg_pfx = ("EPL", "CYB", "WPA", "EP1", "FLSL", "SSIC", "FUT-SS", "FUT SS", "GL STATE")

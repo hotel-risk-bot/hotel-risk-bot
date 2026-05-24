@@ -3496,6 +3496,37 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         forms = [f for f in forms if not any(
             (f.get("form_number", "") if isinstance(f, dict) else str(f)).upper().startswith(p)
             for p in _non_crime_prefixes)]
+
+    # Filter out cross-contaminated forms from umbrella/excess sections.
+    # GL/Property/Liquor-specific carrier forms frequently bleed into the
+    # umbrella forms list when the same submission contains both GL and
+    # umbrella quotes — strip them so only umbrella-relevant entries render.
+    # Common offenders observed in practice: FUT (Southlake/FUW GL),
+    # FLSL/FLNOTICE/GL STATE (Florida GL surplus-lines notices), EP100
+    # (Enviro Pack — GL property), ILF (carrier claim-instruction jacket),
+    # CP/CG/AI/AD (property + GL ISO), plus any property-only prefixes.
+    if coverage_key in ("umbrella", "umbrella_layer_2", "umbrella_layer_3",
+                         "umbrella_alt_1", "umbrella_alt_2", "umbrella_alt_3"):
+        _non_umb_prefixes = (
+            # Property forms
+            "CP ", "CP0", "CP1", "PR 0", "PR 9", "HSIC", "SSPN", "LMA",
+            "6133", "TC ", "VR ", "EC ", "EB ", "EB0", "EB-",
+            # GL forms (ISO + carrier)
+            "CG ", "CG0", "CG2", "AD ", "AI ", "DE ", "JA ", "GLF",
+            # Southlake / Futuristic Underwriters GL
+            "FUT ", "FUT1", "FUT-SS", "FUT SS",
+            # GL-package add-ons that ride on GL policies
+            "EP1", "EP100", "EPL ", "CYB ", "WPA ",
+            # Florida GL state notices
+            "FLSL", "FLNOTICE", "GL STATE", "GL ST",
+            # Liquor / Auto
+            "LL ", "LL-", "CA ", "CA-",
+            # EPLI
+            "EMD", "EMO", "EGD", "PN0",
+        )
+        forms = [f for f in forms if not any(
+            (f.get("form_number", "") if isinstance(f, dict) else str(f)).upper().startswith(p)
+            for p in _non_umb_prefixes)]
     # Critical coverages MUST show forms — add placeholder if empty
     _critical_form_coverages = {"property", "general_liability", "crime", "umbrella", "umbrella_layer_2",
                                  "umbrella_layer_3", "umbrella_layer_4", "workers_comp",
