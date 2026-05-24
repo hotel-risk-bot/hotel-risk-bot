@@ -1660,7 +1660,12 @@ def generate_named_insureds(doc, data):
     if interests:
         add_subsection_header(doc, "Additional Interests")
         headers = ["Type", "Name & Address", "Description"]
-        rows = [[ai.get("type", ""), ai.get("name_address", ""), ai.get("description", "")] for ai in interests]
+        rows = []
+        for ai in interests:
+            if isinstance(ai, dict):
+                rows.append([ai.get("type", ""), ai.get("name_address", ""), ai.get("description", "")])
+            else:
+                rows.append(["", str(ai), ""])
         create_styled_table(doc, headers, rows, col_widths=[1.5, 3.5, 2.5])
 
 
@@ -3579,8 +3584,13 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     if vehicles:
         add_subsection_header(doc, "Vehicle Schedule")
         headers = ["Year", "Make", "Model", "VIN", "Garage Location"]
-        rows = [[v.get("year", ""), v.get("make", ""), v.get("model", ""),
-                 v.get("vin", ""), v.get("garage_location", "")] for v in vehicles]
+        rows = []
+        for v in vehicles:
+            if isinstance(v, dict):
+                rows.append([v.get("year", ""), v.get("make", ""), v.get("model", ""),
+                             v.get("vin", ""), v.get("garage_location", "")])
+            else:
+                rows.append(["", "", str(v), "", ""])
         create_styled_table(doc, headers, rows,
                           col_widths=[0.6, 1.2, 1.2, 2.5, 2.0],
                           header_size=9, body_size=9)
@@ -3620,22 +3630,37 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     if underlying:
         add_subsection_header(doc, "Underlying Insurance")
         headers = ["Carrier", "Coverage", "Limits"]
-        rows = [[u.get("carrier", ""), u.get("coverage", ""), u.get("limits", "")] for u in underlying]
+        # GPT sometimes returns underlying_insurance as a list of strings.
+        # Guard with isinstance: dict rows render normally; string rows go
+        # into the first column verbatim so the data is at least visible.
+        rows = []
+        for u in underlying:
+            if isinstance(u, dict):
+                rows.append([u.get("carrier", ""), u.get("coverage", ""), u.get("limits", "")])
+            else:
+                rows.append([str(u), "", ""])
         create_styled_table(doc, headers, rows, col_widths=[2.5, 2.5, 2.5],
                           col_alignments={2: WD_ALIGN_PARAGRAPH.CENTER})
-    
+
     # Tower Structure (Umbrella)
     tower = cov.get("tower_structure", [])
     if tower:
         add_subsection_header(doc, "Umbrella Tower Structure")
         headers = ["Layer", "Carrier", "Limits", "Premium", "Total (incl. taxes/fees)"]
-        rows = [[
-            t.get("layer", ""),
-            t.get("carrier", ""),
-            t.get("limits", ""),
-            fmt_currency(t.get("premium", 0)),
-            fmt_currency(t.get("total_cost", 0))
-        ] for t in tower]
+        # Same isinstance guard as underlying_insurance — GPT occasionally
+        # returns tower_structure rows as strings.
+        rows = []
+        for t in tower:
+            if isinstance(t, dict):
+                rows.append([
+                    t.get("layer", ""),
+                    t.get("carrier", ""),
+                    t.get("limits", ""),
+                    fmt_currency(t.get("premium", 0)),
+                    fmt_currency(t.get("total_cost", 0))
+                ])
+            else:
+                rows.append([str(t), "", "", "", ""])
         create_styled_table(doc, headers, rows,
                           col_widths=[0.8, 2.0, 1.5, 1.2, 1.5],
                           header_size=9, body_size=9)
