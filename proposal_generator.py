@@ -1785,7 +1785,13 @@ def generate_information_summary(doc, data):
         _prop_cov = coverages["property"]
         # Prefer counting non-zero TIV rows in the property's own SOV
         _prop_sov_quote = _prop_cov.get("schedule_of_values", []) or []
-        _prop_sov_nonzero = [s for s in _prop_sov_quote if _parse_currency(s.get("tiv", 0)) > 1]
+        # Filter to dict entries with non-zero TIV. GPT sometimes returns
+        # schedule_of_values rows as bare strings (e.g., when only an address
+        # was captured); skip those rather than crashing on .get().
+        _prop_sov_nonzero = [
+            s for s in _prop_sov_quote
+            if isinstance(s, dict) and _parse_currency(s.get("tiv", 0)) > 1
+        ]
         if _prop_sov_nonzero:
             prop_loc_count = len(_prop_sov_nonzero)
         else:
@@ -3258,7 +3264,12 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         # Filter out non-property locations: any row with TIV <= $1 (effectively zero)
         # is excluded — these are typically liability-only locations that leak into
         # the property quote's SOV.
-        _filtered_sov = [s for s in sov_from_quote if _parse_currency(s.get("tiv", 0)) > 1]
+        # Filter to dict rows with non-zero TIV. Skip bare-string entries
+        # (GPT occasionally returns these) so .get() doesn't blow up.
+        _filtered_sov = [
+            s for s in sov_from_quote
+            if isinstance(s, dict) and _parse_currency(s.get("tiv", 0)) > 1
+        ]
         if _filtered_sov:
             add_subsection_header(doc, "Schedule of Values")
             sov_rendered = True
