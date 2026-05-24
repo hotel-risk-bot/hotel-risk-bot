@@ -323,7 +323,7 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 100000) -> str:
                                     ]}
                                 ],
                                 temperature=0.0,
-                                max_tokens=8000
+                                max_completion_tokens=8000
                             )
                             ocr_text = ocr_resp.choices[0].message.content.strip()
                             if ocr_text and len(ocr_text) > 50:
@@ -466,7 +466,7 @@ def _extract_with_ocr(pdf_path: str, total_pages: int = 0, max_pages: int = 20) 
                     {"role": "system", "content": "You are an expert OCR assistant. Extract all text from the provided insurance document images accurately and completely."},
                     {"role": "user", "content": content_parts}
                 ],
-                max_tokens=16000,
+                max_completion_tokens=16000,
                 temperature=0.1
             )
             
@@ -1631,7 +1631,7 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
-            max_tokens=32000
+            max_completion_tokens=32000
         )
 
         result_text = response.choices[0].message.content
@@ -1894,7 +1894,7 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
                     ],
                     response_format={"type": "json_object"},
                     temperature=0.1,
-                    max_tokens=32000
+                    max_completion_tokens=32000
                 )
                 result_text = response.choices[0].message.content
                 data = json.loads(result_text)
@@ -2093,7 +2093,7 @@ async def apply_corrections(data: dict, corrections_text: str) -> dict:
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
-            max_tokens=32000
+            max_completion_tokens=32000
         )
         corrected = json.loads(response.choices[0].message.content)
         logger.info("Corrections applied successfully")
@@ -2201,7 +2201,7 @@ class ProposalExtractor:
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.1,
-                max_tokens=32000,
+                max_completion_tokens=32000,
             )
 
             result_text = response.choices[0].message.content
@@ -2296,7 +2296,7 @@ class ProposalExtractor:
                                 ],
                                 response_format={"type": "json_object"},
                                 temperature=0.1,
-                                max_tokens=8000,
+                                max_completion_tokens=8000,
                             )
                             _xs_data = json.loads(_xs_response.choices[0].message.content)
                             if "umbrella" in _xs_data and isinstance(_xs_data["umbrella"], dict):
@@ -2375,7 +2375,7 @@ class ProposalExtractor:
                             ],
                             response_format={"type": "json_object"},
                             temperature=0.1,
-                            max_tokens=8000,
+                            max_completion_tokens=8000,
                         )
                         _tower_data = json.loads(_tower_response.choices[0].message.content)
                         for _lk in ("umbrella", "umbrella_layer_2", "umbrella_layer_3"):
@@ -2601,7 +2601,7 @@ class ProposalExtractor:
                                 ],
                                 response_format={"type": "json_object"},
                                 temperature=0.1,
-                                max_tokens=16000,
+                                max_completion_tokens=16000,
                             )
                             _alt_data = json.loads(_alt_response.choices[0].message.content)
                             _alt_gl = _alt_data.get("general_liability") if isinstance(_alt_data, dict) else None
@@ -2651,7 +2651,7 @@ class ProposalExtractor:
                                             ],
                                             response_format={"type": "json_object"},
                                             temperature=0.0,
-                                            max_tokens=16000,
+                                            max_completion_tokens=16000,
                                         )
                                         _alt_sched_data = json.loads(_alt_sched_resp.choices[0].message.content)
                                         _new_soc = _alt_sched_data.get("schedule_of_classes", []) or []
@@ -2722,7 +2722,7 @@ TEXT:
                             ],
                             response_format={"type": "json_object"},
                             temperature=0.0,
-                            max_tokens=4000
+                            max_completion_tokens=4000
                         )
                         _addl_data = json.loads(_addl_resp.choices[0].message.content)
                         _addl_lims = _addl_data.get("additional_limits", [])
@@ -2930,7 +2930,7 @@ DOCUMENT TEXT:
                     ],
                     response_format={"type": "json_object"},
                     temperature=0.0,
-                    max_tokens=16000
+                    max_completion_tokens=16000
                 )
                 result = json.loads(response.choices[0].message.content)
                 forms = result.get("forms_endorsements", [])
@@ -3097,7 +3097,7 @@ DOCUMENT TEXT:
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.0,
-                max_tokens=16000
+                max_completion_tokens=16000
             )
             result = json.loads(response.choices[0].message.content)
             
@@ -3212,7 +3212,7 @@ DOCUMENT TEXT:
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.0,
-                max_tokens=8000
+                max_completion_tokens=8000
             )
             result = json.loads(response.choices[0].message.content)
             
