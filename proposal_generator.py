@@ -155,7 +155,6 @@ SERVICE_TEAM = [
 
 OFFICE_LOCATIONS = [
     "HUB International Midwest Limited — 203 N LaSalle, Suite 2000, Chicago, IL 60601",
-    "HUB International Midwest Limited — 1411 Opus Place, Suite 450, Downers Grove, IL 60515"
 ]
 
 # California Licenses
@@ -523,6 +522,69 @@ def _parse_currency(s):
     return 0
 
 
+def _strip_country_suffix(addr):
+    """Remove trailing ", United States" / ", USA" / ", U.S.A." from an address.
+    Domestic-only proposals don't need the country suffix and it just clutters tables."""
+    import re
+    if not isinstance(addr, str):
+        return addr
+    # Strip trailing country variants, allowing for trailing whitespace/comma
+    cleaned = re.sub(r'\s*,\s*(United States(\s+of\s+America)?|U\.?\s*S\.?\s*A\.?|USA)\s*\.?\s*$',
+                     '', addr, flags=re.IGNORECASE)
+    return cleaned.strip().rstrip(',').strip()
+
+
+# Trigger keywords for high-risk hotel exclusions that brokers/clients need to
+# see at a glance. Any forms_endorsement or exclusion description containing one
+# of these phrases gets a yellow cell highlight + bold red text in the docx.
+HIGH_RISK_EXCLUSION_KEYWORDS = [
+    "human trafficking",
+    "trafficking",
+    "abuse and molestation",
+    "abuse & molestation",
+    "abuse/molestation",
+    "sexual abuse",
+    "molestation",
+    "assault and battery",
+    "assault & battery",
+    "assault/battery",
+]
+HIGHLIGHT_YELLOW_HEX = "FFFF00"
+
+
+def _is_high_risk_exclusion(text):
+    """True if the given text mentions a high-risk hotel exclusion that requires
+    visual flagging (trafficking, abuse/molestation, assault & battery)."""
+    if not isinstance(text, str) or not text:
+        return False
+    t = text.lower()
+    return any(kw in t for kw in HIGH_RISK_EXCLUSION_KEYWORDS)
+
+
+def _apply_high_risk_highlight(table, row_text_indices=(0, 1), start_row=1):
+    """Scan a table for high-risk exclusion language in the specified columns
+    (default: form number + description) and apply yellow highlight + bold red
+    text to any matching row. `start_row` skips the header. Safe to call even
+    when the table has no matching rows."""
+    _RED = RGBColor(0xCC, 0x00, 0x00)
+    for r_idx in range(start_row, len(table.rows)):
+        row = table.rows[r_idx]
+        # Gather text from the indicated columns to decide if this row matches
+        row_text = " ".join(
+            row.cells[c_idx].text for c_idx in row_text_indices
+            if c_idx < len(row.cells)
+        )
+        if not _is_high_risk_exclusion(row_text):
+            continue
+        # Apply yellow background + bold red text to every cell in the row
+        for cell in row.cells:
+            set_cell_shading(cell, HIGHLIGHT_YELLOW_HEX)
+            for p in cell.paragraphs:
+                for run in p.runs:
+                    run.font.bold = True
+                    run.font.color.rgb = _RED
+
+
 # ─── Section Generators ───────────────────────────────────────
 
 def generate_cover_page(doc, data):
@@ -819,6 +881,10 @@ def generate_premium_summary(doc, data):
     # Separate optional coverages from main coverages
     optional_rows = []
     rows = []
+    # Parallel list of change signs for each row in `rows` (+1 = increase / RED,
+    # -1 = decrease / GREEN, 0 = no change or N/A). Used to color the $/% Change
+    # cells after table render.
+    row_change_signs = []
     total_proposed = 0
     total_expiring = 0
 
@@ -899,6 +965,16 @@ def generate_premium_summary(doc, data):
             optional_rows.append(row_data)
         else:
             rows.append(row_data)
+            # Record change sign for this row so we can color $/% Change cells
+            if has_expiring and proposed and exp_prem:
+                if dollar_change > 0:
+                    row_change_signs.append(1)
+                elif dollar_change < 0:
+                    row_change_signs.append(-1)
+                else:
+                    row_change_signs.append(0)
+            else:
+                row_change_signs.append(0)
             total_proposed += proposed
             if has_expiring:
                 total_expiring += _get_expiring_premium(key)
@@ -907,6 +983,8 @@ def generate_premium_summary(doc, data):
     if has_expiring:
         total_dollar = total_proposed - total_expiring if (total_proposed and total_expiring) else 0
         total_pct = ((total_proposed - total_expiring) / total_expiring * 100) if total_expiring else 0
+        # Track total row's change sign for color formatting (same logic as data rows)
+        _total_change_sign = 1 if total_dollar > 0 else (-1 if total_dollar < 0 else 0)
         rows.append([
             "TOTAL",
             "",
@@ -915,6 +993,7 @@ def generate_premium_summary(doc, data):
             fmt_currency_cents(total_dollar) if (total_proposed and total_expiring) else "—",
             f"{total_pct:+.1f}%" if (total_proposed and total_expiring) else "—",
         ])
+        row_change_signs.append(_total_change_sign)
         headers = ["Coverage", "Carrier", "Expiring\nPremium", "Proposed\nPremium", "$ Change", "% Change"]
         col_widths = [1.4, 2.0, 1.0, 1.0, 0.9, 0.8]
         col_alignments = [None, None, WD_ALIGN_PARAGRAPH.RIGHT,
@@ -945,6 +1024,30 @@ def generate_premium_summary(doc, data):
             for run in p.runs:
                 run.font.bold = True
                 run.font.color.rgb = WHITE
+
+    # Color-code $ Change and % Change cells (columns 4 and 5) based on the
+    # parallel row_change_signs list: +1 = RED (increase), -1 = GREEN (decrease),
+    # 0 = no coloring. Skip the total row (already shaded WHITE on blue).
+    if has_expiring and row_change_signs:
+        _CHANGE_RED = RGBColor(0xCC, 0x00, 0x00)
+        _CHANGE_GREEN = RGBColor(0x00, 0x80, 0x00)
+        # table.rows[0] is the header row; table.rows[1:] correspond to `rows`
+        for r_idx, sign in enumerate(row_change_signs):
+            tbl_row_idx = r_idx + 1  # +1 to skip header
+            if tbl_row_idx >= len(table.rows):
+                break
+            # Skip total row — keep its white-on-blue formatting intact
+            if tbl_row_idx == len(table.rows) - 1:
+                continue
+            if sign == 0:
+                continue
+            color = _CHANGE_RED if sign > 0 else _CHANGE_GREEN
+            for col in (4, 5):  # $ Change, % Change
+                cell = table.rows[tbl_row_idx].cells[col]
+                for p in cell.paragraphs:
+                    for run in p.runs:
+                        run.font.color.rgb = color
+                        run.font.bold = True
     
     # Optional coverages section below TOTAL
     if optional_rows:
@@ -1520,7 +1623,11 @@ def generate_information_summary(doc, data):
                 _normalize_city(loc.get("city", "")) + "|" +
                 _normalize_state(loc.get("state", "")))
     
-    # Property locations: unique by composite key
+    # Property locations: unique by composite key.
+    # Count only locations actually covered by property — i.e., entries with
+    # TIV > 0 in the property quote's schedule_of_values. This prevents
+    # liability-only locations (added to the unified locations list for GL
+    # coverage) from inflating the property count.
     _prop_unique_keys = set()
     if sov_locs:
         for loc in sov_locs:
@@ -1529,7 +1636,18 @@ def generate_information_summary(doc, data):
                 _prop_unique_keys.add(key)
     prop_loc_count = len(_prop_unique_keys) if _prop_unique_keys else 0
     if not prop_loc_count and coverages.get("property"):
-        prop_loc_count = int(coverages["property"].get("num_locations", 0) or 0)
+        _prop_cov = coverages["property"]
+        # Prefer counting non-zero TIV rows in the property's own SOV
+        _prop_sov_quote = _prop_cov.get("schedule_of_values", []) or []
+        _prop_sov_nonzero = [s for s in _prop_sov_quote if _parse_currency(s.get("tiv", 0)) > 1]
+        if _prop_sov_nonzero:
+            prop_loc_count = len(_prop_sov_nonzero)
+        else:
+            # Fall back to num_locations only when no SOV breakdown exists
+            prop_loc_count = int(_prop_cov.get("num_locations", 0) or 0)
+            # Single-property quotes with a TIV but no breakdown count as 1
+            if prop_loc_count == 0 and _parse_currency(_prop_cov.get("tiv", 0)) > 0:
+                prop_loc_count = 1
     
     # Count liability locations from schedule_of_classes (skip non-physical entries)
     _skip_gl_classes = {"hired auto", "non-owned auto", "loss control", "package store",
@@ -2694,6 +2812,9 @@ def generate_locations(doc, data):
             ml["address"] = _proper_case(ml["address"])
         if ml["city"] and ml["city"] == ml["city"].upper() and len(ml["city"]) > 2:
             ml["city"] = _proper_case(ml["city"])
+        # Strip trailing ", United States" / ", USA" suffixes from address fields
+        ml["address"] = _strip_country_suffix(ml["address"])
+        ml["city"] = _strip_country_suffix(ml["city"])
     
     if master_locations:
         CHECK = "\u2713"  # Unicode checkmark
@@ -2933,6 +3054,8 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
             _city = loc.get('city', '')
             if _addr and _addr == _addr.upper(): _addr = _proper_case(_addr)
             if _city and _city == _city.upper() and len(_city) > 2: _city = _proper_case(_city)
+            _addr = _strip_country_suffix(_addr)
+            _city = _strip_country_suffix(_city)
             addr = f"{_addr}, {_city}, {loc.get('state', '')}"
             loc_label = f"{name}\n{addr}" if name else addr
             other_val = loc.get("other_value", 0) or 0
@@ -2986,19 +3109,24 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                               col_alignments={2: WD_ALIGN_PARAGRAPH.CENTER, 3: WD_ALIGN_PARAGRAPH.CENTER,
                                              4: WD_ALIGN_PARAGRAPH.CENTER, 5: WD_ALIGN_PARAGRAPH.CENTER})
     elif sov_from_quote:
-        add_subsection_header(doc, "Schedule of Values")
-        sov_rendered = True
-        headers = ["Location", "Building", "Contents", "BI/Rents", "TIV"]
-        rows = [[
-            s.get("location", ""),
-            fmt_currency(s.get("building", 0)),
-            fmt_currency(s.get("contents", 0)),
-            fmt_currency(s.get("business_income", 0)),
-            fmt_currency(s.get("tiv", 0))
-        ] for s in sov_from_quote]
-        create_styled_table(doc, headers, rows,
-                          col_widths=[2.0, 1.4, 1.2, 1.2, 1.2],
-                          header_size=9, body_size=9)
+        # Filter out non-property locations: any row with TIV <= $1 (effectively zero)
+        # is excluded — these are typically liability-only locations that leak into
+        # the property quote's SOV.
+        _filtered_sov = [s for s in sov_from_quote if _parse_currency(s.get("tiv", 0)) > 1]
+        if _filtered_sov:
+            add_subsection_header(doc, "Schedule of Values")
+            sov_rendered = True
+            headers = ["Location", "Building", "Contents", "BI/Rents", "TIV"]
+            rows = [[
+                _strip_country_suffix(s.get("location", "")),
+                fmt_currency(s.get("building", 0)),
+                fmt_currency(s.get("contents", 0)),
+                fmt_currency(s.get("business_income", 0)),
+                fmt_currency(s.get("tiv", 0))
+            ] for s in _filtered_sov]
+            create_styled_table(doc, headers, rows,
+                              col_widths=[2.0, 1.4, 1.2, 1.2, 1.2],
+                              header_size=9, body_size=9)
     
     # Crime Insuring Clauses (3-column: Clause, Limit, Retention)
     insuring_clauses = cov.get("insuring_clauses", []) or cov.get("insuring_agreements", [])
@@ -3311,13 +3439,15 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         if has_ded:
             headers = ["Description", "Limit", "Deductible"]
             rows = [[ac.get("description", "") or ac.get("coverage", "") or ac.get("name", ""), ac.get("limit", ""), ac.get("deductible", "")] if isinstance(ac, dict) else [str(ac), "", ""] for ac in addl]
-            create_styled_table(doc, headers, rows, col_widths=[3.5, 2.0, 2.0],
+            _addl_table = create_styled_table(doc, headers, rows, col_widths=[3.5, 2.0, 2.0],
                               header_alignments={0: L, 1: L, 2: L})
         else:
             headers = ["Description", "Limit"]
             rows = [[ac.get("description", "") or ac.get("coverage", "") or ac.get("name", ""), ac.get("limit", "")] if isinstance(ac, dict) else [str(ac), ""] for ac in addl]
-            create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
+            _addl_table = create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
                               header_alignments={0: L, 1: L})
+        # Highlight high-risk exclusions (trafficking, abuse/molestation, assault & battery)
+        _apply_high_risk_highlight(_addl_table)
     elif coverage_key == "property":
         # No Additional Coverages / Sublimits extracted - render Review Required placeholder so broker verifies against quote
         add_subsection_header(doc, "Sublimits of Liability / Extensions")
@@ -3375,9 +3505,12 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         headers = ["Form Number", "Description"]
         rows = [[f.get("form_number", ""), f.get("description", "")] if isinstance(f, dict) else ["", str(f)] for f in forms]
         L = WD_ALIGN_PARAGRAPH.LEFT
-        create_styled_table(doc, headers, rows, col_widths=[2.0, 5.5],
+        _forms_table = create_styled_table(doc, headers, rows, col_widths=[2.0, 5.5],
                            header_size=9, body_size=9,
                            header_alignments={0: L, 1: L})
+        # Flag high-risk exclusions (trafficking, abuse/molestation, assault & battery)
+        # with yellow highlight + bold red text so they stand out for the broker/client
+        _apply_high_risk_highlight(_forms_table)
     elif coverage_key in _critical_form_coverages:
         add_subsection_header(doc, "Forms & Endorsements")
         add_formatted_paragraph(doc,
