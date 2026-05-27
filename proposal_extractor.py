@@ -1403,6 +1403,40 @@ The JSON structure should be:
       "forms_endorsements": [],
       "subjectivities": []
     }},
+    "equipment_breakdown": {{
+      "carrier": "Carrier name (e.g., The Phoenix Insurance Company for Travelers EnergyMax 21)",
+      "carrier_admitted": true or false,
+      "am_best_rating": "Rating",
+      "premium": 0,
+      "taxes_fees": 0,
+      "total_premium": 0,
+      "limits": [
+        {{"description": "Total Limit per Breakdown", "limit": "$X"}},
+        {{"description": "Property Damage", "limit": "$X or Included"}},
+        {{"description": "Business Income / Extra Expense", "limit": "$X or Included or ALS"}},
+        {{"description": "Service Interruption", "limit": "$X or Included"}},
+        {{"description": "Spoilage", "limit": "$X or Included"}},
+        {{"description": "Hazardous Substances", "limit": "$X or Included"}},
+        {{"description": "Data Restoration", "limit": "$X or Included"}},
+        {{"description": "Demolition / Increased Cost of Construction", "limit": "$X or Included"}},
+        {{"description": "Newly Acquired Locations", "limit": "$X or Included"}},
+        {{"description": "Pollutant Cleanup and Removal", "limit": "$X or Included"}}
+      ],
+      "deductibles": [
+        {{"description": "Property Damage Deductible", "amount": "$X"}},
+        {{"description": "Business Income Deductible", "amount": "$X or X hours"}},
+        {{"description": "Service Interruption Waiting Period", "amount": "X hours"}}
+      ],
+      "additional_coverages": [
+        {{"description": "Coverage extension or sublimit", "limit": "$X"}}
+      ],
+      "coverage_by_location": [
+        {{"premise": 1, "building": 1, "address": "Street, City, ST ZIP",
+         "limit_per_breakdown": "$X", "bi_extension": "$X or ALS"}}
+      ],
+      "forms_endorsements": [],
+      "subjectivities": []
+    }},
     "commercial_auto": {{
       "carrier": "Carrier name",
       "carrier_admitted": true or false,
@@ -1525,6 +1559,7 @@ The JSON structure should be:
     "general_liability": 0,
     "umbrella": 0,
     "workers_comp": 0,
+    "equipment_breakdown": 0,
     "commercial_auto": 0,
     "total": 0
   }},
@@ -1536,6 +1571,7 @@ The JSON structure should be:
 
 IMPORTANT:
 - COVERAGE CLASSIFICATION: A standalone terrorism/TRIA policy is NOT general liability. If a document is from Lloyd's of London, AEGIS, or similar and covers ONLY terrorism/TRIA/certified acts of terrorism/active assailant, classify it as "terrorism" NOT "general_liability". General Liability covers bodily injury, property damage, personal & advertising injury with occurrence/aggregate limits. Terrorism covers certified/non-certified acts of terrorism. If a single policy bundles both, put the terrorism portion in "terrorism" and the GL portion in "general_liability".
+- EQUIPMENT BREAKDOWN / BOILER & MACHINERY CLASSIFICATION: A standalone Equipment Breakdown or Boiler & Machinery policy is NOT workers compensation, NOT property, and NOT inland marine — it goes in the "equipment_breakdown" slot. Telltale signs of an EB / B&M quote: the Coverage Part declaration is titled "EQUIPMENT BREAKDOWN PROTECTION DECLARATIONS", "EnergyMax 21", "BOILER AND MACHINERY", or "EQUIPMENT BREAKDOWN COVERAGE FORM"; form numbers begin with "EB ", "BM ", "MB ", or "EBP "; the insuring company is "The Phoenix Insurance Company" (Travelers' B&M company, PHX abbreviation), "Hartford Steam Boiler" (HSB), "FM Global", "Mutual Boiler Re", or similar. Typical limits include "Total Limit per Breakdown", "Property Damage" (often shown as INCLUDED), "Business Income Coverage Extension" with a coinsurance/months indicator ("1/6" = 2-month BI), "Spoilage", "Hazardous Substances", "Data Restoration", "Service Interruption". CRITICAL: do not let a low premium (e.g., $666), a "Provisional Premium / Due at Inception / Due at Each Anniversary" payment schedule, or an admitted-market-sounding carrier name push you into the workers_comp bucket — EB policies routinely have small premiums and use audit-style anniversary billing, but they are NEVER workers comp. If the policy mentions Workers Compensation Statutory limits or Employers Liability (EL — Each Accident / Disease Policy Limit / Disease Each Employee), it is workers_comp; otherwise if the dec page says Equipment Breakdown / Boiler & Machinery / EnergyMax, it is equipment_breakdown.
 - Only include coverage sections that appear in the documents
 - Extract EVERY form number and endorsement exactly as written
 - Include form dates (e.g., "06/07" in "CP 00 10 06/07")
@@ -1949,6 +1985,7 @@ def format_verification_message(data: dict) -> str:
             "general_liability": "General Liability",
             "umbrella": "Umbrella",
             "workers_comp": "Workers Comp",
+            "equipment_breakdown": "Equipment Breakdown",
             "commercial_auto": "Commercial Auto",
             "cyber": "Cyber",
             "epli": "EPLI",
@@ -1980,6 +2017,7 @@ def format_verification_message(data: dict) -> str:
     # Coverage Details
     for key, display_name in [("property", "PROPERTY"), ("general_liability", "GENERAL LIABILITY"),
                                ("umbrella", "UMBRELLA"), ("workers_comp", "WORKERS COMP"),
+                               ("equipment_breakdown", "EQUIPMENT BREAKDOWN"),
                                ("commercial_auto", "COMMERCIAL AUTO"), ("cyber", "CYBER"),
                                ("epli", "EPLI"), ("flood", "FLOOD"),
                                ("terrorism", "TERRORISM / TRIA"), ("crime", "CRIME"),
