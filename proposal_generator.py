@@ -2986,7 +2986,8 @@ def generate_locations(doc, data):
         for i, loc in enumerate(master_locations, 1):
             tiv_val = loc["tiv"] or 0
             total_tiv += tiv_val
-            prop_cell = CHECK if loc["on_property"] and (_property_covers_all or (loc["tiv"] or 0) > 0) else DASH
+            # GL-only locations (TIV=0) should NOT get property checkmark
+            prop_cell = CHECK if loc["on_property"] and (loc["tiv"] or 0) > 0 else DASH
             liab_cell = CHECK if loc["on_liability"] else DASH
             if not loc["on_property"]:
                 missing_property_rows.append(len(rows))  # current row index
@@ -3665,6 +3666,35 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                           col_widths=[0.8, 2.0, 1.5, 1.2, 1.5],
                           header_size=9, body_size=9)
     
+    # ── Warrants (property-specific) ──────────────────────────────────────
+    if coverage_key in ("property", "property_alt_1", "property_alt_2"):
+        _warrants = cov.get("warrants", []) or []
+        if _warrants:
+            add_subsection_header(doc, "Warrants")
+            _w_headers = ["Warrant", "Consequence of Non-Compliance"]
+            _w_rows = []
+            for w in _warrants:
+                if isinstance(w, dict):
+                    _w_rows.append([w.get("condition", ""), w.get("consequence", "")])
+                elif isinstance(w, str):
+                    _w_rows.append([w, ""])
+            if _w_rows:
+                create_styled_table(doc, _w_headers, _w_rows,
+                                    col_widths=[3.0, 4.5],
+                                    header_size=9, body_size=9)
+
+    # ── Policy Attachments (property-specific) ────────────────────────────
+    if coverage_key in ("property", "property_alt_1", "property_alt_2"):
+        _attachments = cov.get("policy_attachments", []) or []
+        if _attachments:
+            add_subsection_header(doc, "Policy Attachments")
+            _a_headers = ["#", "Attachment"]
+            _a_rows = [[str(idx + 1), att] for idx, att in enumerate(_attachments) if att]
+            if _a_rows:
+                create_styled_table(doc, _a_headers, _a_rows,
+                                    col_widths=[0.5, 7.0],
+                                    header_size=9, body_size=9)
+
     # Forms & Endorsements
     forms = cov.get("forms_endorsements", [])
     # Strip forms whose prefixes belong to a sibling coverage in the same
