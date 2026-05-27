@@ -2249,15 +2249,19 @@ def _fuzzy_addr_match(addr1, addr2):
 
 
 def _dedup_locations(raw_locations):
-    """Deduplicate locations by normalized address."""
-    seen_addrs = set()
+    """Deduplicate locations by normalized address + building name.
+    Preserves distinct buildings at the same campus address (e.g., multi-building hotel)."""
+    seen_keys = set()
     locations = []
     for loc in raw_locations:
         addr_key = (_normalize_addr(loc.get("address", "")) + "|" + 
                     _normalize_city(loc.get("city", "")) + "|" +
                     _normalize_state(loc.get("state", "")))
-        if addr_key not in seen_addrs:
-            seen_addrs.add(addr_key)
+        # Include building/location name to preserve distinct buildings at same address
+        bldg_name = (loc.get("name", "") or "").strip().upper()
+        composite_key = addr_key + "|" + bldg_name if bldg_name else addr_key
+        if composite_key not in seen_keys:
+            seen_keys.add(composite_key)
             locations.append(loc)
     return locations
 
@@ -2558,9 +2562,9 @@ def generate_locations(doc, data):
     # Uses STRICT matching (exact normalized address) — no fuzzy tolerance
     # Property checkmarks must be precise: only SOV/property quote locations
     def _is_on_property(addr_key):
-        """Check if addr_key is in property_addr_keys. Strict match only."""
-        if _property_covers_all:
-            return True
+        """Check if addr_key is in property_addr_keys. Strict match only.
+        NOTE: _property_covers_all fallback is handled at prop_cell level, not here.
+        This prevents GL-only locations from being falsely marked as property-covered."""
         if addr_key in property_addr_keys:
             return True
         # Also try matching just the street portion (ignoring city differences)
@@ -2986,8 +2990,9 @@ def generate_locations(doc, data):
         for i, loc in enumerate(master_locations, 1):
             tiv_val = loc["tiv"] or 0
             total_tiv += tiv_val
-            # GL-only locations (TIV=0) should NOT get property checkmark
-            prop_cell = CHECK if loc["on_property"] and (loc["tiv"] or 0) > 0 else DASH
+            # Property checkmark: explicit address match, OR property-covers-all fallback with TIV > 0
+            # This prevents GL-only locations (no TIV) from getting a false property checkmark
+            prop_cell = CHECK if (loc["on_property"] or (_property_covers_all and (loc["tiv"] or 0) > 0)) else DASH
             liab_cell = CHECK if loc["on_liability"] else DASH
             if not loc["on_property"]:
                 missing_property_rows.append(len(rows))  # current row index
