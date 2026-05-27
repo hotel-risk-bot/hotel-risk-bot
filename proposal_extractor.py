@@ -176,6 +176,8 @@ def _score_page(page_text: str) -> float:
         "EXCESS OF $",
         "EXCESS LIABILITY QUOTATION",
         "LIMITS OF LIABILITY",
+        "WARRANTS",
+        "POLICY ATTACHMENTS",
     ]
     is_critical = False
     for kw in _critical_page_keywords:
@@ -1228,7 +1230,11 @@ The JSON structure should be:
       "forms_endorsements": [
         {{"form_number": "CP 00 10 06/07", "description": "Building and Personal Property Coverage Form"}}
       ],
-      "subjectivities": ["List of binding requirements"]
+      "subjectivities": ["List of binding requirements"],
+      "warrants": [
+        {{"condition": "Warrant condition (e.g., No aluminum wiring)", "consequence": "Cause(s) of loss excluded if not maintained (e.g., Fire)"}}
+      ],
+      "policy_attachments": ["List of policy attachment/endorsement titles from the Remarks or Policy Attachments section of the property quote (e.g., Appraisal Clause Amendment, Asbestos Exclusion, Scheduled Limit of Liability)"]
     }},
     "excess_property": {{
       "carrier": "Excess property layer 1 carrier name (e.g., Kinsale)",
@@ -1620,6 +1626,7 @@ IMPORTANT:
 - EXCESS TOWER FILENAME HINTS: When excess/umbrella PDFs have sparse body text (scanned pages) but the FILENAME contains shorthand like "5x5", "5 x 10", "5xP", "5 x P", "10 x 5", "5M x 10M", etc., USE the filename to determine the attachment point and emit the appropriate excess layer. Shorthand decoder: first number is the LIMIT, second value after "x" is the ATTACH point. "xP" or "x P" or "x Primary" = primary excess (coverage key = umbrella). "x5" or "5x5" or "x $5M" = sits above $5M (coverage key = umbrella_layer_2, attach = $5M). "x10" or "5x10" or "x $10M" = sits above $10M (coverage key = umbrella_layer_3, attach = $10M). Example: filename "Ascot 5x10 Excess Liability Quote" with scanned body emits umbrella_layer_3 with carrier = Ascot Specialty Insurance Company, each_occurrence = $5,000,000, aggregate = $5,000,000, attach_point = $10,000,000, even if limits fields on page 1 are blank. Extract the premium/fees from readable pages. Do this ONLY when body text does not contradict the filename inference.
 - MULTI-OPTION EXCESS QUOTES: Some excess liability quotes present multiple limit options in columns (e.g., $1M/$2M/$3M Each Loss Event with different premiums for each). Extract the HIGHEST limit option as the primary "umbrella" entry. If the user needs a different option, they can adjust in the editor.
 - COMPETING QUOTES (MULTIPLE CARRIERS FOR SAME COVERAGE): When documents contain quotes from DIFFERENT carriers for the SAME line of coverage (e.g., Starr Property quote AND Markel Property quote in separate PDFs), extract EACH as a separate coverage entry. Use the base key for the first (e.g., "property") and "_alt_1", "_alt_2" suffixes for additional competing quotes (e.g., "property_alt_1", "general_liability_alt_1"). Do NOT discard any carrier's quote. Do NOT confuse competing quotes with layered programs - layered programs have excess/xs relationships, while competing quotes are independent quotes at the same attachment point from different carriers.
+- PROPERTY WARRANTS & POLICY ATTACHMENTS: For property quotes, extract any "Warrants" section (conditions the insured must maintain, with consequences for non-compliance such as specific causes of loss being excluded). Common warrants include: no aluminum wiring, heat maintained at 55 degrees, automatic sprinkler system maintained. Extract each as {{"condition": "...", "consequence": "..."}}. Also extract the "Policy Attachments" or "Endorsement Schedule" list from the Remarks section — these are the titles of endorsements attached to the property policy (e.g., Appraisal Clause Amendment, Asbestos Exclusion, Scheduled Limit of Liability). Store in "policy_attachments" as a simple string array. Do NOT confuse policy attachments with forms_endorsements — policy attachments are summary titles from the Remarks section, while forms_endorsements are the full ISO/carrier form numbers with descriptions.
 
 DOCUMENT TEXT:
 {document_text}"""
