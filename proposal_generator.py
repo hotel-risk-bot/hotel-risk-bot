@@ -655,25 +655,126 @@ for _l in (2, 3, 4):
     COVERAGE_FORM_REJECT_PREFIXES[f"umbrella_layer_{_l}"] = COVERAGE_FORM_REJECT_PREFIXES["umbrella"]
 
 
+# Description-text keywords that identify a form as PROPERTY-side, regardless of form_number.
+# Used to strip property endorsements that leak into umbrella/GL/etc. — common with HotelBound
+# Manuscript Wording where "important coverage limitations" appear as plain-text bullet points
+# WITHOUT form numbers (Late Notice, Cosmetic Damage Exclusion, Vacancy Clause, Wind Driven
+# Elements Limitation, etc.). These would otherwise pass through the form_number prefix filter.
+# Match is case-insensitive substring on the description field.
+_PROPERTY_DESCRIPTION_KEYWORDS = (
+    "late notice",
+    "roof, roof covering",
+    "roof covering or roofing",
+    "roofing system",
+    "cosmetic damage",
+    "hvac equipment",
+    "vacancy clause",
+    "property cyber and data",
+    "electronic data endorsement",
+    "electronic data – limited",
+    "electronic data - limited",
+    "pre-existing damage",
+    "pre existing damage",
+    "marijuana exclusion",
+    "wind driven elements",
+    "war risk and terrorist",
+    "fungus, wet rot",
+    "wet rot, dry rot",
+    "loss due to virus or bacteria",
+    "virus or bacteria exclusion",
+    "asbestos exclusion",
+    "special exclusions – fungi",
+    "special exclusions - fungi",
+    "extortion and ransomware",
+    "digital assets and operations",
+    "evidence of coverage",
+    "shared limits disclosure",
+    "shared capacity",
+    "claim reporting sheet",
+    "hb manuscript",
+    "hotelbound manuscript",
+    "terrorism endorsement",
+    "aggregate layer disclosure",
+    "scheduled limits per location",
+    "subject to margin clause",
+    "margin clause",
+    "equipment breakdown endorsement",
+    "schedule of carriers with terrorism",
+    "occurrence limit of liability endorsement",
+    "olle scheduled limits",
+    "scheduled limits — subject to margin",
+    "named windstorm",
+    "ordinance or law",
+    "windstorm coverage",
+    "building ordinance",
+    "blanket coverage",
+    "hb evidence",
+    "hb shared",
+    "hb claim",
+    "hb terrorism",
+    "hb aggregate",
+    "hb equipment",
+    "hb schedule",
+)
+
+
+# Coverage keys that should strip property-description forms (no form_number) when they
+# match property keywords. Property coverage itself is excluded — these descriptions ARE
+# property forms when they're in the property section.
+_REJECT_PROPERTY_DESCRIPTIONS_IN = {
+    "umbrella", "umbrella_layer_2", "umbrella_layer_3", "umbrella_layer_4",
+    "umbrella_alt_1", "umbrella_alt_2", "umbrella_alt_3",
+    "general_liability", "general_liability_alt_1", "general_liability_alt_2",
+    "epli", "cyber", "cyber_alt_1", "crime",
+    "workers_comp", "workers_compensation", "workers_compensation_alt_1",
+    "commercial_auto", "equipment_breakdown", "liquor_liability",
+    "excess_property", "excess_property_2",  # excess property doesn't list primary's manuscript bullets
+}
+
+
+def _matches_property_description(form_dict):
+    """Return True if a form's description matches a property-specific keyword.
+    Used to catch property forms that leak into non-property coverage sections
+    when they have NO form_number (e.g., HotelBound Manuscript bullet items)."""
+    if not isinstance(form_dict, dict):
+        return False
+    desc = str(form_dict.get("description", "") or "").lower().strip()
+    if not desc:
+        return False
+    return any(kw in desc for kw in _PROPERTY_DESCRIPTION_KEYWORDS)
+
+
 def _filter_cross_contaminated_forms(forms, coverage_key):
     """Strip forms whose prefixes belong to a sibling coverage in the same
-    submission. Rows with an empty form_number are always kept (plain-text
-    exclusion entries common on umbrella schedules). Returns the filtered
-    list and a count of dropped rows for logging."""
+    submission. Rows with an empty form_number are kept by default (plain-text
+    exclusion entries are common on umbrella schedules) UNLESS their description
+    matches a property-specific keyword and the current coverage is not property —
+    that catches HotelBound Manuscript bullet items (Late Notice, Cosmetic Damage,
+    Wind Driven Elements, Vacancy Clause, etc.) that GPT routinely copies into the
+    umbrella forms section.
+    Returns the filtered list and a count of dropped rows for logging."""
     if not forms:
         return forms, 0
     reject = COVERAGE_FORM_REJECT_PREFIXES.get(coverage_key)
-    if not reject:
-        return forms, 0
     kept = []
     dropped = 0
+    _strip_prop_desc = coverage_key in _REJECT_PROPERTY_DESCRIPTIONS_IN
     for f in forms:
         fn = (f.get("form_number", "") if isinstance(f, dict) else "").upper().strip()
-        # Always keep plain-text entries with no form number (umbrella exclusion list)
         if not fn:
+            # Plain-text entry — keep by default, but reject if it looks like a
+            # property endorsement leaking into a non-property coverage section.
+            if _strip_prop_desc and _matches_property_description(f):
+                dropped += 1
+                continue
             kept.append(f)
             continue
-        if any(fn.startswith(p.upper()) for p in reject):
+        if reject and any(fn.startswith(p.upper()) for p in reject):
+            dropped += 1
+            continue
+        # Form-number-prefix check passed — also reject if description is property-side
+        # in a non-property coverage (catches forms with junk/unrelated form_number).
+        if _strip_prop_desc and _matches_property_description(f):
             dropped += 1
             continue
         kept.append(f)
