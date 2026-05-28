@@ -1299,7 +1299,7 @@ def generate_premium_summary(doc, data):
     # Optional coverages section below TOTAL
     if optional_rows:
         add_formatted_paragraph(doc, "", space_before=12)
-        add_subsection_header(doc, "Optional Coverages")
+        add_subsection_header(doc, "Recommended Optional Coverages")
         add_formatted_paragraph(doc,
             "The following coverages are presented for consideration and are not included in the total premium above.",
             size=9, color=CHARCOAL, space_after=6)
@@ -3126,20 +3126,27 @@ def generate_locations(doc, data):
                           header_alignments={0: L, 1: L, 2: L, 3: L, 4: L, 5: R, 6: C, 7: C},
                           col_alignments={5: R, 6: C, 7: C})
         
-        # Apply RED color to missing coverage cells (em-dashes)
+        # Color the Property and Liability indicator cells based on their actual content,
+        # not based on which row index was tracked as "missing". Content-based coloring is
+        # robust against any upstream data-flag inconsistency: a CHECK is always shown in
+        # green (matches the legend below) and a DASH is always shown in bold red.
         RED = RGBColor(0xCC, 0x00, 0x00)
-        for row_idx in missing_property_rows:
-            cell = table.rows[row_idx + 1].cells[6]  # +1 for header row
-            for p in cell.paragraphs:
-                for run in p.runs:
-                    run.font.color.rgb = RED
-                    run.font.bold = True
-        for row_idx in missing_liability_rows:
-            cell = table.rows[row_idx + 1].cells[7]  # +1 for header row
-            for p in cell.paragraphs:
-                for run in p.runs:
-                    run.font.color.rgb = RED
-                    run.font.bold = True
+        GREEN = RGBColor(0x00, 0x80, 0x00)
+        # Iterate over data rows only (skip header row 0 and TOTAL row at the bottom)
+        for ri in range(1, len(table.rows) - 1):
+            for ci in (6, 7):  # Property, Liability columns
+                cell = table.rows[ri].cells[ci]
+                _cell_text = cell.text.strip()
+                if _cell_text == DASH:
+                    for p in cell.paragraphs:
+                        for run in p.runs:
+                            run.font.color.rgb = RED
+                            run.font.bold = True
+                elif _cell_text == CHECK:
+                    for p in cell.paragraphs:
+                        for run in p.runs:
+                            run.font.color.rgb = GREEN
+                            run.font.bold = True
         
         # Legend
         add_formatted_paragraph(doc, "", size=4)
@@ -3483,26 +3490,99 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     # Per-location property coverage breakdown
     if coverage_key == "property":
         cbl = cov.get("coverage_by_location", [])
+        # Fallback: if the property quote didn't expose a per-location/per-building
+        # breakdown, derive one from the SOV. AmRisc / hospitality SOVs typically
+        # carry Real Property, Personal Property (Contents), Business Income,
+        # plus Pool/Sign/Outdoor values per building — exactly what brokers want
+        # shown on the Property Coverage page. We build a cbl-shaped list so the
+        # existing renderer handles it.
+        _need_sov_cbl = (not cbl) or (isinstance(cbl, list) and len(cbl) < 2)
+        _sov_locs_for_cbl = sov_data.get("locations", []) if sov_data else []
+        # Pull non-empty per-building rows
+        _sov_rows = [l for l in _sov_locs_for_cbl if isinstance(l, dict) and (
+            (l.get("building_value") or 0) > 0 or
+            (l.get("contents_value") or 0) > 0 or
+            (l.get("bi_value") or 0) > 0 or
+            (l.get("other_value") or 0) > 0 or
+            (l.get("sign_value") or 0) > 0 or
+            (l.get("pool_value") or 0) > 0
+        )]
+        if _need_sov_cbl and len(_sov_rows) >= 1:
+            _has_other = any(((l.get("other_value") or 0) + (l.get("sign_value") or 0) +
+                              (l.get("pool_value") or 0)) > 0 for l in _sov_rows)
+            cbl = []
+            for i, l in enumerate(_sov_rows, 1):
+                _label_parts = []
+                _bldg_no = l.get("bldg_no") or l.get("building_no") or l.get("loc_no") or i
+                _loc_name = (l.get("location_name") or l.get("name") or l.get("description") or "").strip()
+                _addr = (l.get("address") or "").strip()
+                if _loc_name:
+                    _label = f"Bldg {_bldg_no}: {_loc_name}"
+                elif _addr:
+                    _label = f"Bldg {_bldg_no}: {_addr}"
+                else:
+                    _label = f"Building {_bldg_no}"
+                _other_combined = ((l.get("other_value") or 0) + (l.get("sign_value") or 0)
+                                   + (l.get("pool_value") or 0))
+                cbl.append({
+                    "address": _label,
+                    "building_value": fmt_currency(l.get("building_value") or 0) if (l.get("building_value") or 0) else "—",
+                    "bpp_value": fmt_currency(l.get("contents_value") or 0) if (l.get("contents_value") or 0) else "—",
+                    "business_income": fmt_currency(l.get("bi_value") or 0) if (l.get("bi_value") or 0) else ("Included" if i > 1 else "—"),
+                    "other_value": fmt_currency(_other_combined) if _other_combined else "—",
+                    "tiv": fmt_currency(l.get("tiv") or 0) if (l.get("tiv") or 0) else "",
+                    "_has_other": _has_other,
+                })
+            # Append a TOTAL row for clarity
+            _tot_bv = sum((l.get("building_value") or 0) for l in _sov_rows)
+            _tot_cv = sum((l.get("contents_value") or 0) for l in _sov_rows)
+            _tot_bi = sum((l.get("bi_value") or 0) for l in _sov_rows)
+            _tot_other = sum(((l.get("other_value") or 0) + (l.get("sign_value") or 0)
+                              + (l.get("pool_value") or 0)) for l in _sov_rows)
+            _tot_tiv = sum((l.get("tiv") or 0) for l in _sov_rows)
+            cbl.append({
+                "address": "TOTAL",
+                "building_value": fmt_currency(_tot_bv) if _tot_bv else "",
+                "bpp_value": fmt_currency(_tot_cv) if _tot_cv else "",
+                "business_income": fmt_currency(_tot_bi) if _tot_bi else "",
+                "other_value": fmt_currency(_tot_other) if _tot_other else "",
+                "tiv": fmt_currency(_tot_tiv) if _tot_tiv else "",
+                "_has_other": _has_other,
+                "_total_row": True,
+            })
+            logger.info(f"Property: derived coverage_by_location from SOV ({len(cbl)-1} buildings + total)")
+
         if cbl and isinstance(cbl, list) and len(cbl) > 1 and not sov_rendered:
             add_subsection_header(doc, "Coverage by Location")
-            cbl_headers = ["Location", "Building", "BPP", "Business Income"]
+            # If any building has Other (signs/pools/outdoor), include that column.
+            _has_other_col = any(isinstance(l, dict) and l.get("_has_other") for l in cbl)
+            if _has_other_col:
+                cbl_headers = ["Location", "Building", "Contents", "Business Income", "Other", "TIV"]
+                _col_widths = [2.4, 1.1, 1.1, 1.2, 0.9, 1.0]
+            else:
+                cbl_headers = ["Location", "Building", "BPP", "Business Income"]
+                _col_widths = [3.0, 1.5, 1.5, 1.5]
             cbl_rows = []
             for loc in cbl:
                 if isinstance(loc, dict):
                     addr = loc.get("address", "")
-                    if len(addr) > 40:
-                        addr = addr[:37] + "..."
+                    if len(addr) > 45:
+                        addr = addr[:42] + "..."
                     prem = loc.get("premise", "")
                     label = f"Prem {prem}: {addr}" if prem else addr
-                    cbl_rows.append([
+                    row = [
                         label,
                         loc.get("building_value", ""),
                         loc.get("bpp_value", ""),
-                        loc.get("business_income", "")
-                    ])
+                        loc.get("business_income", ""),
+                    ]
+                    if _has_other_col:
+                        row.append(loc.get("other_value", ""))
+                        row.append(loc.get("tiv", ""))
+                    cbl_rows.append(row)
             if cbl_rows:
                 create_styled_table(doc, cbl_headers, cbl_rows,
-                                   col_widths=[3.0, 1.5, 1.5, 1.5],
+                                   col_widths=_col_widths,
                                    header_size=9, body_size=9)
 
     # Deductibles (Property)
