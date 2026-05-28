@@ -3512,9 +3512,13 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                               (l.get("pool_value") or 0)) > 0 for l in _sov_rows)
             cbl = []
             for i, l in enumerate(_sov_rows, 1):
-                _label_parts = []
-                _bldg_no = l.get("bldg_no") or l.get("building_no") or l.get("loc_no") or i
-                _loc_name = (l.get("location_name") or l.get("name") or l.get("description") or "").strip()
+                # SOV parser exposes "building_num" / "location_num" / "dba" — accept
+                # the legacy alternates as fallbacks so we keep working if upstream
+                # field names change in the future.
+                _bldg_no = (l.get("building_num") or l.get("location_num") or
+                            l.get("bldg_no") or l.get("building_no") or l.get("loc_no") or i)
+                _loc_name = (l.get("dba") or l.get("location_name") or
+                             l.get("name") or l.get("occupancy") or l.get("description") or "").strip()
                 _addr = (l.get("address") or "").strip()
                 if _loc_name:
                     _label = f"Bldg {_bldg_no}: {_loc_name}"

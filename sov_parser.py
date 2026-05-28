@@ -1,17 +1,58 @@
 """
 SOV (Statement of Values) Parser for Hotel Insurance Proposals.
 
-Parses .xlsx SOV spreadsheets (Amwins, Starr, and similar formats) to extract
-per-location property details for use in proposal generation.
+Parses .xlsx and .xls SOV spreadsheets (Amwins, Starr, AmRisc, and similar
+formats) to extract per-location property details for use in proposal generation.
 """
 
 import logging
+import os
 import re
+import tempfile
 from typing import Optional
 
 import openpyxl
 
 logger = logging.getLogger(__name__)
+
+
+def _convert_xls_to_xlsx(xls_path: str) -> str:
+    """Convert a legacy .xls binary file to a temporary .xlsx using xlrd.
+    AmRisc, Starr, and many older carrier SOV templates ship as .xls — openpyxl
+    rejects those, so we transcribe via xlrd into a fresh .xlsx workbook and
+    return the new file path. Caller is responsible for cleaning up the temp."""
+    try:
+        import xlrd
+    except ImportError as exc:
+        raise RuntimeError(
+            "Reading .xls SOV files requires the 'xlrd' package. "
+            "Install via: pip install xlrd"
+        ) from exc
+
+    xls = xlrd.open_workbook(xls_path)
+    wb_new = openpyxl.Workbook()
+    # Remove the default empty sheet that openpyxl creates
+    default_sheet = wb_new.active
+    wb_new.remove(default_sheet)
+    for sheet_name in xls.sheet_names():
+        xs = xls.sheet_by_name(sheet_name)
+        # Excel sheet name max length is 31 characters
+        safe_name = sheet_name[:31] if sheet_name else "Sheet1"
+        ns = wb_new.create_sheet(title=safe_name)
+        for r in range(xs.nrows):
+            for c in range(xs.ncols):
+                try:
+                    val = xs.cell_value(r, c)
+                    if val != '':
+                        ns.cell(row=r + 1, column=c + 1, value=val)
+                except Exception:
+                    # Skip any cell that can't be transcribed (corrupted formulas etc.)
+                    pass
+    fd, out_path = tempfile.mkstemp(suffix=".xlsx", prefix="sov_xls_")
+    os.close(fd)
+    wb_new.save(out_path)
+    logger.info(f"Converted .xls SOV ({xls_path}) to .xlsx temp ({out_path})")
+    return out_path
 
 # Common header keywords used to detect the header row in SOV spreadsheets.
 # We look for rows containing several of these terms.
@@ -391,7 +432,24 @@ def parse_sov(file_path: str) -> dict:
     """
     logger.info(f"Parsing SOV file: {file_path}")
 
-    wb = openpyxl.load_workbook(file_path, data_only=True)
+    # Handle legacy .xls (binary) by transcribing to .xlsx on the fly. openpyxl
+    # only supports .xlsx; without this branch parse_sov() crashes silently on
+    # AmRisc/Starr SOVs that still ship as .xls.
+    _xls_tmp = None
+    _open_path = file_path
+    if str(file_path).lower().endswith(".xls"):
+        try:
+            _xls_tmp = _convert_xls_to_xlsx(file_path)
+            _open_path = _xls_tmp
+        except Exception as _xls_err:
+            logger.error(f"Failed to convert .xls SOV: {_xls_err}")
+            return {"error": f"Failed to read .xls SOV file: {_xls_err}"}
+
+    try:
+        wb = openpyxl.load_workbook(_open_path, data_only=True)
+    finally:
+        # Defer .xls temp cleanup until after parse_sov returns
+        pass
     ws = wb.active
 
     # Find the header row
@@ -515,6 +573,13 @@ def parse_sov(file_path: str) -> dict:
     }
 
     logger.info(f"SOV parsed: {len(locations)} locations, Total TIV: ${totals['tiv']:,.0f}")
+
+    # Best-effort cleanup of the temp .xlsx if we converted from .xls
+    if _xls_tmp:
+        try:
+            os.remove(_xls_tmp)
+        except OSError:
+            pass
     return result
 
 
@@ -650,12 +715,21 @@ def aggregate_locations(sov_data: dict) -> dict:
 
 def is_sov_file(file_path: str) -> bool:
     """
-    Quick check to determine if an .xlsx file looks like an SOV spreadsheet.
+    Quick check to determine if an .xlsx (or .xls) file looks like an SOV spreadsheet.
     Note: Uses data_only=True without read_only=True because read_only mode
     can cause issues with ws.max_row and cell iteration on some files.
     """
+    _xls_tmp = None
+    _open_path = file_path
     try:
-        wb = openpyxl.load_workbook(file_path, data_only=True)
+        if str(file_path).lower().endswith(".xls"):
+            try:
+                _xls_tmp = _convert_xls_to_xlsx(file_path)
+                _open_path = _xls_tmp
+            except Exception as _xls_err:
+                logger.warning(f"is_sov_file: .xls conversion failed for {file_path}: {_xls_err}")
+                return False
+        wb = openpyxl.load_workbook(_open_path, data_only=True)
         ws = wb.active
         header_row = _find_header_row(ws)
         wb.close()
@@ -665,6 +739,12 @@ def is_sov_file(file_path: str) -> bool:
     except Exception as e:
         logger.warning(f"Error checking SOV file {file_path}: {e}")
         return False
+    finally:
+        if _xls_tmp:
+            try:
+                os.remove(_xls_tmp)
+            except OSError:
+                pass
 
 
 def format_sov_summary(sov_data: dict) -> str:
