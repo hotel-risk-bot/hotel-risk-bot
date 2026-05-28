@@ -1132,7 +1132,7 @@ def upload_files(session_id):
 
         # Check if Excel file is an SOV
         file_info["is_sov"] = False
-        if file_type == "excel" and ext == ".xlsx":
+        if file_type == "excel" and ext in (".xlsx", ".xls"):
             try:
                 sov_check = is_sov_file(save_path)
                 logger.info(f"SOV check for {f.filename}: {sov_check}")
