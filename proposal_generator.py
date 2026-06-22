@@ -2637,9 +2637,74 @@ def generate_locations(doc, data):
     # --- Build master location list ---
     # _fuzzy_addr_match is now a module-level function (used by both generate_locations and generate_information_summary)
     
+    # --- SOV CROSS-CHECK: detect locations missing from the GL rating schedule ---
+    # Some carriers (e.g. Berkley) rate GL per location on gross sales but omit one or
+    # more SOV locations from the rating schedule. The blanket rules above would have
+    # marked every property location as liability-covered. When the GL is gross-sales
+    # rated and the schedule has FEWER rated hotel locations than the SOV, reconcile by
+    # matching each SOV location gross sales to a rated exposure; any SOV location with
+    # no matching exposure is flagged and NOT given a liability checkmark.
+    def _money_to_int(v):
+        try:
+            import re as _re
+            digits = _re.sub(r"[^0-9.]", "", str(v or ""))
+            if not digits:
+                return 0
+            return int(round(float(digits)))
+        except Exception:
+            return 0
+    _gl_missing_loc_keys = set()
+    _missing_liability_details = []
+    try:
+        _sov_locs = sov_data.get("locations", []) if sov_data else []
+        _gl_exposures = []
+        for _e in gl_classes:
+            if not isinstance(_e, dict):
+                continue
+            _cls = (_e.get("classification", "") or "").lower()
+            _code = str(_e.get("class_code", "") or "")
+            if not ("hotel" in _cls or "motel" in _cls or _code.startswith("4519")):
+                continue
+            _amt = _money_to_int(_e.get("exposure"))
+            if _amt > 0:
+                _gl_exposures.append(_amt)
+        # Only activate when the GL is gross-sales rated AND fewer rated hotel rows than SOV locations
+        if _sov_locs and _gl_exposures and len(_gl_exposures) < len(_sov_locs):
+            _remaining = list(_gl_exposures)
+            for _loc in _sov_locs:
+                _gs = _money_to_int(_loc.get("total_sales") or _loc.get("hotel_sales"))
+                _matched = False
+                if _gs > 0:
+                    _tol = max(2, int(_gs * 0.005))
+                    for _idx, _amt in enumerate(_remaining):
+                        if abs(_amt - _gs) <= _tol:
+                            _remaining.pop(_idx)
+                            _matched = True
+                            break
+                if not _matched:
+                    _akey = (_normalize_addr(_loc.get("address", "")) + "|" +
+                             _normalize_city(_loc.get("city", "")) + "|" +
+                             _normalize_state(_loc.get("state", "")))
+                    _gl_missing_loc_keys.add(_akey)
+                    _nm = (_loc.get("dba") or _loc.get("hotel_flag") or
+                           _loc.get("corporate_name") or "").strip()
+                    _missing_liability_details.append({
+                        "name": _nm, "address": _loc.get("address", ""),
+                        "city": _loc.get("city", ""), "state": _loc.get("state", ""),
+                    })
+            if _gl_missing_loc_keys:
+                logger.warning(
+                    f"SOV cross-check: {len(_gl_missing_loc_keys)} SOV location(s) not on GL rating "
+                    f"schedule ({len(_gl_exposures)} rated vs {len(_sov_locs)} SOV): "
+                    f"{[d['name'] or d['address'] for d in _missing_liability_details]}")
+    except Exception as _xc:
+        logger.warning(f"SOV cross-check skipped: {_xc}")
+    
     # Helper: check if an addr_key matches any key in liability_addr_keys using fuzzy matching
     def _is_on_liability(addr_key):
         """Check if addr_key is in liability_addr_keys, with fuzzy address matching."""
+        if addr_key in _gl_missing_loc_keys:
+            return False
         if addr_key in liability_addr_keys:
             return True
         # Fuzzy match: compare the street portion of the addr_key against all liability keys
@@ -3067,6 +3132,14 @@ def generate_locations(doc, data):
                 seen_addr_keys.add(addr_key)
 
     # Normalize ALL CAPS text in location data to title case
+    # Enforce SOV cross-check: locations missing from the GL schedule never get a liability check
+    if _gl_missing_loc_keys:
+        for _ml in master_locations:
+            _mlk = (_normalize_addr(_ml.get("address", "")) + "|" +
+                    _normalize_city(_ml.get("city", "")) + "|" +
+                    _normalize_state(_ml.get("state", "")))
+            if _mlk in _gl_missing_loc_keys:
+                _ml["on_liability"] = False
     for ml in master_locations:
         if ml["name"] and ml["name"] == ml["name"].upper() and len(ml["name"]) > 2:
             ml["name"] = _proper_case(ml["name"])
@@ -3172,6 +3245,30 @@ def generate_locations(doc, data):
             add_formatted_paragraph(doc, "", size=6)
             add_formatted_paragraph(doc, "See attached Statement of Values for complete property details.",
                                   size=9, italic=True, color=CHARCOAL)
+
+        # SOV cross-check: coverage-gap callout for locations missing from the GL quote
+        if _missing_liability_details:
+            add_formatted_paragraph(doc, "", size=6)
+            _gl_carrier_name = (gl_cov.get("carrier", "") or "").strip() or "the General Liability carrier"
+            _warn_p = doc.add_paragraph()
+            _warn_p.paragraph_format.space_before = Pt(4)
+            _warn_p.paragraph_format.space_after = Pt(2)
+            _wr = _warn_p.add_run("\u26A0 Coverage Gap \u2014 General Liability: ")
+            _wr.font.size = Pt(9)
+            _wr.font.bold = True
+            _wr.font.color.rgb = RGBColor(0xCC, 0x00, 0x00)
+            _names = "; ".join(
+                " ".join(p for p in [
+                    (d["name"] or "Location").strip(),
+                    "(" + ", ".join(x for x in [d["address"], d["city"], d["state"]] if x) + ")"
+                ] if p)
+                for d in _missing_liability_details)
+            _wr2 = _warn_p.add_run(
+                f"The following location(s) appear on the Statement of Values but were NOT found on "
+                f"the {_gl_carrier_name} liability rating schedule: {_names}. Confirm GL coverage "
+                f"for these location(s) with the carrier before binding.")
+            _wr2.font.size = Pt(9)
+            _wr2.font.color.rgb = RGBColor(0xCC, 0x00, 0x00)
     else:
         add_formatted_paragraph(doc, "Location schedule to be confirmed.", size=11)
 

@@ -195,6 +195,10 @@ COLUMN_MAP = {
 
     # Valuation
     "valuation": "valuation_per_sqft",
+    "total sales": "total_sales",
+    "gross sales": "total_sales",
+    "total revenue": "total_sales",
+    "hotel sales": "hotel_sales",
     "# of rooms": "num_rooms",
     "rooms": "num_rooms",
     "number of rooms": "num_rooms",
@@ -471,7 +475,7 @@ def parse_sov(file_path: str) -> dict:
     value_fields = {"building_value", "contents_value", "bi_value", "pool_value",
                     "sign_value", "other_value", "tiv", "aop_deductible",
                     "valuation_per_sqft", "flood_limit", "earthquake_limit",
-                    "total_losses_5yr"}
+                    "total_losses_5yr", "total_sales", "hotel_sales"}
     int_fields = {"location_num", "building_num", "stories", "year_built",
                   "square_footage", "num_rooms", "year_electrical", "year_plumbing",
                   "year_hvac", "roof_year"}
