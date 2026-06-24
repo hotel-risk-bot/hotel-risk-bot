@@ -1778,12 +1778,28 @@ def generate_information_summary(doc, data):
     ci = data.get("client_info", {})
     
     headers = ["Item", "Details"]
+    # Expiration Date is always Effective Date + 1 year (standard annual term).
+    # Do NOT use any carrier-extracted expiration (individual quotes can carry odd dates,
+    # e.g. 07/01/2027 instead of the program term end 06/30/2027).
+    _eff_raw = (ci.get("effective_date", "") or "").strip()
+    _exp_display = (ci.get("expiration_date", "") or "").strip()
+    if _eff_raw:
+        for _f in ("%B %d, %Y", "%b %d, %Y", "%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d", "%m/%d/%y", "%m-%d-%y"):
+            try:
+                _ed = datetime.datetime.strptime(_eff_raw, _f)
+                try:
+                    _xd = _ed.replace(year=_ed.year + 1)
+                except ValueError:
+                    _xd = _ed.replace(year=_ed.year + 1, day=_ed.day - 1)  # Feb 29 -> Feb 28
+                _exp_display = _xd.strftime("%B %d, %Y")
+                break
+            except (ValueError, TypeError):
+                continue
     rows = [
         ["First Named Insured", ci.get("named_insured", "")],
         ["Mailing Address", ci.get("address", "")],
-        ["Entity Type", ci.get("entity_type", "")],
         ["Effective Date", ci.get("effective_date", "")],
-        ["Expiration Date", ci.get("expiration_date", "")],
+        ["Expiration Date", _exp_display],
     ]
     if ci.get("dba"):
         rows.insert(1, ["DBA", _proper_case(ci["dba"])])
@@ -1987,13 +2003,21 @@ def generate_information_summary(doc, data):
     _gl_id_count = len(_gl_loc_ids) if _gl_loc_ids else 0
     # If GL IDs suggest more locations than we found by address matching, use GL count
     # because the extra GL locations may have location references instead of parseable addresses
-    if _gl_id_count > _merged_addr_count:
-        # GL has locations we couldn't match by address — compute: prop unique + GL-only delta
-        total_loc_count = max(_merged_addr_count, prop_loc_count + max(0, _gl_id_count - prop_loc_count))
-    else:
-        total_loc_count = _merged_addr_count if _merged_addr_count else max(prop_loc_count, liab_loc_count)
-    # Final check: total must be at least max(property, liability)
-    total_loc_count = max(total_loc_count, prop_loc_count, liab_loc_count)
+    # Anchor the total on RESOLVED physical premises (SOV/property + any real GL street
+    # addresses). Soft GL location identifiers (e.g. "Primary", multiple class lines for one
+    # premises) must NOT inflate the count: a single-location Berkley quote rated on two class
+    # rows previously reported 2 locations. Only genuine GL-only real addresses add to the total.
+    _prop_phys = max(prop_loc_count, len(_prop_unique_keys))
+    _gl_only_real = max(0, _merged_addr_count - len(_prop_unique_keys))
+    total_loc_count = _prop_phys + _gl_only_real
+    if total_loc_count <= 0:
+        # No physical signal at all — fall back to the best soft estimate.
+        total_loc_count = max(prop_loc_count, liab_loc_count, _gl_id_count)
+    # Invariant: GL cannot apply to more premises than the account actually has.
+    if total_loc_count > 0:
+        liab_loc_count = min(liab_loc_count, total_loc_count)
+    # Final check: total must be at least the property count.
+    total_loc_count = max(total_loc_count, prop_loc_count)
     if total_loc_count > 0:
         rows.append(["Total Number of Locations", str(total_loc_count)])
     if prop_loc_count > 0:
