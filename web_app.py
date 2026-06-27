@@ -1748,6 +1748,73 @@ def _build_review_summary(data):
     return summary
 
 
+# ─── Hotel Supplemental Application (SOV to PDF) ───
+
+_APPLICATION_FORM_HTML = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hotel Application Builder — HUB International</title>
+<style>
+  body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#0f1a28;color:#e8eef5;display:flex;min-height:100vh;align-items:center;justify-content:center}
+  .card{background:#16202f;border:1px solid #2b3a4f;border-radius:16px;max-width:560px;width:92%;padding:34px 34px 30px}
+  .brand{color:#0678d5;font-weight:700;letter-spacing:.04em;font-size:13px;text-transform:uppercase}
+  h1{margin:8px 0 6px;font-size:24px;color:#fff}
+  p.sub{color:#9fb0c3;font-size:14px;line-height:1.55;margin:0 0 22px}
+  .drop{border:1.5px dashed #3a4a61;border-radius:12px;padding:26px;text-align:center;background:#0f1a28;margin-bottom:18px}
+  .drop input{color:#cbd5e1;font-size:14px}
+  .hint{color:#6b7a8d;font-size:12.5px;margin-top:8px}
+  button{background:#0678d5;color:#fff;border:none;border-radius:10px;padding:13px 22px;font-size:15px;font-weight:600;cursor:pointer;width:100%}
+  button:hover{background:#0a86ea}
+  .note{color:#6b7a8d;font-size:12px;margin-top:16px;text-align:center}
+  ul{color:#b9c6d6;font-size:13px;line-height:1.5;margin:0 0 22px;padding-left:18px}
+</style></head>
+<body>
+  <form class="card" method="post" action="/application" enctype="multipart/form-data">
+    <div class="brand">HUB International</div>
+    <h1>Hotel Application Builder</h1>
+    <p class="sub">Upload a hospitality SOV (.xlsx) and download a pre-filled, client-signable Hotel Supplemental Application PDF.</p>
+    <ul>
+      <li>Single location or a full multi-location property schedule</li>
+      <li>Auto-fills business info, premises / pools / cooking / liquor detail, property values, and gross receipts</li>
+      <li>Includes a representation &amp; warranty signature block</li>
+    </ul>
+    <div class="drop">
+      <input type="file" name="sov" accept=".xlsx,.xlsm" required>
+      <div class="hint">Choose your Statement of Values workbook</div>
+    </div>
+    <button type="submit">Generate Hotel Application PDF</button>
+    <div class="note">The PDF downloads to this device. Nothing is stored on the server.</div>
+  </form>
+</body></html>"""
+
+
+@app.route("/application", methods=["GET"])
+def application_form():
+    return _APPLICATION_FORM_HTML
+
+
+@app.route("/application", methods=["POST"])
+def application_generate():
+    import tempfile
+    from sov_to_application import generate as _gen_application
+    f = request.files.get("sov")
+    if not f or not f.filename:
+        return ("Please choose an SOV .xlsx file.", 400)
+    if not f.filename.lower().endswith((".xlsx", ".xlsm")):
+        return ("Please upload an Excel .xlsx workbook.", 400)
+    tmpdir = tempfile.mkdtemp()
+    in_path = os.path.join(tmpdir, "sov.xlsx")
+    f.save(in_path)
+    base = os.path.splitext(os.path.basename(f.filename))[0]
+    out_name = base + " - Hotel Application.pdf"
+    out_path = os.path.join(tmpdir, out_name)
+    try:
+        _gen_application(in_path, out_path)
+    except Exception as e:
+        return ("Could not generate the application: %s" % e, 500)
+    return send_file(out_path, as_attachment=True, download_name=out_name, mimetype="application/pdf")
+
+
 # ─── Main ───
 
 if __name__ == "__main__":
