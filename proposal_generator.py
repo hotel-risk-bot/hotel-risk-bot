@@ -2050,12 +2050,22 @@ def generate_information_summary(doc, data):
     # addresses). Soft GL location identifiers (e.g. "Primary", multiple class lines for one
     # premises) must NOT inflate the count: a single-location Berkley quote rated on two class
     # rows previously reported 2 locations. Only genuine GL-only real addresses add to the total.
-    _prop_phys = max(prop_loc_count, len(_prop_unique_keys))
-    _gl_only_real = max(0, _merged_addr_count - len(_prop_unique_keys))
-    total_loc_count = _prop_phys + _gl_only_real
-    if total_loc_count <= 0:
-        # No physical signal at all — fall back to the best soft estimate.
-        total_loc_count = max(prop_loc_count, liab_loc_count, _gl_id_count)
+    # Total = count of DISTINCT physical premises. all_unique_keys already merges property
+    # (SOV) addresses with real GL street addresses using fuzzy dedup, so it is the
+    # authoritative deduped address count. Anchor on it. Do NOT add _prop_unique_keys and
+    # GL addresses separately — with no SOV, _prop_unique_keys is empty and the single
+    # location's own address (picked up from the GL schedule) would be double-counted as a
+    # phantom "GL-only" premises (Jay VMK: 1 real location reported as 2). Soft GL location
+    # identifiers must never inflate the total either (Windhover).
+    if _merged_addr_count > 0:
+        total_loc_count = max(_merged_addr_count, prop_loc_count)
+    elif prop_loc_count > 0:
+        # We know the physical location count but resolved no address keys — trust it and
+        # ignore soft GL identifiers / liability rating rows.
+        total_loc_count = prop_loc_count
+    else:
+        # GL-only account with no property signal — fall back to the best soft estimate.
+        total_loc_count = max(liab_loc_count, _gl_id_count)
     # Invariant: GL cannot apply to more premises than the account actually has.
     if total_loc_count > 0:
         liab_loc_count = min(liab_loc_count, total_loc_count)
