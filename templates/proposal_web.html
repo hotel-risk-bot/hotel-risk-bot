@@ -650,6 +650,30 @@
                 </div>
             </div>
 
+            <!-- Service Team -->
+            <div class="card">
+                <h2>&#129309; Service Team</h2>
+                <p style="font-size:0.8rem;color:var(--gray-500);margin:0 0 0.75rem;">Hotel Franchise Practice Leader (Stefan Burkey) and Senior Franchise Claims Advocate (Sheena Callazo) are always included.</p>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Account Executive</label>
+                        <select id="edit-account-executive" style="padding:0.5rem;border:1px solid var(--gray-300);border-radius:var(--radius);font-size:0.85rem;">
+                            <option value="maureen_harvey">Maureen Harvey, CIC, CRM</option>
+                            <option value="natalie_clements">Natalie Clements - Account Manager, Hotel Franchise</option>
+                            <option value="becca_hanes">Becca Hanes - Account Manager, Hotel Franchise</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Associate Account Manager</label>
+                        <select id="edit-associate-am" style="padding:0.5rem;border:1px solid var(--gray-300);border-radius:var(--radius);font-size:0.85rem;">
+                            <option value="">- None -</option>
+                            <option value="liam_omahoney">Liam O'Mahoney</option>
+                            <option value="jacob_morcos">Jacob Morcos</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
             <!-- Named Insureds -->
             <div class="card">
                 <h2>&#128101; Named Insureds</h2>
@@ -988,6 +1012,11 @@ function populateReview() {
     document.getElementById('edit-entity-type').value = ci.entity_type || '';
     document.getElementById('edit-address').value = ci.address || '';
     document.getElementById('edit-effective-date').value = ci.effective_date || '';
+    var _st = extractedData.service_team || {};
+    var _aeSel = document.getElementById('edit-account-executive');
+    if (_aeSel) _aeSel.value = _st.account_executive || 'maureen_harvey';
+    var _amSel = document.getElementById('edit-associate-am');
+    if (_amSel) _amSel.value = _st.associate_account_manager || '';
 
     // Named insureds
     renderNamedInsureds();
@@ -1726,6 +1755,11 @@ function syncVisualToData() {
     extractedData.client_info.entity_type = document.getElementById('edit-entity-type').value;
     extractedData.client_info.address = document.getElementById('edit-address').value;
     extractedData.client_info.effective_date = document.getElementById('edit-effective-date').value;
+    if (!extractedData.service_team) extractedData.service_team = {};
+    var _aeSel2 = document.getElementById('edit-account-executive');
+    if (_aeSel2) extractedData.service_team.account_executive = _aeSel2.value;
+    var _amSel2 = document.getElementById('edit-associate-am');
+    if (_amSel2) extractedData.service_team.associate_account_manager = _amSel2.value;
 
     // Sync expiring premiums into the data structure for the generator
     // The generator reads from 'expiring_premiums' directly, so ensure values are numeric

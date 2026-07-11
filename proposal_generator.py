@@ -153,6 +153,49 @@ SERVICE_TEAM = [
     }
 ]
 
+# Fixed Service Team members (always shown).
+SERVICE_TEAM_LEADER = {
+    "role": "Hotel Franchise Practice Leader",
+    "name": "Stefan Burkey",
+    "phone": "O: 407-636-8133\nM: 407-782-1900",
+    "email": "stefan.burkey@hubinternational.com",
+}
+SERVICE_TEAM_CLAIMS_ADVOCATE = {
+    "role": "Senior Franchise Claims Advocate",
+    "name": "Sheena Callazo, RPLU",
+    "phone": "O: 630-468-5674",
+    "email": "sheena.callazo@hubinternational.com",
+}
+# Selectable in the web UI before generating.
+ACCOUNT_EXECUTIVES = {
+    "maureen_harvey": {"role": "Account Executive", "name": "Maureen Harvey, CIC, CRM",
+        "phone": "O: 407-893-3830\nF: 407-831-3063", "email": "maureen.harvey@hubinternational.com"},
+    "natalie_clements": {"role": "Account Manager - Hotel Franchise", "name": "Natalie Clements",
+        "phone": "O: 312-429-2310", "email": "natalie.clements@hubinternational.com"},
+    "becca_hanes": {"role": "Account Manager - Hotel Franchise", "name": "Becca Hanes",
+        "phone": "O: 708-931-7815", "email": "becca.hanes@hubinternational.com"},
+}
+ASSOCIATE_ACCOUNT_MANAGERS = {
+    "liam_omahoney": {"role": "Associate Account Manager", "name": "Liam O'Mahoney",
+        "phone": "O: 312-596-7542", "email": "liam.omahony@hubinternational.com"},
+    "jacob_morcos": {"role": "Associate Account Manager", "name": "Jacob Morcos",
+        "phone": "O: 312-279-4758", "email": "jacob.morcos@hubinternational.com"},
+}
+
+def _build_service_team(data):
+    """Assemble Service Team rows from web-UI selections. Leader (Stefan) and Claims
+    Advocate (Sheena) are always included; Account Executive is selectable and an
+    Associate Account Manager is optional."""
+    st = (data.get("service_team") or {}) if isinstance(data, dict) else {}
+    ae_id = (st.get("account_executive") or "maureen_harvey").strip()
+    ae = ACCOUNT_EXECUTIVES.get(ae_id, ACCOUNT_EXECUTIVES["maureen_harvey"])
+    team = [SERVICE_TEAM_LEADER, ae]
+    assoc = ASSOCIATE_ACCOUNT_MANAGERS.get((st.get("associate_account_manager") or "").strip())
+    if assoc:
+        team.append(assoc)
+    team.append(SERVICE_TEAM_CLAIMS_ADVOCATE)
+    return team
+
 OFFICE_LOCATIONS = [
     "HUB International Midwest Limited — 203 N LaSalle, Suite 2000, Chicago, IL 60601",
 ]
@@ -1031,7 +1074,7 @@ def generate_service_team(doc, data):
     
     headers = ["Role", "Name", "Phone", "Email"]
     rows = []
-    for member in SERVICE_TEAM:
+    for member in _build_service_team(data):
         rows.append([member["role"], member["name"], member["phone"], member["email"]])
     
     create_styled_table(doc, headers, rows, col_widths=[1.8, 1.6, 1.4, 2.7],
