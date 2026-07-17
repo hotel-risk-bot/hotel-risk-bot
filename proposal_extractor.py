@@ -167,6 +167,11 @@ def _score_page(page_text: str) -> float:
         "BUILDING DESCRIPTION",
         "ADDITIONAL COVERAGES INCLUDED",
         "POLICY COVERAGES",
+        "CONTINUITY DATE",
+        "PRIOR AND PENDING",
+        "EXTENDED REPORTING PERIOD",
+        "FORMS AND ENDORSEMENTS ATTACHED",
+        "ATTACH AND FORM PART",
         "EXCESS LIABILITY POLICY",
         "ATTACHING EXCESS",
         "UNDERLYING LIMITS",
@@ -1158,6 +1163,13 @@ def _is_liability_form_by_description(f: dict) -> bool:
     return any(kw in desc for kw in _LIABILITY_DESCRIPTION_KEYWORDS)
 
 
+# Forms that must ALWAYS survive the property cleaner even though their prefix or
+# description matches a reject rule. Carrier property quotes (e.g. Starr) legitimately
+# attach IL common-policy forms: IL 00 17 (Common Policy Conditions) and IL P 001
+# (OFAC Advisory Notice) appear on the property quote's own attachment schedule.
+_PROPERTY_FORM_ALLOWLIST = ("IL 00 17", "IL0017", "IL 0017", "IL P 001", "ILP001", "IL P001")
+
+
 def _clean_property_forms_endorsements(forms: list) -> list:
     """Strip non-property forms from a property forms_endorsements list. Filters by:
        (a) form_number prefix against _NONPROPERTY_FORM_PREFIXES,
@@ -1171,6 +1183,10 @@ def _clean_property_forms_endorsements(forms: list) -> list:
             cleaned.append(f)
             continue
         fn = str(f.get("form_number") or "").upper().strip()
+        # Allowlist check — property-legit forms that would otherwise be rejected
+        if fn and any(fn.startswith(p) for p in _PROPERTY_FORM_ALLOWLIST):
+            cleaned.append(f)
+            continue
         # Prefix check
         if fn and any(fn.startswith(p) for p in _NONPROPERTY_FORM_PREFIXES):
             continue
@@ -1623,6 +1639,9 @@ The JSON structure should be:
       "notable_endorsements": [
         {{"description": "Endorsement name", "detail": "Coverage detail (e.g. Yes - absolute language, Excluded, Sublimited)"}}
       ],
+      "continuity_date": "Continuity Date exactly as shown, incl. separate Wrongful Employment Practices / Third Party dates if listed",
+      "prior_pending_date": "Prior and Pending Proceeding Date exactly as shown, incl. separate dates if listed",
+      "extended_reporting_period": "Liability Coverage Extended Reporting Period terms (e.g. 75% additional premium / 12 additional months)",
       "forms_endorsements": [],
       "subjectivities": []
     }}
@@ -1695,6 +1714,8 @@ IMPORTANT:
 - For General Liability limits: Extract ALL limits of liability listed on the quote, not just the standard 6 CGL limits. Many hotel GL policies include additional limits for Employee Benefits (Each Claim and Aggregate), Sexual Abuse (Each Act and Aggregate), Hired & Non-Owned Auto, and Assault & Battery (Each Event and Aggregate). Include EVERY limit line item shown on the carrier quote in the "limits" array. Also extract the ACTUAL dollar amounts from the quote - do not use defaults like $100,000 for Damage to Rented Premises or $5,000 for Medical Payments if the quote shows different amounts.
 - For General Liability total_sales and schedule_of_classes exposure: The "total_sales" field must contain the ACTUAL total gross sales figure from the quote's rate basis line. Look for text like "Per $1,000 Gross Sales ($X)" or "Gross Sales: $X" and extract $X as total_sales. Do NOT fabricate or estimate per-class exposure amounts in schedule_of_classes - if the quote does not show individual per-class exposure breakdowns, leave the exposure field empty for each class entry. The total_sales field is the authoritative source for the Information Summary.
 - For EPLI / Employment Practices Liability / Management Liability (ProEx): Extract as coverage_type "epli". ProEx Management Liability proposals from carriers like Coalition, Travelers, or Hartford contain EPL coverage. Look for "Employment Practices", "EPL", "EPLI", "Management Liability", or "ProEx" in the document. Extract the carrier name, AM Best rating, premium, surplus lines tax, total_premium (premium + SLT only, no broker fees), defense provisions (Duty to Defend or Non-Duty to Defend), aggregate limit, third-party discrimination/harassment sublimit, additional defense limit, retention per claim, and all sublimits (wage & hour, workplace violence, immigration, WARN Act, biometric, employee privacy). Also extract notable endorsements like "Bodily Injury & Property Damage Exclusion" or "Physical or Sexual Abuse Exclusion" with their coverage detail (e.g., "Yes - absolute language"). CRITICAL: The ProEx/Management Liability PDF is a SEPARATE coverage from General Liability — do NOT merge EPLI data into the GL section.
+- EPLI CLAIMS-MADE DATES (ALWAYS extract when EPLI is present): "continuity_date" and "prior_pending_date" from the Declarations — Travelers EPL-2001 ITEM 5 shows "Prior and Pending Proceeding Date:" and "Continuity Date:" lines; capture the FULL text including separate "Claims for Wrongful Employment Practices" and "Claims for Third Party Wrongful Acts" dates. Also "extended_reporting_period" from ITEM 8 "LIABILITY COVERAGE EXTENDED REPORTING PERIOD" — capture the additional premium percentage and additional months (e.g. "75% additional premium / 12 additional months").
+- EPLI FORMS PAIRING: Travelers-style declarations list forms in ITEM 11 "FORMS AND ENDORSEMENTS ATTACHED AT ISSUANCE" as semicolon-separated numbers like "LIA-19182-0724" (= form LIA-19182, edition 07-24). Pair EVERY listed number with the endorsement TITLE from the policy body — each attached endorsement shows a centered heading (e.g. "AMEND SETTLEMENT CONDITION ENDORSEMENT") with the form number in that page's footer ("LIA-19182 Ed. 07-24"). Emit {{"form_number": "LIA-19182 07-24", "description": "Amend Settlement Condition Endorsement"}} in epli.forms_endorsements. Never leave descriptions empty when the endorsement pages are present in the document.
 - For ALL coverage types subjectivities: This section is CRITICAL. Extract ALL conditions, subjectives, binding requirements, and binding conditions listed in the quote. These are often on a page titled "CONDITIONS & SUBJECTIVES", "BINDING REQUIREMENTS", "BINDING SUBJECTIVITIES", or "BINDING CONDITIONS". Each bullet point or numbered item should be a separate string in the subjectivities array. Include items like: loss control report requirements, certificates of insurance requirements, named insured confirmation, application requirements, ACORD application deadlines, terrorism form requirements, payment of state taxes, inspection/audit contact requirements, and any other conditions the carrier requires before or after binding. Do NOT skip or summarize - extract each condition verbatim as written in the quote.
 - For named_insureds: Extract each named insured as an object with "name" and "dba" fields. Do NOT repeat the same entity twice (case-insensitive). If a named insured has a DBA or trade name EXPLICITLY listed in the quote (e.g., "Q Hotels Management LLC DBA Best Western"), split into name="Q Hotels Management LLC" and dba="Best Western". CRITICAL RULES: (1) Only include DBAs that are EXPLICITLY written as "DBA", "d/b/a", or "doing business as" in the documents. (2) Do NOT infer DBAs from hotel brand names, location names, or SOV entries. (3) Do NOT fabricate entity names like "Cajun Lodging LLC" unless that exact name appears in the quote documents. (4) If a named insured appears as "Q HOTEL MANAGEMENT, LLC" in ALL CAPS, extract it exactly as written - the generator will handle proper case formatting. (5) Do NOT create separate named insured entries for each hotel brand - those are locations, not named insureds.
 - For additional_named_insureds: CRITICAL - Search ALL pages thoroughly for "Additional Named Insured", "Additional Named Insureds Schedule", "Named Insured Schedule", or similar headings. These are often on a SEPARATE PAGE listing 5-15+ entities (LLCs, management companies with DBAs). You MUST extract EVERY SINGLE entity listed - do NOT stop early or truncate. Count the entities and verify your count matches the document. Each entity is typically an LLC with a DBA hotel brand name (e.g., "PORT PLAZA HOTEL LLC DBA HOME2SUITES BY HILTON"). Extract each one as {{name: "LLC name", dba: "brand name"}}. Do NOT duplicate entities already in named_insureds.
@@ -3008,9 +3029,10 @@ TEXT:
             "umbrella_layer_2": 20,
             "umbrella_layer_3": 20,
             "crime": 5,
+            "epli": 8,                # Travelers EPL dec ITEM 11 lists 30+ forms
         }
         needs_forms = []
-        for key in ["property", "general_liability", "umbrella", "umbrella_layer_2", "umbrella_layer_3", "crime"]:
+        for key in ["property", "general_liability", "umbrella", "umbrella_layer_2", "umbrella_layer_3", "crime", "epli"]:
             cov = covs.get(key, {})
             if not cov or not cov.get("carrier"):
                 continue
@@ -3030,7 +3052,8 @@ TEXT:
         coverage_display = {
             "property": "Property", "general_liability": "General Liability",
             "umbrella": "Umbrella/Excess Layer 1", "umbrella_layer_2": "Excess Layer 2",
-            "umbrella_layer_3": "Excess Layer 3", "crime": "Crime/Fidelity"
+            "umbrella_layer_3": "Excess Layer 3", "crime": "Crime/Fidelity",
+            "epli": "Employment Practices Liability (EPLI)"
         }
         
         for cov_key in needs_forms:
@@ -3048,6 +3071,10 @@ TEXT:
                 "EXL ", "HS XS", "HS IL", "CX 00", "CX 21",
                 "PR 0", "PR 9", "SSPN", "NMA", "LMA", "Starr", "6133",
                 "form number", "endorsement", "form name", "edition", "coverage line",
+                "attach and form part", "Additional Endorsements",
+                "FORMS AND ENDORSEMENTS ATTACHED",
+                "LIA-", "EPL-", "AFE-", "ACF-",
+                "THIS ENDORSEMENT CHANGES THE POLICY",
                 carrier.split()[0] if carrier else "",
                 display.lower()
             ]
@@ -3081,6 +3108,31 @@ TEXT:
                     "COVERAGE ENHANCEMENT ENDORSEMENT",
                 ]
             relevant_text = self._extract_relevant_sections(combined_text, forms_keywords, context_chars=25000)
+
+            # Patch Y: bias extraction toward the coverage's OWN source file.
+            # In multi-quote submissions the keyword windows are dominated by
+            # whichever file mentions "endorsement"/"form" most, so the target
+            # carrier's full schedule (e.g. Starr's lettered a.-rrr. attachment
+            # list spanning 3 pages) gets clipped. Find the FILE block that
+            # mentions this coverage's carrier the most and prepend it whole.
+            try:
+                _carrier_token = (carrier.split()[0] if carrier and carrier != "unknown" else "").lower().strip(",.")
+                if _carrier_token and len(_carrier_token) >= 4:
+                    _blocks = re.split(r"\n={10,}\nFILE:\s*", combined_text)
+                    _best_blk = None
+                    _best_ct = 0
+                    for _blk in _blocks[1:]:
+                        _ct = _blk.lower().count(_carrier_token)
+                        if _ct > _best_ct:
+                            _best_ct, _best_blk = _ct, _blk
+                    if _best_blk and _best_ct >= 2:
+                        _best_cap = _best_blk[:60000]
+                        relevant_text = ("FILE: " + _best_cap +
+                                         "\n\n--- ADDITIONAL CONTEXT ---\n\n" + relevant_text)
+                        logger.info(f"Pass 2: prepended source-file block for {cov_key} "
+                                    f"(carrier token '{_carrier_token}' x{_best_ct}, {len(_best_cap)} chars)")
+            except Exception as _sf_err:
+                logger.warning(f"Pass 2 source-file bias failed for {cov_key}: {_sf_err}")
 
             # For umbrella, build an extended prompt that tells GPT to capture
             # plain-text exclusion names (no form code) as forms_endorsements
@@ -3143,6 +3195,19 @@ Rules:
 - Do NOT skip any forms even if the list is very long
 - Include standard forms (e.g., CP 00 10, CG 00 01) AND manuscript/carrier-specific forms
 - For NASC/NXLL/CSXC forms, include the full number and description
+- LETTERED ATTACHMENT SCHEDULES: carrier quotes (e.g. Starr) often list endorsements as a
+  LETTERED list ("The following Endorsements/Additional Endorsements will attach and form
+  part of the policy" with items a., b., ... z., aa., bb., ... zzz.) where the DESCRIPTION
+  is on the left and the FORM NUMBER on the right (e.g. "Backup of Sewers and Drains  PR 913").
+  These schedules frequently contain 50-80 endorsements and CONTINUE ACROSS PAGE BREAKS —
+  extract EVERY lettered item through the very last one. Do NOT stop after the first page
+  of the schedule.
+- CLAIMS-MADE DEC FORM LISTS (Travelers EPLI etc.): ITEM 11 "FORMS AND ENDORSEMENTS ATTACHED
+  AT ISSUANCE" lists semicolon-separated numbers like "LIA-19182-0724" (= form LIA-19182,
+  edition 07-24). Pair EVERY number with the endorsement TITLE from the policy body — each
+  attached endorsement has a centered heading (e.g. "AMEND SETTLEMENT CONDITION ENDORSEMENT")
+  and its form number in the page footer ("LIA-19182 Ed. 07-24"). Emit
+  {{"form_number": "LIA-19182 07-24", "description": "Amend Settlement Condition Endorsement"}}.
 
 Return a JSON object with exactly one key:
 {{"forms_endorsements": [{{"form_number": "...", "description": "..."}}]}}

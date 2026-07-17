@@ -3447,7 +3447,24 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     defense = cov.get("defense_basis", "")
     if defense and defense not in ("N/A", ""):
         carrier_rows.append(["Defense Basis", defense])
-    
+
+    # Claims-made / EPLI details (Patch Y): defense provisions, continuity date,
+    # prior & pending proceeding date, extended reporting period. Rendered for
+    # ANY coverage that carries these fields (EPLI, D&O, fiduciary, cyber).
+    for _cm_key, _cm_label in (("defense_provisions", "Defense Provisions"),
+                               ("continuity_date", "Continuity Date"),
+                               ("prior_pending_date", "Prior & Pending Proceeding Date"),
+                               ("extended_reporting_period", "Extended Reporting Period")):
+        _cm_val = cov.get(_cm_key, "")
+        if isinstance(_cm_val, dict):
+            _cm_val = "; ".join(f"{k}: {v}" for k, v in _cm_val.items() if v)
+        elif isinstance(_cm_val, list):
+            _cm_val = "; ".join(str(x) for x in _cm_val if x)
+        if isinstance(_cm_val, str):
+            _cm_val = _cm_val.strip()
+            if _cm_val and _cm_val.upper() not in ("N/A", "NONE", "NOT APPLICABLE"):
+                carrier_rows.append([_cm_label, _cm_val])
+
     L = WD_ALIGN_PARAGRAPH.LEFT
     create_styled_table(doc, ["Item", "Details"], carrier_rows, col_widths=[2.5, 5.0],
                        header_size=10, body_size=10,
