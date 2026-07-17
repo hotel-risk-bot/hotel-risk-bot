@@ -1365,6 +1365,12 @@ def generate_premium_summary(doc, data):
                                       col_widths=[2.0, 2.5, 1.5],
                                       header_size=10, body_size=10,
                                       col_alignments=[None, None, WD_ALIGN_PARAGRAPH.RIGHT])
+        add_formatted_paragraph(doc,
+            "The recommended optional coverages shown above are presented for your "
+            "consideration only; no coverage is bound and no quotes have been ordered. "
+            "If you are interested in obtaining quotes for any of these coverages, "
+            "please submit your request to your HUB International service team in writing.",
+            size=9, italic=True, color=CHARCOAL, space_before=4, space_after=6)
     
     add_formatted_paragraph(doc, "", space_before=6)
     add_callout_box(doc,
@@ -2278,6 +2284,13 @@ def _normalize_addr(s):
     word_replacements = {
         "MOUNT": "MT", "SAINT": "ST", "FORT": "FT",
         "TOWNSHIP": "TWP", "COUNTY": "CTY", "INTERSTATE": "I",
+        # Directionals MUST be replaced at word level, not substring level.
+        # Substring replacement corrupts compounds: " SOUTH" fires inside
+        # " SOUTHWEST" first, producing "SWEST" ("3580 Southwest 38th Ave"
+        # vs "3580 SW 38th Ave" then fails dedup and duplicates the location).
+        "NORTH": "N", "SOUTH": "S", "EAST": "E", "WEST": "W",
+        "NORTHWEST": "NW", "NORTHEAST": "NE",
+        "SOUTHWEST": "SW", "SOUTHEAST": "SE",
     }
     words = s.split()
     words = [word_replacements.get(w, w) for w in words]
@@ -2288,9 +2301,6 @@ def _normalize_addr(s):
         " DRIVE": " DR", " ROAD": " RD", " LANE": " LN",
         " COURT": " CT", " PLACE": " PL", " CIRCLE": " CIR",
         " HIGHWAY": " HWY", " PARKWAY": " PKWY", " TERRACE": " TER",
-        " NORTH": " N", " SOUTH": " S", " EAST": " E", " WEST": " W",
-        " NORTHWEST": " NW", " NORTHEAST": " NE", " SOUTHWEST": " SW",
-        " SOUTHEAST": " SE",
     }
     for old, new in replacements.items():
         s = s.replace(old, new)
@@ -2317,8 +2327,10 @@ def _normalize_addr(s):
         s = _re_norm.sub(r"\b" + state_name + r"\b", state_abbr, s)
     # Strip trailing country names
     s = _re_norm.sub(r"\s+(UNITED STATES|USA|US)\s*$", "", s)
-    # Strip trailing zip codes (5-digit or 5+4)
-    s = _re_norm.sub(r'\s+\d{5}(-\d{4})?\s*$', '', s)
+    # Strip trailing zip codes (5-digit or 5+4). The +4 separator may be a
+    # space here because dashes were replaced with spaces above ("34474-9999"
+    # arrives as "34474 9999") — without this, ZIP+4 addresses never dedup.
+    s = _re_norm.sub(r'\s+\d{5}([-\s]\d{4})?\s*$', '', s)
     s = " ".join(s.split())
     return s
 
@@ -4145,7 +4157,17 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                         continue
                     if _loc_id and _loc_id not in ("", "n/a", "all", "various"):
                         _gl_loc_ids.add(_loc_id)
-            _loc_count = max(len(_gl_loc_ids), len(_gl_premises))
+            # Dedup designated_premises before counting — carrier files can list
+            # the same premises with address variants/typos (e.g. "3580 SW 38th
+            # Avenue" vs "3580 SW 39th Avenue, ... 34474-9999" on the same hotel).
+            _dp_norms = []
+            for _dp in _gl_premises:
+                if not isinstance(_dp, str) or len(_dp.strip()) < 5:
+                    continue
+                _dpn = _normalize_addr(_dp)
+                if not any(_dpn == _x or _fuzzy_addr_match(_dpn, _x) for _x in _dp_norms):
+                    _dp_norms.append(_dpn)
+            _loc_count = max(len(_gl_loc_ids), len(_dp_norms))
         if _loc_count > 0:
             add_formatted_paragraph(doc,
                 f"Schedule of Locations: {_loc_count} locations are covered under this policy. "
