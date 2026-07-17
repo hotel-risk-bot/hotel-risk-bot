@@ -1021,6 +1021,15 @@ _NONPROPERTY_FORM_PREFIXES = (
     "EPL", "CYB", "WPA", "EP1", "FLSL", "SSIC", "FUT-SS", "FUT SS", "GL STATE",
     # Umbrella / Excess
     "CSXC", "EXL ", "HS XS", "FUT ", "XS ", "CX ",
+    # Ascot Specialty GL — CGA/CGC/CGL series (e.g. CGA 418 Human Trafficking
+    # Exclusion, CGA HOS E0xx hospitality exclusions, CGC 004 OFAC, CGA DEC)
+    # and Ascot admin/notice forms that ride the GL quote
+    "CGA", "CGC", "CGL",
+    "ASIC INT", "INT N0", "INT CN",
+    # AmTrust complimentary cyber package that rides GL quotes (CY99xx policy /
+    # endorsements, CYDEC dec page, MKT marketing sheets, ILSIG signature dec,
+    # PN99 policyholder notices)
+    "CY99", "CYDEC", "MKT", "ILSIG", "PN99",
 )
 
 
@@ -1050,6 +1059,26 @@ _NONUMBRELLA_FORM_PREFIXES = (
     "CA ", "CA-",
     "LL ", "LL-", "LL FLIQL",
     "EPL", "CYB", "WPA",
+    # Ascot Specialty GL series + admin notices (see property list above)
+    "CGA", "CGC", "CGL",
+    "ASIC INT", "INT N0", "INT CN",
+    # AmTrust complimentary cyber package
+    "CY99", "CYDEC", "MKT", "ILSIG", "PN99",
+)
+
+
+# Description keywords that reject a form from PROPERTY forms only. These are kept
+# separate from _LIABILITY_DESCRIPTION_KEYWORDS because umbrella/excess quotes
+# legitimately carry their own versions of these exclusions (Abuse or Molestation,
+# Human Trafficking, Assault and Battery) and must NOT have them stripped.
+_PROPERTY_ONLY_REJECT_KEYWORDS = (
+    "human trafficking",
+    "trafficking and violence protection",
+    "abuse or molestation",
+    "assault and battery",
+    "innkeeper liability",
+    "amtrustcyber",
+    "liquor liability",
 )
 
 
@@ -1148,6 +1177,11 @@ def _clean_property_forms_endorsements(forms: list) -> list:
         # Description check (catches descriptive form_numbers and rare prefixes)
         if _is_liability_form_by_description(f):
             continue
+        # Property-only description check (liability exclusions that umbrella
+        # quotes legitimately carry but property never does)
+        _desc_l = str(f.get("description") or "").lower()
+        if _desc_l and any(kw in _desc_l for kw in _PROPERTY_ONLY_REJECT_KEYWORDS):
+            continue
         cleaned.append(f)
     return cleaned
 
@@ -1171,6 +1205,38 @@ def _clean_umbrella_forms_endorsements(forms: list) -> list:
             continue
         cleaned.append(f)
     return cleaned
+
+
+def _dedup_forms_endorsements(forms: list) -> list:
+    """Collapse duplicate forms listed twice on the same quote — typically once
+    plain and once with an edition date ('PR 002' vs 'PR 002 (03/23)'). Merges
+    ONLY when the descriptions match exactly (case/whitespace-insensitive) and one
+    compacted form number is a prefix of the other; keeps the longer, more
+    specific number. Safe for all coverage types."""
+    if not isinstance(forms, list) or len(forms) < 2:
+        return forms if isinstance(forms, list) else (forms or [])
+    import re as _re_d
+    kept = []  # entries: [compact_number, normalized_desc, form_dict]
+    for f in forms:
+        if not isinstance(f, dict):
+            kept.append([None, None, f])
+            continue
+        num = str(f.get("form_number") or "").upper()
+        compact = _re_d.sub(r'[^A-Z0-9]', '', num)
+        desc_l = " ".join(str(f.get("description") or "").lower().split())
+        merged = False
+        for entry in kept:
+            c2, d2 = entry[0], entry[1]
+            if not compact or not c2 or d2 != desc_l:
+                continue
+            if compact.startswith(c2) or c2.startswith(compact):
+                if len(compact) > len(c2):
+                    entry[0], entry[2] = compact, f
+                merged = True
+                break
+        if not merged:
+            kept.append([compact, desc_l, f])
+    return [e[2] for e in kept]
 
 
 EXTRACTION_SYSTEM_PROMPT = """You are an expert insurance data extraction assistant specializing in hotel and hospitality insurance. You extract structured data from insurance quote documents.
@@ -2839,6 +2905,20 @@ TEXT:
                                 f"(stripped {len(_f) - len(_c)} non-umbrella entries)"
                             )
                             _ucov["forms_endorsements"] = _c
+                # Patch X: collapse duplicate form listings (plain + edition-dated)
+                # across ALL coverages — quotes often list the same form twice.
+                for _ckey, _ccov in _covs.items():
+                    if not isinstance(_ccov, dict):
+                        continue
+                    _f = _ccov.get("forms_endorsements") or []
+                    if isinstance(_f, list) and len(_f) > 1:
+                        _d = _dedup_forms_endorsements(_f)
+                        if len(_d) != len(_f):
+                            logger.info(
+                                f"Patch X dedup ({_ckey}): {len(_f)} -> {len(_d)} forms "
+                                f"(merged {len(_f) - len(_d)} duplicate listings)"
+                            )
+                            _ccov["forms_endorsements"] = _d
             except Exception as _cleanup_err:
                 logger.warning(f"Patch M forms cleanup failed (non-fatal): {_cleanup_err}")
 
