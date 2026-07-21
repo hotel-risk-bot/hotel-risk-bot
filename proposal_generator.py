@@ -838,6 +838,10 @@ HIGH_RISK_EXCLUSION_KEYWORDS = [
     "assault and battery",
     "assault & battery",
     "assault/battery",
+    # Patch AB (Stefan 2026-07-21): flag these on liability/umbrella forms too
+    "total pollution",
+    "employment related practices exclusion",
+    "employment-related practices exclusion",
 ]
 HIGHLIGHT_YELLOW_HEX = "FFFF00"
 
@@ -3895,6 +3899,20 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     if coinsurance or valuation:
         add_subsection_header(doc, "Coinsurance & Valuation")
         headers = ["Coverage", "Coinsurance / Limitation"]
+        # Patch AB: when the quote carries an Agreed Amount Endorsement, the
+        # coinsurance percentage is superseded — show "Agreed Amount (via
+        # endorsement)" instead of a bare percentage.
+        _has_agreed_amount = False
+        for _aa_src in (cov.get("forms_endorsements", []) or [],
+                        cov.get("policy_attachments", []) or []):
+            for _aa_f in _aa_src:
+                _aa_txt = (_aa_f.get("description", "") if isinstance(_aa_f, dict) else str(_aa_f)) or ""
+                if "agreed amount" in _aa_txt.lower():
+                    _has_agreed_amount = True
+                    break
+            if _has_agreed_amount:
+                break
+        import re as _re_coin
         rows = []
         for ci in coinsurance:
             if isinstance(ci, dict):
@@ -3902,6 +3920,8 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                 pct = ci.get("percentage", "")
                 limitation = ci.get("limitation", "")
                 val = limitation if limitation else pct
+                if val and _has_agreed_amount and _re_coin.match(r'^\s*\d{1,3}\s*%\s*$', str(val)):
+                    val = "Agreed Amount (via endorsement)"
                 if val:
                     rows.append([cov_name, val])
         if valuation:
@@ -4136,6 +4156,37 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     # ── Policy Attachments (property-specific) ────────────────────────────
     if coverage_key in ("property", "property_alt_1", "property_alt_2"):
         _attachments = cov.get("policy_attachments", []) or []
+        # Patch AB: drop attachments that duplicate the Forms & Endorsements
+        # schedule. Starr quotes list every endorsement BOTH as a numbered
+        # attachment (1-68) and in the forms schedule — duplicated wording
+        # adds length and confusion. Keep only genuinely non-form notes
+        # (e.g. "Boiler & Machinery is included").
+        if _attachments:
+            import re as _re_att
+            def _att_norm(_s):
+                return _re_att.sub(r'\s+', ' ', _re_att.sub(r'[^a-z0-9 ]', ' ', str(_s).lower())).strip()
+            _form_descs = set()
+            for _f in (cov.get("forms_endorsements", []) or []):
+                if isinstance(_f, dict):
+                    _fd = _att_norm(_f.get("description", ""))
+                    if _fd:
+                        _form_descs.add(_fd)
+            def _dup_of_form(_att):
+                _a = _att_norm(_att)
+                if not _a:
+                    return True
+                if _a in _form_descs:
+                    return True
+                for _d in _form_descs:
+                    if len(_a) >= 8 and len(_d) >= 8 and (_a in _d or _d in _a):
+                        return True
+                return False
+            _kept_atts = [att for att in _attachments if not _dup_of_form(att)]
+            if len(_kept_atts) != len(_attachments):
+                logger.info(f"Policy Attachments ({coverage_key}): dropped "
+                            f"{len(_attachments) - len(_kept_atts)} of {len(_attachments)} "
+                            f"rows duplicated in Forms & Endorsements")
+            _attachments = _kept_atts
         if _attachments:
             add_subsection_header(doc, "Policy Attachments")
             _a_headers = ["#", "Attachment"]
