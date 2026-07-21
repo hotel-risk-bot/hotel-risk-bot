@@ -160,6 +160,18 @@ COLUMN_MAP = {
     "tiv": "tiv",
     "total insured value": "tiv",
     "*total tiv": "tiv",
+    # Pipeline/SmartSuite SOV columns that must NOT claim value fields.
+    # Column mapping is first-column-wins, and these headers appear BEFORE the
+    # real limit columns — without explicit entries, "# of Pools" (=1) claims
+    # pool_value via the "pools" partial match, "Other Payroll" claims
+    # other_value via "other", and "LRO (Sqft)" claims square_footage via
+    # "sqft". On a liability-only SOV with empty Building/TIV columns, the
+    # stray pool "1" then becomes the computed TIV ($1/location, $2 total).
+    "# of pools": "num_pools",
+    "number of pools": "num_pools",
+    "other payroll": "other_payroll",
+    "lro (sqft)": "lro_sqft",
+    "lro sqft": "lro_sqft",
 
     # Construction details
     "occupancy description": "occupancy",

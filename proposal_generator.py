@@ -1971,7 +1971,17 @@ def generate_information_summary(doc, data):
             # Single-property quotes with a TIV but no breakdown count as 1
             if prop_loc_count == 0 and _parse_currency(_prop_cov.get("tiv", 0)) > 0:
                 prop_loc_count = 1
-    
+
+    # Patch AA: an SOV upload does NOT mean property coverage exists. On
+    # liability-only accounts (GL + umbrella quoted, no property placement),
+    # the SOV locations must not be reported as Property Locations.
+    _has_property_cov_summary = any(
+        isinstance(coverages.get(_pk), dict) and str(coverages.get(_pk, {}).get("carrier") or "").strip()
+        for _pk in ("property", "excess_property", "excess_property_2")
+    )
+    if not _has_property_cov_summary:
+        prop_loc_count = 0
+
     # Count liability locations from schedule_of_classes (skip non-physical entries)
     _skip_gl_classes = {"hired auto", "non-owned auto", "loss control", "package store",
                         "category vi", "liquor", "sundry", "flat"}
@@ -2152,9 +2162,13 @@ def generate_information_summary(doc, data):
     
     # Second: supplement from GL schedule_of_classes (only PHYSICAL location entries)
     # Skip non-location exposure classes
+    # Patch AA: when an SOV exists it is AUTHORITATIVE for physical locations —
+    # do NOT supplement from GL classes. GPT-extracted GL class rows often carry
+    # the MAILING address, which fuzzy-dedup can't match to any SOV location and
+    # therefore counts as a phantom extra hotel (Lakeland: "3 Hotel(s)" for 2).
     _skip_classes = {"hired auto", "non-owned auto", "loss control", "package store",
                      "category vi", "liquor", "sundry", "flat"}
-    if isinstance(gl_cov, dict):
+    if isinstance(gl_cov, dict) and not (sov_data and sov_data.get("locations")):
         for entry in gl_cov.get("schedule_of_classes", []):
             if isinstance(entry, dict):
                 addr = _normalize_addr(entry.get("address", "") or entry.get("location", ""))
@@ -2191,14 +2205,16 @@ def generate_information_summary(doc, data):
         rows.append(["Location Types", ", ".join(type_parts)])
     
     # Add TIV from SOV or property quote
+    # Patch AA: require TIV > 1 — junk values like $1/$2 (from a mis-mapped SOV
+    # column) or liability-only SOVs with no property values must not render.
     _tiv_added = False
-    if sov_data and sov_data.get("totals", {}).get("tiv"):
+    if sov_data and (sov_data.get("totals", {}).get("tiv") or 0) > 1:
         rows.append(["Total Insured Value (TIV)", fmt_currency(sov_data["totals"]["tiv"])])
         _tiv_added = True
     elif sov_data and sov_data.get("locations"):
         # Calculate TIV from individual SOV locations
         _total_tiv = sum(loc.get("tiv", 0) or 0 for loc in sov_data["locations"])
-        if _total_tiv > 0:
+        if _total_tiv > 1:
             rows.append(["Total Insured Value (TIV)", fmt_currency(_total_tiv)])
             _tiv_added = True
     if not _tiv_added:
@@ -2277,6 +2293,11 @@ def _normalize_addr(s):
     # Remove periods, commas, and dashes ("Burlington - Mount Holly" -> "Burlington Mount Holly")
     s = s.replace(".", "").replace(",", "").replace(" - ", " ").replace("-", " ")
     # Normalize route designators: "U.S. 51" / "US 51" / "US-51" / "US HWY 51" -> "HWY 51"
+    # Patch AA: handle "US HWY 92" / "US HIGHWAY 92" too — the digit-anchored rules
+    # below don't fire when HWY/HIGHWAY sits between US and the number, so
+    # "1008 US Hwy 92 W" (GL quote) never matched "1008 U.S. 92" (SOV) and the
+    # location count doubled.
+    s = _re_norm.sub(r'\bUS\s+(HIGHWAY|HWY)\b', 'HWY', s)
     s = _re_norm.sub(r'\bUS\s*-?\s*(\d)', r'HWY \1', s)
     s = _re_norm.sub(r'\bU\s*S\s*-?\s*(\d)', r'HWY \1', s)
     # Normalize word-level abbreviations FIRST (before suffix replacements)
@@ -2466,6 +2487,14 @@ def generate_locations(doc, data):
     locations = _dedup_locations(raw_locations)
     sov_data = data.get("sov_data")
     coverages = data.get("coverages", {})
+
+    # Patch AA: does a property-type coverage with an actual carrier exist?
+    # An SOV upload alone does NOT mean property was quoted — liability-only
+    # accounts upload the SOV for locations/named insureds/exposures only.
+    _has_property_cov = any(
+        isinstance(coverages.get(_pk), dict) and str(coverages.get(_pk, {}).get("carrier") or "").strip()
+        for _pk in ("property", "excess_property", "excess_property_2")
+    )
     
     # Build a master list of all locations from all sources
     # Each entry: {name, address, city, state, tiv, on_property, on_liability}
@@ -2521,7 +2550,7 @@ def generate_locations(doc, data):
     # (no SOV uploaded, no schedule_of_values, no parseable address fields),
     # then all locations should get the property checkmark. A property quote
     # was uploaded — those locations are on it.
-    _property_covers_all = ("property" in coverages and not property_addr_keys)
+    _property_covers_all = (_has_property_cov and not property_addr_keys)
     if _property_covers_all:
         logger.info("Schedule of Locations - property quote exists but no addresses extracted; defaulting all locations to property-covered")
 
@@ -2759,33 +2788,56 @@ def generate_locations(doc, data):
                 _gl_exposures.append(_amt)
         # Only activate when the GL is gross-sales rated AND fewer rated hotel rows than SOV locations
         if _sov_locs and _gl_exposures and len(_gl_exposures) < len(_sov_locs):
-            _remaining = list(_gl_exposures)
-            for _loc in _sov_locs:
-                _gs = _money_to_int(_loc.get("total_sales") or _loc.get("hotel_sales"))
-                _matched = False
-                if _gs > 0:
-                    _tol = max(2, int(_gs * 0.005))
-                    for _idx, _amt in enumerate(_remaining):
-                        if abs(_amt - _gs) <= _tol:
-                            _remaining.pop(_idx)
-                            _matched = True
-                            break
-                if not _matched:
-                    _akey = (_normalize_addr(_loc.get("address", "")) + "|" +
-                             _normalize_city(_loc.get("city", "")) + "|" +
-                             _normalize_state(_loc.get("state", "")))
-                    _gl_missing_loc_keys.add(_akey)
-                    _nm = (_loc.get("dba") or _loc.get("hotel_flag") or
-                           _loc.get("corporate_name") or "").strip()
-                    _missing_liability_details.append({
-                        "name": _nm, "address": _loc.get("address", ""),
-                        "city": _loc.get("city", ""), "state": _loc.get("state", ""),
-                    })
-            if _gl_missing_loc_keys:
-                logger.warning(
-                    f"SOV cross-check: {len(_gl_missing_loc_keys)} SOV location(s) not on GL rating "
-                    f"schedule ({len(_gl_exposures)} rated vs {len(_sov_locs)} SOV): "
-                    f"{[d['name'] or d['address'] for d in _missing_liability_details]}")
+            # Patch AA: COMBINED-BASIS GUARD. Carriers (e.g. Berkley) often rate
+            # ALL locations on a single exposure line whose amount is the SUM of
+            # the SOV locations' sales (Lakeland: $6,635,000 = $3.8M + $2.835M).
+            # If the rated total matches the combined SOV sales, nothing is
+            # missing — skip the per-location matching entirely.
+            _sum_exp = sum(_gl_exposures)
+            _sum_sales = sum(_money_to_int(_l.get("total_sales") or _l.get("hotel_sales"))
+                             for _l in _sov_locs)
+            _sum_tol = max(2, int(_sum_sales * 0.01))
+            if _sum_sales > 0 and abs(_sum_exp - _sum_sales) <= _sum_tol:
+                logger.info(
+                    f"SOV cross-check: rated exposure total {_sum_exp} matches combined "
+                    f"SOV sales {_sum_sales} — combined-basis rating covers all locations")
+            else:
+                _remaining = list(_gl_exposures)
+                for _loc in _sov_locs:
+                    _gs = _money_to_int(_loc.get("total_sales") or _loc.get("hotel_sales"))
+                    _matched = False
+                    if _gs > 0:
+                        _tol = max(2, int(_gs * 0.005))
+                        for _idx, _amt in enumerate(_remaining):
+                            if abs(_amt - _gs) <= _tol:
+                                _remaining.pop(_idx)
+                                _matched = True
+                                break
+                    if not _matched:
+                        _akey = (_normalize_addr(_loc.get("address", "")) + "|" +
+                                 _normalize_city(_loc.get("city", "")) + "|" +
+                                 _normalize_state(_loc.get("state", "")))
+                        _gl_missing_loc_keys.add(_akey)
+                        _nm = (_loc.get("dba") or _loc.get("hotel_flag") or
+                               _loc.get("corporate_name") or "").strip()
+                        _missing_liability_details.append({
+                            "name": _nm, "address": _loc.get("address", ""),
+                            "city": _loc.get("city", ""), "state": _loc.get("state", ""),
+                        })
+                # Patch AA: if NO SOV location matched ANY rated exposure, the GL
+                # is simply rated on a different basis (combined, TIV, per-unit) —
+                # flagging every single location as uncovered is certainly wrong.
+                if _gl_missing_loc_keys and len(_gl_missing_loc_keys) >= len(_sov_locs):
+                    logger.info(
+                        "SOV cross-check: zero SOV locations matched any rated exposure — "
+                        "rating basis differs; skipping missing-location flags")
+                    _gl_missing_loc_keys.clear()
+                    _missing_liability_details.clear()
+                elif _gl_missing_loc_keys:
+                    logger.warning(
+                        f"SOV cross-check: {len(_gl_missing_loc_keys)} SOV location(s) not on GL rating "
+                        f"schedule ({len(_gl_exposures)} rated vs {len(_sov_locs)} SOV): "
+                        f"{[d['name'] or d['address'] for d in _missing_liability_details]}")
     except Exception as _xc:
         logger.warning(f"SOV cross-check skipped: {_xc}")
     
@@ -2820,6 +2872,11 @@ def generate_locations(doc, data):
         """Check if addr_key is in property_addr_keys. Strict match only.
         NOTE: _property_covers_all fallback is handled at prop_cell level, not here.
         This prevents GL-only locations from being falsely marked as property-covered."""
+        # Patch AA: no property-type coverage quoted -> nothing is property-covered,
+        # even though property_addr_keys is populated from the SOV (those keys are
+        # still needed as the location universe for the liability blanket rules).
+        if not _has_property_cov:
+            return False
         if addr_key in property_addr_keys:
             return True
         # Also try matching just the street portion (ignoring city differences)
@@ -4448,6 +4505,10 @@ def generate_confirmation_to_bind(doc, data):
         add_formatted_paragraph(doc, f"{i}. {stmt}", size=9, space_after=2)
     
     # Underwriting Confirmations (True/False checkmarks)
+    # Patch AA: start Underwriting Confirmations on a fresh page so the
+    # True/False table and the signature block stay together instead of the
+    # signature splitting onto its own page mid-section.
+    add_page_break(doc)
     add_subsection_header(doc, "Underwriting Confirmations")
     add_formatted_paragraph(doc,
         "The insured confirms the following by checking True or False:",

@@ -759,6 +759,19 @@ def _enrich_with_sov(extracted_data, sov_data):
                 logger.info(f"  SOV named insured enrichment: '{corp_name}' (DBA: '{dba_name}') "
                            f"from SOV location {loc_num} / {loc.get('address', '')}")
             elif corp_name:
+                # Patch AA: the entity already exists (usually from the quote
+                # extraction, which rarely captures the DBA). Backfill the DBA
+                # from the SOV onto the existing entry instead of dropping it —
+                # otherwise the first named insured shows no DBA while the
+                # SOV-added siblings do (Lakeland Hotels LLC / Holiday Inn Express).
+                if dba_name:
+                    for _ni in extracted_data.get("named_insureds", []):
+                        if (isinstance(_ni, dict)
+                                and _entity_names_match(corp_name, (_ni.get("name") or "").strip())
+                                and not (_ni.get("dba") or "").strip()):
+                            _ni["dba"] = dba_name
+                            logger.info(f"  SOV named insured DBA backfill: '{corp_name}' -> DBA '{dba_name}'")
+                            break
                 logger.info(f"  SOV named insured SKIPPED (duplicate): '{corp_name}' already exists in named insureds")
 
         if new_named_insureds:
