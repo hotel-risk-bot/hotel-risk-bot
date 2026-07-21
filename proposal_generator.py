@@ -3920,7 +3920,13 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                 pct = ci.get("percentage", "")
                 limitation = ci.get("limitation", "")
                 val = limitation if limitation else pct
-                if val and _has_agreed_amount and _re_coin.match(r'^\s*\d{1,3}\s*%\s*$', str(val)):
+                # Patch AC: the quote's own coinsurance line may carry the waiver
+                # text directly ("100% (Waived by Agreed Amount Endorsement)") —
+                # treat that as the trigger even when the endorsement didn't make
+                # the extracted forms list.
+                if val and ("agreed amount" in str(val).lower()
+                            or (_has_agreed_amount
+                                and _re_coin.match(r'^\s*\d{1,3}\s*%\s*$', str(val)))):
                     val = "Agreed Amount (via endorsement)"
                 if val:
                     rows.append([cov_name, val])

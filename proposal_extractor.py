@@ -1035,6 +1035,10 @@ _NONPROPERTY_FORM_PREFIXES = (
     # endorsements, CYDEC dec page, MKT marketing sheets, ILSIG signature dec,
     # PN99 policyholder notices)
     "CY99", "CYDEC", "MKT", "ILSIG", "PN99",
+    # Patch AC: Travelers EPLI / claims-made liability forms (LIA-7139 ERP
+    # options, AFE-19038 premium disclosure, NTC-19068 contact notice, ACF)
+    # bled into property when an EPLI file shared the submission
+    "LIA-", "AFE-", "ACF-", "NTC-",
 )
 
 
@@ -1069,6 +1073,8 @@ _NONUMBRELLA_FORM_PREFIXES = (
     "ASIC INT", "INT N0", "INT CN",
     # AmTrust complimentary cyber package
     "CY99", "CYDEC", "MKT", "ILSIG", "PN99",
+    # Travelers EPLI / claims-made forms (Patch AC)
+    "LIA-", "AFE-", "ACF-", "NTC-",
 )
 
 
@@ -3015,7 +3021,10 @@ TEXT:
         if not isinstance(covs, dict):
             return data
         
-        PASS_MODEL = "gpt-5.4-mini"  # Faster model for focused extraction passes
+        PASS_MODEL = "gpt-5.4"  # Patch AC: full model. Mini repeatedly truncated
+        # long lettered attachment schedules (Starr a.-rrr., ~70 forms) even with
+        # the full source file prepended and explicit extract-every-item rules.
+        # One focused call per coverage — cost delta is pennies per proposal.
         
         # Check which coverages need forms extraction
         # GL/Property quotes typically have 30-60+ forms - use higher thresholds
@@ -3072,12 +3081,19 @@ TEXT:
                 "PR 0", "PR 9", "SSPN", "NMA", "LMA", "Starr", "6133",
                 "form number", "endorsement", "form name", "edition", "coverage line",
                 "attach and form part", "Additional Endorsements",
-                "FORMS AND ENDORSEMENTS ATTACHED",
-                "LIA-", "EPL-", "AFE-", "ACF-",
-                "THIS ENDORSEMENT CHANGES THE POLICY",
                 carrier.split()[0] if carrier else "",
                 display.lower()
             ]
+            # Patch AC: Travelers claims-made keywords are EPLI-ONLY. When they
+            # were in the shared list, every coverage's keyword windows filled
+            # with Travelers EPLI policy text — umbrella extraction came back
+            # empty and LIA-/AFE-/NTC- forms bled into the property table.
+            if cov_key == "epli":
+                forms_keywords += [
+                    "FORMS AND ENDORSEMENTS ATTACHED",
+                    "LIA-", "EPL-", "AFE-", "ACF-",
+                    "THIS ENDORSEMENT CHANGES THE POLICY",
+                ]
             # Umbrella PDFs frequently list exclusions/endorsements as plain-text
             # headings (no form code), so widen the keyword net to capture those
             # sections (e.g., "Terms and Conditions of Lead Umbrella", "ABUSE OR
@@ -3186,6 +3202,23 @@ Return a JSON object with exactly one key:
 DOCUMENT TEXT:
 {relevant_text}"""
             else:
+                # Patch AC: the Travelers ITEM-11 pairing rule applies ONLY to
+                # EPLI extraction. In the shared prompt it caused GPT to emit
+                # Travelers LIA-/AFE-/NTC- forms into the PROPERTY forms list
+                # whenever an EPLI file was in the same submission.
+                if cov_key == "epli":
+                    _claims_made_rule = """- CLAIMS-MADE DEC FORM LISTS (Travelers EPLI etc.): ITEM 11 "FORMS AND ENDORSEMENTS ATTACHED
+  AT ISSUANCE" lists semicolon-separated numbers like "LIA-19182-0724" (= form LIA-19182,
+  edition 07-24). Pair EVERY number with the endorsement TITLE from the policy body — each
+  attached endorsement has a centered heading (e.g. "AMEND SETTLEMENT CONDITION ENDORSEMENT")
+  and its form number in the page footer ("LIA-19182 Ed. 07-24"). Emit
+  {"form_number": "LIA-19182 07-24", "description": "Amend Settlement Condition Endorsement"}.
+"""
+                else:
+                    _claims_made_rule = """- Extract ONLY forms belonging to the {display} quote issued by {carrier}. Do NOT include
+  forms from other quote files in the submission (e.g. a Travelers EPLI policy's LIA-/EPL-/
+  AFE-/NTC- forms, or another carrier's schedule).
+""".replace("{display}", display).replace("{carrier}", carrier)
                 prompt = f"""Extract EVERY form number and endorsement from this insurance document for the {display} coverage issued by {carrier}.
 
 Rules:
@@ -3202,13 +3235,7 @@ Rules:
   These schedules frequently contain 50-80 endorsements and CONTINUE ACROSS PAGE BREAKS —
   extract EVERY lettered item through the very last one. Do NOT stop after the first page
   of the schedule.
-- CLAIMS-MADE DEC FORM LISTS (Travelers EPLI etc.): ITEM 11 "FORMS AND ENDORSEMENTS ATTACHED
-  AT ISSUANCE" lists semicolon-separated numbers like "LIA-19182-0724" (= form LIA-19182,
-  edition 07-24). Pair EVERY number with the endorsement TITLE from the policy body — each
-  attached endorsement has a centered heading (e.g. "AMEND SETTLEMENT CONDITION ENDORSEMENT")
-  and its form number in the page footer ("LIA-19182 Ed. 07-24"). Emit
-  {{"form_number": "LIA-19182 07-24", "description": "Amend Settlement Condition Endorsement"}}.
-
+{_claims_made_rule}
 Return a JSON object with exactly one key:
 {{"forms_endorsements": [{{"form_number": "...", "description": "..."}}]}}
 
