@@ -174,12 +174,16 @@ ACCOUNT_EXECUTIVES = {
         "phone": "O: 312-429-2310", "email": "natalie.clements@hubinternational.com"},
     "becca_hanes": {"role": "Account Manager - Hotel Franchise", "name": "Becca Hanes",
         "phone": "O: 708-931-7815", "email": "becca.hanes@hubinternational.com"},
+    "katherine_koska": {"role": "Account Manager", "name": "Katherine Koska, CLCS",
+        "phone": "M: 630-877-3217", "email": "katherine.koska@hubinternational.com"},
 }
 ASSOCIATE_ACCOUNT_MANAGERS = {
     "liam_omahoney": {"role": "Associate Account Manager", "name": "Liam O'Mahoney",
         "phone": "O: 312-596-7542", "email": "liam.omahony@hubinternational.com"},
     "jacob_morcos": {"role": "Associate Account Manager", "name": "Jacob Morcos",
         "phone": "O: 312-279-4758", "email": "jacob.morcos@hubinternational.com"},
+    "nick_siozios": {"role": "Associate Account Manager", "name": "Nick Siozios",
+        "phone": "O: 630-468-5673", "email": "nick.siozios@hubinternational.com"},
 }
 
 def _build_service_team(data):
