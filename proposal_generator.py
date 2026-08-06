@@ -3739,6 +3739,51 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                                header_alignments={0: L, 1: R, 2: R},
                                col_alignments={1: R, 2: R})
         else:
+            # Patch AE: extended GL limit rows (Employee Benefits, Sexual Abuse /
+            # A&M, Assault & Battery) with no extracted value must not render as
+            # "Not found". If the quote carries a matching EXCLUSION form, show
+            # "Excluded"; otherwise drop the row entirely (silent) — per Stefan:
+            # a value we couldn't find is not client-facing information.
+            if coverage_key.startswith("general_liability"):
+                _empty_vals = {"", "not found", "n/a", "none", "not applicable", "unknown", "tbd"}
+                _ext_topics = {
+                    "employee benefits": ("employee benefit",),
+                    "sexual abuse / a&m": ("sexual abuse", "abuse & molestation", "abuse and molestation",
+                                           "abuse or molestation", "abuse/molestation", "molestation"),
+                    "assault and battery": ("assault",),
+                }
+                _excl_text = " || ".join(
+                    str(_f.get("description", "") if isinstance(_f, dict) else _f).lower()
+                    for _f in ((cov.get("forms_endorsements") or []) +
+                               (cov.get("additional_coverages") or []))
+                )
+                def _gl_limit_keep(_desc, _val):
+                    _d = str(_desc or "").lower()
+                    _v = str(_val or "").strip().lower()
+                    for _topic_kws in _ext_topics.values():
+                        if any(_kw in _d for _kw in _topic_kws):
+                            if _v not in _empty_vals:
+                                return (_desc, _val)  # real value extracted — keep
+                            # No value: excluded on the quote -> say so; else drop
+                            for _kw in _topic_kws:
+                                if _kw in _excl_text and "exclusion" in _excl_text:
+                                    # confirm the exclusion wording references this topic
+                                    for _seg in _excl_text.split(" || "):
+                                        if _kw in _seg and "exclusion" in _seg:
+                                            return (_desc, "Excluded")
+                            return None  # silent — not quoted, not excluded
+                    return (_desc, _val)  # not an extended row — keep as-is
+                _new_limits = []
+                for lim in limits:
+                    if isinstance(lim, dict):
+                        _r = _gl_limit_keep(lim.get("description", "") or lim.get("type", ""),
+                                            lim.get("limit", "") or lim.get("amount", ""))
+                        if _r is None:
+                            continue
+                        lim = dict(lim)
+                        lim["description"], lim["limit"] = _r
+                    _new_limits.append(lim)
+                limits = _new_limits
             add_subsection_header(doc, "Coverage Limits")
             headers = ["Description", "Limit"]
             rows = [[lim.get("description", "") or lim.get("type", ""), lim.get("limit", "") or lim.get("amount", "")] if isinstance(lim, dict) else [str(lim), ""] for lim in limits]
