@@ -18,3 +18,4 @@ gunicorn>=21.2.0
 # cache-bust: 2026-03-09
 xlrd>=2.0.1
 reportlab>=4.0.0
+pyxlsb>=1.0.10
