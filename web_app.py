@@ -1108,6 +1108,24 @@ def create_session():
     return jsonify({"session_id": session_id, "client_name": client_name})
 
 
+def _convert_xlsb_to_xlsx(xlsb_path):
+    """Transcribe an .xlsb (Excel Binary) workbook to .xlsx so openpyxl can read it."""
+    from pyxlsb import open_workbook as _open_xlsb
+    import openpyxl as _oxl
+    out_path = os.path.splitext(xlsb_path)[0] + ".xlsx"
+    wb_out = _oxl.Workbook()
+    wb_out.remove(wb_out.active)
+    with _open_xlsb(xlsb_path) as wb_in:
+        for _sn in wb_in.sheets:
+            ws_out = wb_out.create_sheet(title=str(_sn)[:31])
+            with wb_in.get_sheet(_sn) as ws_in:
+                for _row in ws_in.rows():
+                    for _cell in _row:
+                        if _cell.v is not None:
+                            ws_out.cell(row=_cell.r + 1, column=_cell.c + 1, value=_cell.v)
+    wb_out.save(out_path)
+    return out_path
+
 @app.route("/api/upload/<session_id>", methods=["POST"])
 def upload_files(session_id):
     """Upload files (PDFs and Excel SOVs) to a session."""
@@ -1123,12 +1141,22 @@ def upload_files(session_id):
         if not f.filename:
             continue
         ext = Path(f.filename).suffix.lower()
-        if ext not in (".pdf", ".xlsx", ".xls", ".csv", ".jpg", ".jpeg", ".png"):
+        if ext not in (".pdf", ".xlsx", ".xls", ".xlsb", ".csv", ".jpg", ".jpeg", ".png"):
             continue
 
         safe_name = f"{uuid.uuid4().hex[:8]}_{f.filename}"
         save_path = os.path.join(session["session_dir"], safe_name)
         f.save(save_path)
+        if ext == ".xlsb":
+            try:
+                _conv_path = _convert_xlsb_to_xlsx(save_path)
+                os.remove(save_path)
+                save_path = _conv_path
+                ext = ".xlsx"
+                logger.info(f"Converted .xlsb upload to .xlsx: {save_path}")
+            except Exception as _xe:
+                logger.warning(f"xlsb conversion failed: {_xe}")
+                continue
 
         if ext == ".pdf":
             file_type = "pdf"
