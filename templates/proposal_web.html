@@ -799,7 +799,25 @@
         <div class="card" style="text-align:left;">
             <h2>&#9993; Client Email</h2>
             <p style="font-size:0.8rem;color:var(--gray-500);margin:0 0 0.75rem;">Coverage summary and premium change, written for the insured. Copy and paste into Outlook.</p>
-            <div id="email-status" style="font-size:0.85rem;color:var(--gray-500);">Drafting client email&hellip;</div>
+            <div id="email-questions">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Contact first name</label>
+                        <input id="email-contact" type="text" placeholder="Debbie" style="padding:0.5rem;border:1px solid var(--gray-300);border-radius:var(--radius);font-size:0.85rem;">
+                    </div>
+                    <div class="form-group">
+                        <label>Sign-off</label>
+                        <input id="email-signoff" type="text" placeholder="Enjoy your weekend." style="padding:0.5rem;border:1px solid var(--gray-300);border-radius:var(--radius);font-size:0.85rem;">
+                    </div>
+                </div>
+                <div id="email-carriers" style="margin-top:0.5rem;"></div>
+                <div class="form-group" style="margin-top:0.75rem;">
+                    <label>Any other highlights to include</label>
+                    <textarea id="email-highlights" rows="3" placeholder="e.g. Flood and earthquake are still excluded." style="width:100%;padding:0.5rem;border:1px solid var(--gray-300);border-radius:var(--radius);font-size:0.85rem;font-family:inherit;"></textarea>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="draftEmail()" style="margin-top:0.5rem;">&#9993; Draft Email</button>
+            </div>
+            <div id="email-status" class="hidden" style="font-size:0.85rem;color:var(--gray-500);margin-top:0.75rem;"></div>
             <div id="email-content" class="hidden">
                 <div class="form-group" style="margin-bottom:0.75rem;">
                     <label>Subject</label>
@@ -1769,7 +1787,7 @@ document.getElementById('btn-generate').addEventListener('click', async () => {
         }
         showToast('Proposal generated!');
         goToStep(3);
-        draftEmail();
+        renderEmailQuestions();
 
     } catch (err) {
         hideLoading();
@@ -1778,6 +1796,42 @@ document.getElementById('btn-generate').addEventListener('click', async () => {
 });
 
 // -- Client Email --
+const EMAIL_CARRIER_LINES = [
+    ['property', 'Property'],
+    ['general_liability', 'General Liability'],
+    ['umbrella', 'Umbrella / Excess'],
+    ['crime', 'Crime'],
+    ['epli', 'EPLI'],
+    ['cyber', 'Cyber'],
+];
+
+function renderEmailQuestions() {
+    const box = document.getElementById('email-carriers');
+    if (!box) return;
+    const covs = (extractedData && extractedData.coverages) || {};
+    const rows = EMAIL_CARRIER_LINES.filter(p => covs[p[0]]);
+    if (!rows.length) { box.innerHTML = ''; return; }
+    box.innerHTML = '<label style="font-size:0.8rem;">Expiring carriers</label>' +
+        rows.map(p => `<div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.35rem;">
+            <span style="min-width:140px;font-size:0.8rem;color:var(--gray-500);">${p[1]}</span>
+            <input type="text" data-exp-carrier="${p[0]}" placeholder="expiring carrier" style="flex:1;padding:0.4rem 0.5rem;border:1px solid var(--gray-300);border-radius:var(--radius);font-size:0.85rem;">
+        </div>`).join('');
+}
+
+function collectEmailAnswers() {
+    const carriers = {};
+    document.querySelectorAll('[data-exp-carrier]').forEach(el => {
+        const v = (el.value || '').trim();
+        if (v) carriers[el.getAttribute('data-exp-carrier')] = v;
+    });
+    return {
+        contact_first_name: (document.getElementById('email-contact').value || '').trim(),
+        signoff: (document.getElementById('email-signoff').value || '').trim(),
+        highlights: (document.getElementById('email-highlights').value || '').trim(),
+        expiring_carriers: carriers,
+    };
+}
+
 async function draftEmail(instruction) {
     const status = document.getElementById('email-status');
     const content = document.getElementById('email-content');
@@ -1785,7 +1839,7 @@ async function draftEmail(instruction) {
     status.textContent = instruction ? 'Refining email...' : 'Drafting client email...';
     status.classList.remove('hidden');
     try {
-        const payload = {};
+        const payload = { answers: collectEmailAnswers() };
         if (instruction) {
             payload.instruction = instruction;
             payload.previous = document.getElementById('email-body').value;
