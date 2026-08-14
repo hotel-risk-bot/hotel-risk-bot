@@ -293,7 +293,7 @@ Rules:
 - Greet by the contact first name if one is given. If none is given, open with "Attached" and no greeting line.
 - Lead with the headline: total change in dollars and percent, stated in the first sentence.
 - ALWAYS state the number of locations and the total insured value. Work them into the first paragraph naturally, for example "across 4 locations with $52,000,000 in total insured value". If either is missing from the facts, omit only that one.
-- Name the carrier. If an expiring carrier is given and it differs from the proposed one, say the account is moving from the expiring carrier to the proposed one. If it is the same carrier, say the incumbent held or improved the program.
+- Name the proposed carrier. If NO expiring carrier is given for a line, say nothing at all about moving, switching, or renewing carriers - just name who is writing it. Only when an expiring carrier is actually given may you say the account is moving from that carrier to the proposed one, or that the incumbent held or improved the program if they match.
 - Work the deductible structure into prose, not a list: AOP, named windstorm, wind/hail, water damage. Only ones you were given.
 - If coverages were presented but not quoted, say those perils are excluded or not included, in one short clause.
 - NEVER use bullet points, dashes as list markers, tables, headers, or markdown. Flowing sentences only.
