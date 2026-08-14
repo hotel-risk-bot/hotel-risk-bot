@@ -179,6 +179,32 @@ _LINE_ORDER = [
 ]
 
 
+# Trailing corporate boilerplate an owner does not need to read. Stripped
+# iteratively so "Starr Surplus Lines Insurance Company" -> "Starr Surplus Lines"
+# while "Berkley Specialty" keeps the word that actually identifies the paper.
+_CARRIER_TAIL = {
+    "company", "companies", "co", "co.", "corporation", "corp", "corp.",
+    "incorporated", "inc", "inc.", "insurance", "ins", "ins.", "insco",
+    "group", "ltd", "ltd.", "llc", "plc", "syndicate", "syndicates",
+}
+
+
+def _short_carrier(name):
+    """Conversational carrier name for a client email."""
+    n = (name or "").strip().rstrip(".,")
+    if not n:
+        return ""
+    if "lloyd" in n.lower():
+        return "Lloyd's"
+    words = n.split()
+    while len(words) > 1 and words[-1].lower().strip(".,") in _CARRIER_TAIL:
+        words.pop()
+    if words and words[0].lower() == "the" and len(words) > 1:
+        words.pop(0)
+    out = " ".join(words).rstrip(".,")
+    return out if len(out) > 1 else n
+
+
 def _email_label(key, label):
     """Prose-friendly line name. COVERAGE_LABELS stays a mirror of the Premium
     Summary page for parity; an email should not read "Umbrella / Excess 1"."""
@@ -256,10 +282,10 @@ def build_email_context(data, answers=None):
         entry = {
             "_rank": _line_rank(key),
             "coverage": _email_label(key, label),
-            "carrier": _clean_carrier_name(cov.get("carrier", "")) or "TBD",
+            "carrier": _short_carrier(_clean_carrier_name(cov.get("carrier", ""))) or "TBD",
             "key_limit": _key_limit(cov),
             "deductibles": _deductibles(cov),
-            "expiring_carrier": (expiring_carriers.get(key) or "").strip(),
+            "expiring_carrier": _short_carrier(expiring_carriers.get(key) or ""),
             "proposed_premium": fmt_currency_cents(proposed) if proposed else "",
             "expiring_premium": fmt_currency_cents(exp) if exp else "",
             "dollar_change": "",
@@ -361,6 +387,7 @@ Rules:
 - Bullets are ONLY for the key points section. Everything else is flowing sentences.
 - Never restate every coverage line with its own premium. The proposal document does that.
 - Name the proposed carrier. If NO expiring carrier is given for a line, say nothing about moving, switching, or renewing carriers. Only when an expiring carrier is actually given may you say the account is moving from that carrier to the proposed one, or that the incumbent held or improved the program if they match.
+- Use the carrier names exactly as given. They are already shortened for a client email; never expand them back to full legal names.
 - Never invent numbers, carriers, limits, deductibles, or dates. Use only what you are given. Omit rather than guess.
 - No em dashes. No emoji. No markdown bold or headers. Plain text for Outlook.
 - Warm and direct. No "I hope this email finds you well." No corporate padding. Keep the whole email under about 200 words.
