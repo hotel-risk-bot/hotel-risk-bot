@@ -12,6 +12,7 @@ Two entry points:
 """
 
 import os
+import re
 import logging
 
 from proposal_generator import (
@@ -154,6 +155,36 @@ def _key_limit(cov):
     return ""
 
 
+
+# Stefan's presentation order for coverage lines. Anything unlisted sorts after,
+# keeping its relative order. Property first, casualty next, ancillary last.
+_LINE_ORDER = [
+    "property", "property_alt_1", "property_alt_2",
+    "excess_property", "excess_property_2",
+    "general_liability", "general_liability_alt_1", "general_liability_alt_2",
+    "liquor_liability", "innkeepers",
+    "umbrella", "umbrella_alt_1", "umbrella_alt_2", "umbrella_alt_3",
+    "umbrella_layer_2", "umbrella_layer_3", "umbrella_layer_4",
+    "excess_liability", "excess",
+    "commercial_auto",
+    "workers_comp", "workers_compensation", "workers_compensation_alt_1",
+    "epli",
+    "cyber", "cyber_alt_1",
+    "crime",
+    "equipment_breakdown",
+    "inland_marine",
+    "flood", "wind", "earthquake",
+    "terrorism",
+    "environmental",
+]
+
+
+def _line_rank(key):
+    try:
+        return _LINE_ORDER.index(key)
+    except ValueError:
+        return len(_LINE_ORDER)
+
 def _norm_addr(loc):
     """Normalized address key so a hotel and its signs are not counted as separate sites."""
     parts = [
@@ -215,6 +246,7 @@ def build_email_context(data, answers=None):
         exp = _expiring_for(key, expiring, expiring_details) if has_expiring else 0.0
 
         entry = {
+            "_rank": _line_rank(key),
             "coverage": label,
             "carrier": _clean_carrier_name(cov.get("carrier", "")) or "TBD",
             "key_limit": _key_limit(cov),
@@ -252,10 +284,21 @@ def build_email_context(data, answers=None):
         totals["pct_change"] = f"{(delta / total_expiring * 100):+.1f}%"
         totals["direction"] = "increase" if delta > 0 else ("decrease" if delta < 0 else "flat")
 
+    lines.sort(key=lambda e: e["_rank"])
+    optional_lines.sort(key=lambda e: e["_rank"])
+
     not_quoted = [c["coverage"] for c in optional_lines if not c["proposed_premium"]]
     optional_lines = [c for c in optional_lines if c["proposed_premium"]]
 
     _loc_count, _tiv = _location_summary(data)
+
+    # The intro names the hotel, not the legal entity: "AC Hotel Orlando", not
+    # "AC Orlando Hospitality LLC". DBA wins; otherwise strip the entity suffix.
+    _hotel = (client.get("dba") or "").strip()
+    if not _hotel:
+        _hotel = re.sub(
+            r"[,]?\s+\b(LLC|L\.L\.C\.|LLLP|LLP|LP|INC|INC\.|CORP|CORPORATION|CO|COMPANY|LTD)\b\.?$",
+            "", (client.get("named_insured") or "").strip(), flags=re.I).strip()
 
     team = data.get("service_team") or {}
     return {
@@ -263,6 +306,7 @@ def build_email_context(data, answers=None):
         "highlights": (answers.get("highlights") or "").strip(),
         "signoff": (answers.get("signoff") or "").strip(),
         "not_quoted": not_quoted,
+        "hotel_name": _hotel or client.get("named_insured") or "the account",
         "named_insured": client.get("named_insured") or client.get("dba") or "the insured",
         "dba": client.get("dba") or "",
         "effective_date": client.get("effective_date") or "",
@@ -278,30 +322,40 @@ def build_email_context(data, answers=None):
 
 _SYSTEM_PROMPT = """You write short renewal emails for Stefan Burkey, Hotel Franchise Practice Leader at HUB International, to the hotel owner or operator.
 
-House style, follow it closely:
+House style. Match this shape closely:
 
-Hi Debbie,
+Hi Ajit,
 
-Attached, happy to provide the renewal proposal for TownePlace Suites delivering a $98,507.12 decrease, or 49.2%, from expiring. Our program carrier Starr is quoting a much better premium and AOP remains $10,000, 5% named windstorm, $25,000 all other wind, and $25,000 water damage. Flood and earthquake are still excluded. Let me know if you would like to walk through the proposal next week or if you have any questions.
+Attached, is the finalized proposal for AC Hotel Orlando with a $87,053.27 decrease, or 30.7%, with $34,605,417 in total insured value.
+
+Proposed carriers are Starr Surplus Lines Insurance Company for Property, Berkley Specialty Insurance Company for General Liability, StarStone National Insurance Company for Umbrella/Excess, Travelers for Equipment Breakdown, and Evanston Insurance Company for Terrorism/TRIA.
+
+The key points are:
+- Property includes a $10,000 property damage deductible, $10,000 time element deductible, $25,000 water damage deductible, $50,000 wind deductible, and 3% named windstorm subject to a $100,000 minimum per occurrence.
+- Equipment Breakdown carries a $25,000 combined deductible with $4,000 property damage and 24 hours business income.
+- Crime was presented but not included, and Cyber was quoted separately at $3,476.42.
+
+Let me know if you would like to walk through the proposal next week or if you have any questions.
 
 Enjoy your weekend.
 
 Stefan
 
+Structure, in this order:
+1. Greeting by contact first name. If no name is given, skip the greeting line entirely.
+2. One sentence: "Attached, is the finalized proposal for <hotel name>" plus the dollar and percent change and the total insured value. Use the HOTEL NAME you are given, never the legal entity. Mention the number of locations only when it is more than one.
+3. One sentence listing proposed carriers: "Proposed carriers are <carrier> for <line>, <carrier> for <line>, and <carrier> for <line>." Keep the lines in EXACTLY the order the facts give them - they are already sorted Property, General Liability, Umbrella, Auto, Workers Compensation, EPLI, Cyber, then ancillary. Do not alphabetize and do not regroup.
+4. "The key points are:" followed by short bullets. One bullet per line of coverage that actually has deductibles or terms worth stating, in the same line order. A final bullet for anything presented but not included, and anything quoted separately with its premium. Skip the whole section if there is nothing substantive.
+5. Offer to walk through it.
+6. Sign-off flavor if one was given, then "Stefan" on its own line.
+
 Rules:
-- Two short paragraphs at most, then the sign-off. This is a note, not a summary document.
-- Greet by the contact first name if one is given. If none is given, open with "Attached" and no greeting line.
-- Lead with the headline: total change in dollars and percent, stated in the first sentence.
-- ALWAYS state the number of locations and the total insured value. Work them into the first paragraph naturally, for example "across 4 locations with $52,000,000 in total insured value". If either is missing from the facts, omit only that one.
-- Name the proposed carrier. If NO expiring carrier is given for a line, say nothing at all about moving, switching, or renewing carriers - just name who is writing it. Only when an expiring carrier is actually given may you say the account is moving from that carrier to the proposed one, or that the incumbent held or improved the program if they match.
-- Work the deductible structure into prose, not a list: AOP, named windstorm, wind/hail, water damage. Only ones you were given.
-- If coverages were presented but not quoted, say those perils are excluded or not included, in one short clause.
-- NEVER use bullet points, dashes as list markers, tables, headers, or markdown. Flowing sentences only.
-- Do not restate every coverage line with its own premium. The proposal document does that.
+- Bullets are ONLY for the key points section. Everything else is flowing sentences.
+- Never restate every coverage line with its own premium. The proposal document does that.
+- Name the proposed carrier. If NO expiring carrier is given for a line, say nothing about moving, switching, or renewing carriers. Only when an expiring carrier is actually given may you say the account is moving from that carrier to the proposed one, or that the incumbent held or improved the program if they match.
 - Never invent numbers, carriers, limits, deductibles, or dates. Use only what you are given. Omit rather than guess.
-- No em dashes. No emoji. Plain text for Outlook.
-- Close with an offer to walk through it, then the sign-off flavor if one was given, then "Stefan" on its own line. No title block.
-- Warm and direct. No "I hope this email finds you well." No corporate padding.
+- No em dashes. No emoji. No markdown bold or headers. Plain text for Outlook.
+- Warm and direct. No "I hope this email finds you well." No corporate padding. Keep the whole email under about 200 words.
 
 Return exactly two parts:
 SUBJECT: <one line>
@@ -313,19 +367,18 @@ def _context_to_prompt(ctx):
     out = []
     if ctx.get("contact_first_name"):
         out.append(f"Contact first name: {ctx['contact_first_name']}")
-    out.append(f"Named insured: {ctx['named_insured']}")
-    if ctx["dba"]:
-        out.append(f"Property / DBA: {ctx['dba']}")
+    out.append(f"HOTEL NAME to use in the intro: {ctx.get('hotel_name')}")
+    out.append(f"Legal named insured (do NOT use in the intro): {ctx['named_insured']}")
     if ctx["effective_date"]:
         out.append(f"Effective date: {ctx['effective_date']}")
     size = []
-    if ctx.get("location_count"):
-        n = ctx["location_count"]
-        size.append(f"{n} location" + ("" if n == 1 else "s"))
+    n = ctx.get("location_count") or 0
+    if n > 1:
+        size.append(f"{n} locations")
     if ctx.get("total_tiv"):
         size.append(f"total insured value {ctx['total_tiv']}")
     if size:
-        out.append("PROGRAM SIZE (state this in the email): " + ", ".join(size))
+        out.append("STATE THIS IN THE INTRO: " + ", ".join(size))
 
     t = ctx["totals"]
     if ctx["has_expiring"] and t["dollar_change"]:
@@ -339,7 +392,7 @@ def _context_to_prompt(ctx):
         out.append("No premium totals available. Do not state any premium figures.")
 
     out.append("")
-    out.append("Coverages:")
+    out.append("Coverages, ALREADY IN THE ORDER TO PRESENT THEM:")
     for c in ctx["coverages"]:
         bits = [f"- {c['coverage']}: proposed carrier {c['carrier']}"]
         if c.get("expiring_carrier"):
