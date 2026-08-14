@@ -1685,7 +1685,7 @@ def client_email_draft(session_id):
     payload = request.get_json(silent=True) or {}
     try:
         from client_email import build_email_context, draft_email
-        ctx = build_email_context(data)
+        ctx = build_email_context(data, payload.get("answers"))
         result = draft_email(
             ctx,
             instruction=payload.get("instruction"),
