@@ -795,6 +795,33 @@
                 <button class="btn btn-outline" onclick="startNew()">Start New Proposal</button>
             </div>
         </div>
+        <!-- Client Email -->
+        <div class="card" style="text-align:left;">
+            <h2>&#9993; Client Email</h2>
+            <p style="font-size:0.8rem;color:var(--gray-500);margin:0 0 0.75rem;">Coverage summary and premium change, written for the insured. Copy and paste into Outlook.</p>
+            <div id="email-status" style="font-size:0.85rem;color:var(--gray-500);">Drafting client email&hellip;</div>
+            <div id="email-content" class="hidden">
+                <div class="form-group" style="margin-bottom:0.75rem;">
+                    <label>Subject</label>
+                    <input id="email-subject" type="text" style="width:100%;padding:0.5rem;border:1px solid var(--gray-300);border-radius:var(--radius);font-size:0.85rem;">
+                </div>
+                <div class="form-group">
+                    <label>Body</label>
+                    <textarea id="email-body" rows="18" style="width:100%;padding:0.65rem;border:1px solid var(--gray-300);border-radius:var(--radius);font-size:0.85rem;font-family:inherit;line-height:1.5;"></textarea>
+                </div>
+                <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.75rem;">
+                    <button class="btn btn-primary btn-sm" onclick="copyEmail()">&#128203; Copy Email</button>
+                    <button class="btn btn-outline btn-sm" onclick="draftEmail()">Regenerate</button>
+                </div>
+                <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--gray-300);">
+                    <label style="font-size:0.8rem;">Ask AI to refine</label>
+                    <div style="display:flex;gap:0.5rem;margin-top:0.35rem;flex-wrap:wrap;">
+                        <input id="email-instruction" type="text" placeholder="e.g. shorter, warmer, explain the property increase" style="flex:1;min-width:240px;padding:0.5rem;border:1px solid var(--gray-300);border-radius:var(--radius);font-size:0.85rem;">
+                        <button class="btn btn-outline btn-sm" onclick="refineEmail()">Refine</button>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
 </div>
@@ -1742,12 +1769,63 @@ document.getElementById('btn-generate').addEventListener('click', async () => {
         }
         showToast('Proposal generated!');
         goToStep(3);
+        draftEmail();
 
     } catch (err) {
         hideLoading();
         showToast(err.message || 'Generation failed', 'error');
     }
 });
+
+// -- Client Email --
+async function draftEmail(instruction) {
+    const status = document.getElementById('email-status');
+    const content = document.getElementById('email-content');
+    if (!status) return;
+    status.textContent = instruction ? 'Refining email...' : 'Drafting client email...';
+    status.classList.remove('hidden');
+    try {
+        const payload = {};
+        if (instruction) {
+            payload.instruction = instruction;
+            payload.previous = document.getElementById('email-body').value;
+        }
+        const res = await fetch(`/api/email/${sessionId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || 'Draft failed');
+        document.getElementById('email-subject').value = d.subject || '';
+        document.getElementById('email-body').value = d.body || '';
+        content.classList.remove('hidden');
+        status.classList.add('hidden');
+        if (instruction) showToast('Email refined');
+    } catch (err) {
+        status.classList.remove('hidden');
+        status.textContent = 'Could not draft the email (' + (err.message || 'error') + '). The proposal above is unaffected.';
+    }
+}
+
+function refineEmail() {
+    const inp = document.getElementById('email-instruction');
+    const v = (inp.value || '').trim();
+    if (!v) { showToast('Type what you want changed first', 'error'); return; }
+    inp.value = '';
+    draftEmail(v);
+}
+
+async function copyEmail() {
+    const body = document.getElementById('email-body').value;
+    try {
+        await navigator.clipboard.writeText(body);
+        showToast('Email body copied');
+    } catch (e) {
+        document.getElementById('email-body').select();
+        showToast('Press Cmd+C to copy', 'error');
+    }
+}
 
 function syncVisualToData() {
     // Sync client info from visual editor
