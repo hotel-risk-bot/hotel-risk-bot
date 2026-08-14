@@ -154,6 +154,44 @@ def _key_limit(cov):
     return ""
 
 
+def _norm_addr(loc):
+    """Normalized address key so a hotel and its signs are not counted as separate sites."""
+    parts = [
+        str(loc.get("address") or "").strip().lower(),
+        str(loc.get("city") or "").strip().lower(),
+        str(loc.get("state") or "").strip().lower(),
+    ]
+    key = " ".join(p for p in parts if p)
+    return " ".join(key.split())
+
+
+def _location_summary(data):
+    """Distinct physical locations and total insured value.
+
+    Counts unique addresses, not schedule rows: a property schedule routinely
+    carries separate rows for a building and its signs at the same address, and
+    telling an owner they have three locations when they have one hotel is wrong.
+    """
+    locs = data.get("locations") or []
+    keys = set()
+    tiv_total = 0.0
+    for loc in locs:
+        if not isinstance(loc, dict):
+            continue
+        k = _norm_addr(loc)
+        if k:
+            keys.add(k)
+        tiv_total += _num(loc.get("tiv"))
+
+    count = len(keys) if keys else len(locs)
+
+    if not tiv_total:
+        for cov in (data.get("coverages") or {}).values():
+            if isinstance(cov, dict):
+                tiv_total = max(tiv_total, _num(cov.get("tiv")))
+    return count, tiv_total
+
+
 def build_email_context(data, answers=None):
     """Deterministic facts for the email. No AI, no rounding surprises."""
     data = data or {}
@@ -217,6 +255,8 @@ def build_email_context(data, answers=None):
     not_quoted = [c["coverage"] for c in optional_lines if not c["proposed_premium"]]
     optional_lines = [c for c in optional_lines if c["proposed_premium"]]
 
+    _loc_count, _tiv = _location_summary(data)
+
     team = data.get("service_team") or {}
     return {
         "contact_first_name": (answers.get("contact_first_name") or "").strip(),
@@ -226,7 +266,8 @@ def build_email_context(data, answers=None):
         "named_insured": client.get("named_insured") or client.get("dba") or "the insured",
         "dba": client.get("dba") or "",
         "effective_date": client.get("effective_date") or "",
-        "location_count": len(data.get("locations") or []),
+        "location_count": _loc_count,
+        "total_tiv": fmt_currency_cents(_tiv).replace(".00", "") if _tiv else "",
         "has_expiring": has_expiring,
         "coverages": lines,
         "optional_coverages": optional_lines,
@@ -251,6 +292,7 @@ Rules:
 - Two short paragraphs at most, then the sign-off. This is a note, not a summary document.
 - Greet by the contact first name if one is given. If none is given, open with "Attached" and no greeting line.
 - Lead with the headline: total change in dollars and percent, stated in the first sentence.
+- ALWAYS state the number of locations and the total insured value. Work them into the first paragraph naturally, for example "across 4 locations with $52,000,000 in total insured value". If either is missing from the facts, omit only that one.
 - Name the carrier. If an expiring carrier is given and it differs from the proposed one, say the account is moving from the expiring carrier to the proposed one. If it is the same carrier, say the incumbent held or improved the program.
 - Work the deductible structure into prose, not a list: AOP, named windstorm, wind/hail, water damage. Only ones you were given.
 - If coverages were presented but not quoted, say those perils are excluded or not included, in one short clause.
@@ -276,6 +318,14 @@ def _context_to_prompt(ctx):
         out.append(f"Property / DBA: {ctx['dba']}")
     if ctx["effective_date"]:
         out.append(f"Effective date: {ctx['effective_date']}")
+    size = []
+    if ctx.get("location_count"):
+        n = ctx["location_count"]
+        size.append(f"{n} location" + ("" if n == 1 else "s"))
+    if ctx.get("total_tiv"):
+        size.append(f"total insured value {ctx['total_tiv']}")
+    if size:
+        out.append("PROGRAM SIZE (state this in the email): " + ", ".join(size))
 
     t = ctx["totals"]
     if ctx["has_expiring"] and t["dollar_change"]:
