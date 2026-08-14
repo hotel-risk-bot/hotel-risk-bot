@@ -1672,6 +1672,35 @@ def generate_doc(session_id):
         return jsonify({"error": f"Document generation failed: {str(e)}"}), 500
 
 
+@app.route("/api/email/<session_id>", methods=["POST"])
+def client_email_draft(session_id):
+    """Draft (or refine) the copy-paste client email for a generated proposal."""
+    session = _get_session(session_id)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
+    data = session.get("extracted_data")
+    if not data:
+        return jsonify({"error": "No extracted data available. Run extraction first."}), 400
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        from client_email import build_email_context, draft_email
+        ctx = build_email_context(data)
+        result = draft_email(
+            ctx,
+            instruction=payload.get("instruction"),
+            previous=payload.get("previous"),
+        )
+        return jsonify({
+            "subject": result.get("subject", ""),
+            "body": result.get("body", ""),
+            "context": ctx,
+        })
+    except Exception as e:
+        logger.exception(f"Client email draft failed: {e}")
+        return jsonify({"error": f"Email draft failed: {str(e)}"}), 500
+
+
 @app.route("/api/download/<session_id>", methods=["GET"])
 def download_doc(session_id):
     """Download the generated DOCX file."""
