@@ -179,6 +179,14 @@ _LINE_ORDER = [
 ]
 
 
+def _email_label(key, label):
+    """Prose-friendly line name. COVERAGE_LABELS stays a mirror of the Premium
+    Summary page for parity; an email should not read "Umbrella / Excess 1"."""
+    out = re.sub(r"\s+1$", "", label)          # only layer, drop the ordinal
+    out = out.replace(" / ", "/")              # Terrorism/TRIA, Umbrella/Excess
+    return out
+
+
 def _line_rank(key):
     try:
         return _LINE_ORDER.index(key)
@@ -247,7 +255,7 @@ def build_email_context(data, answers=None):
 
         entry = {
             "_rank": _line_rank(key),
-            "coverage": label,
+            "coverage": _email_label(key, label),
             "carrier": _clean_carrier_name(cov.get("carrier", "")) or "TBD",
             "key_limit": _key_limit(cov),
             "deductibles": _deductibles(cov),
