@@ -112,6 +112,22 @@ def _expiring_for(key, expiring, expiring_details):
     return 0.0
 
 
+def _deductibles(cov):
+    """Flatten a coverage's deductible schedule into 'label amount' strings."""
+    out = []
+    for d in (cov.get("deductibles") or []):
+        if isinstance(d, dict):
+            desc = str(d.get("description") or d.get("peril") or "").strip()
+            amt = str(d.get("amount") or d.get("deductible") or "").strip()
+            if desc and amt:
+                out.append(f"{desc}: {amt}")
+            elif amt:
+                out.append(amt)
+        elif isinstance(d, str) and d.strip():
+            out.append(d.strip())
+    return out
+
+
 def _key_limit(cov):
     """Pick the one limit worth putting in front of an owner."""
     if not isinstance(cov, dict):
@@ -138,9 +154,11 @@ def _key_limit(cov):
     return ""
 
 
-def build_email_context(data):
+def build_email_context(data, answers=None):
     """Deterministic facts for the email. No AI, no rounding surprises."""
     data = data or {}
+    answers = answers or {}
+    expiring_carriers = answers.get("expiring_carriers") or {}
     client = data.get("client_info") or {}
     coverages = data.get("coverages") or {}
     expiring = data.get("expiring_premiums") or {}
@@ -162,6 +180,8 @@ def build_email_context(data):
             "coverage": label,
             "carrier": _clean_carrier_name(cov.get("carrier", "")) or "TBD",
             "key_limit": _key_limit(cov),
+            "deductibles": _deductibles(cov),
+            "expiring_carrier": (expiring_carriers.get(key) or "").strip(),
             "proposed_premium": fmt_currency_cents(proposed) if proposed else "",
             "expiring_premium": fmt_currency_cents(exp) if exp else "",
             "dollar_change": "",
@@ -194,8 +214,15 @@ def build_email_context(data):
         totals["pct_change"] = f"{(delta / total_expiring * 100):+.1f}%"
         totals["direction"] = "increase" if delta > 0 else ("decrease" if delta < 0 else "flat")
 
+    not_quoted = [c["coverage"] for c in optional_lines if not c["proposed_premium"]]
+    optional_lines = [c for c in optional_lines if c["proposed_premium"]]
+
     team = data.get("service_team") or {}
     return {
+        "contact_first_name": (answers.get("contact_first_name") or "").strip(),
+        "highlights": (answers.get("highlights") or "").strip(),
+        "signoff": (answers.get("signoff") or "").strip(),
+        "not_quoted": not_quoted,
         "named_insured": client.get("named_insured") or client.get("dba") or "the insured",
         "dba": client.get("dba") or "",
         "effective_date": client.get("effective_date") or "",
@@ -208,69 +235,94 @@ def build_email_context(data):
     }
 
 
-_SYSTEM_PROMPT = """You write renewal emails for Stefan Burkey, Hotel Franchise Practice Leader at HUB International.
+_SYSTEM_PROMPT = """You write short renewal emails for Stefan Burkey, Hotel Franchise Practice Leader at HUB International, to the hotel owner or operator.
 
-Audience: the hotel owner or operator receiving their renewal proposal. Professional, confident, consultative. HUB is a strategic risk advisor, not an order-taker.
+House style, follow it closely:
+
+Hi Debbie,
+
+Attached, happy to provide the renewal proposal for TownePlace Suites delivering a $98,507.12 decrease, or 49.2%, from expiring. Our program carrier Starr is quoting a much better premium and AOP remains $10,000, 5% named windstorm, $25,000 all other wind, and $25,000 water damage. Flood and earthquake are still excluded. Let me know if you would like to walk through the proposal next week or if you have any questions.
+
+Enjoy your weekend.
+
+Stefan
 
 Rules:
-- Open with one or two sentences of context, not a greeting essay. No "I hope this email finds you well."
-- Summarize the program as a short list: coverage line, carrier, key limit. One line each.
-- State the total proposed premium and the change from expiring in both dollars and percent, then give the per-line changes.
-- If the total went up, say so plainly and give one honest sentence of market context. Never bury an increase or apologize for it.
-- If it went down or is flat, say so without overselling.
-- Close with a clear next step: review the attached proposal, then a call to walk through it.
-- Use proper insurance terminology. The reader is a hotel owner and knows the basics.
-- Never invent numbers, carriers, limits, coverages, or dates. Use only the data given. If a figure is missing, leave it out rather than guessing.
-- No em dashes. No emoji. No markdown formatting, bold, or headers - this gets pasted into Outlook as plain text.
-- Sign off as Stefan Burkey, Hotel Franchise Practice Leader, HUB International.
+- Two short paragraphs at most, then the sign-off. This is a note, not a summary document.
+- Greet by the contact first name if one is given. If none is given, open with "Attached" and no greeting line.
+- Lead with the headline: total change in dollars and percent, stated in the first sentence.
+- Name the carrier. If an expiring carrier is given and it differs from the proposed one, say the account is moving from the expiring carrier to the proposed one. If it is the same carrier, say the incumbent held or improved the program.
+- Work the deductible structure into prose, not a list: AOP, named windstorm, wind/hail, water damage. Only ones you were given.
+- If coverages were presented but not quoted, say those perils are excluded or not included, in one short clause.
+- NEVER use bullet points, dashes as list markers, tables, headers, or markdown. Flowing sentences only.
+- Do not restate every coverage line with its own premium. The proposal document does that.
+- Never invent numbers, carriers, limits, deductibles, or dates. Use only what you are given. Omit rather than guess.
+- No em dashes. No emoji. Plain text for Outlook.
+- Close with an offer to walk through it, then the sign-off flavor if one was given, then "Stefan" on its own line. No title block.
+- Warm and direct. No "I hope this email finds you well." No corporate padding.
 
-Return your answer as exactly two parts:
+Return exactly two parts:
 SUBJECT: <one line>
 BODY:
 <the email>"""
 
 
 def _context_to_prompt(ctx):
-    out = [
-        f"Named insured: {ctx['named_insured']}",
-        f"DBA: {ctx['dba'] or 'n/a'}",
-        f"Effective date: {ctx['effective_date'] or 'n/a'}",
-        f"Locations in the program: {ctx['location_count'] or 'n/a'}",
-        "",
-        "Coverages being proposed:",
-    ]
+    out = []
+    if ctx.get("contact_first_name"):
+        out.append(f"Contact first name: {ctx['contact_first_name']}")
+    out.append(f"Named insured: {ctx['named_insured']}")
+    if ctx["dba"]:
+        out.append(f"Property / DBA: {ctx['dba']}")
+    if ctx["effective_date"]:
+        out.append(f"Effective date: {ctx['effective_date']}")
+
+    t = ctx["totals"]
+    if ctx["has_expiring"] and t["dollar_change"]:
+        out.append(
+            f"HEADLINE: total premium {t['proposed']} versus expiring {t['expiring']}, "
+            f"a {t['direction']} of {t['dollar_change']} ({t['pct_change']})."
+        )
+    elif t["proposed"]:
+        out.append(f"Total proposed premium {t['proposed']}. No expiring premium on file, so do not reference any change.")
+    else:
+        out.append("No premium totals available. Do not state any premium figures.")
+
+    out.append("")
+    out.append("Coverages:")
     for c in ctx["coverages"]:
-        bits = [f"- {c['coverage']}: carrier {c['carrier']}"]
+        bits = [f"- {c['coverage']}: proposed carrier {c['carrier']}"]
+        if c.get("expiring_carrier"):
+            same = c["expiring_carrier"].lower()[:6] in (c["carrier"] or "").lower()
+            bits.append(
+                f"expiring carrier {c['expiring_carrier']}"
+                + (" (same carrier, renewing)" if same else " (moving carriers)")
+            )
         if c["key_limit"]:
-            bits.append(f"key limit {c['key_limit']}")
-        if c["proposed_premium"]:
-            bits.append(f"proposed premium {c['proposed_premium']}")
-        if c["expiring_premium"]:
-            bits.append(f"expiring premium {c['expiring_premium']}")
+            bits.append(f"limit {c['key_limit']}")
         if c["dollar_change"]:
             bits.append(f"change {c['dollar_change']} ({c['pct_change']})")
+        if c.get("deductibles"):
+            bits.append("deductibles " + "; ".join(c["deductibles"]))
         out.append(", ".join(bits))
+
+    if ctx.get("not_quoted"):
+        out.append("")
+        out.append("Presented but NOT quoted, so not included in the program: " + ", ".join(ctx["not_quoted"]))
 
     if ctx["optional_coverages"]:
         out.append("")
-        out.append("Optional coverages the insured may elect (present as options, not as bound):")
-        for c in ctx["optional_coverages"]:
-            bits = [f"- {c['coverage']}: carrier {c['carrier']}"]
-            if c["proposed_premium"]:
-                bits.append(f"premium {c['proposed_premium']}")
-            out.append(", ".join(bits))
+        out.append("Optional coverages quoted for consideration: " + ", ".join(
+            f"{c['coverage']} {c['proposed_premium']}".strip() for c in ctx["optional_coverages"]))
 
-    t = ctx["totals"]
-    out.append("")
-    if ctx["has_expiring"] and t["dollar_change"]:
-        out.append(
-            f"Total expiring premium {t['expiring']}, total proposed premium {t['proposed']}, "
-            f"total change {t['dollar_change']} ({t['pct_change']}), direction {t['direction']}."
-        )
-    elif t["proposed"]:
-        out.append(f"Total proposed premium {t['proposed']}. No expiring premium on file, so do not reference a change.")
-    else:
-        out.append("No premium totals available. Do not state any premium figures.")
+    if ctx.get("highlights"):
+        out.append("")
+        out.append("Highlights Stefan wants worked in (use these, they matter): " + ctx["highlights"])
+
+    if ctx.get("signoff"):
+        out.append("")
+        out.append(f"Sign-off flavor to use before his name: {ctx['signoff']}")
+
     return "\n".join(out)
 
 
