@@ -367,7 +367,7 @@ Proposed carriers are Starr Surplus Lines Insurance Company for Property, Berkle
 The key points are:
 - Property includes a $10,000 property damage deductible, $10,000 time element deductible, $25,000 water damage deductible, $50,000 wind deductible, and 3% named windstorm subject to a $100,000 minimum per occurrence.
 - Equipment Breakdown carries a $25,000 combined deductible with $4,000 property damage and 24 hours business income.
-- Crime was presented but not included, and Cyber was quoted separately at $3,476.42.
+- Crime and Cyber are recommended but not included in the total premium; Cyber was quoted separately at $3,476.42. Supplemental applications may be needed to finalize quotes for the optional coverages.
 
 Let me know if you would like to walk through the proposal next week or if you have any questions.
 
@@ -379,7 +379,7 @@ Structure, in this order:
 1. Greeting by contact first name. If no name is given, skip the greeting line entirely.
 2. One sentence: "Attached, is the finalized proposal for <hotel name>" plus the dollar and percent change and the total insured value. Use the HOTEL NAME you are given, never the legal entity. Mention the number of locations only when it is more than one.
 3. One sentence listing proposed carriers: "Proposed carriers are <carrier> for <line>, <carrier> for <line>, and <carrier> for <line>." Keep the lines in EXACTLY the order the facts give them - they are already sorted Property, General Liability, Umbrella, Auto, Workers Compensation, EPLI, Cyber, then ancillary. Do not alphabetize and do not regroup.
-4. "The key points are:" followed by short bullets. One bullet per line of coverage that actually has deductibles or terms worth stating, in the same line order. A final bullet for anything presented but not included, and anything quoted separately with its premium. Skip the whole section if there is nothing substantive.
+4. "The key points are:" followed by short bullets. One bullet per line of coverage that actually has deductibles or terms worth stating, in the same line order. A final bullet listing the coverages that are recommended but not included in the total premium (name each one; include a separately quoted premium where one exists), closing with the sentence "Supplemental applications may be needed to finalize quotes for the optional coverages." Skip the whole section if there is nothing substantive.
 5. Offer to walk through it.
 6. Sign-off flavor if one was given, then "Stefan" on its own line.
 
@@ -444,14 +444,15 @@ def _context_to_prompt(ctx):
             bits.append("deductibles " + "; ".join(c["deductibles"]))
         out.append(", ".join(bits))
 
-    if ctx.get("not_quoted"):
+    rec = [f"{c['coverage']} (quoted separately at {c['proposed_premium']})"
+           for c in ctx["optional_coverages"]]
+    rec += [f"{name} (not yet quoted)" for name in ctx.get("not_quoted") or []]
+    if rec:
         out.append("")
-        out.append("Presented but NOT quoted, so not included in the program: " + ", ".join(ctx["not_quoted"]))
-
-    if ctx["optional_coverages"]:
-        out.append("")
-        out.append("Optional coverages quoted for consideration: " + ", ".join(
-            f"{c['coverage']} {c['proposed_premium']}".strip() for c in ctx["optional_coverages"]))
+        out.append("RECOMMENDED OPTIONAL COVERAGES, not included in the total premium: " + ", ".join(rec)
+                   + ". The email's final key-points bullet must list these as recommended but not included in the "
+                     'total premium and close with: "Supplemental applications may be needed to finalize quotes '
+                     'for the optional coverages."')
 
     if ctx.get("highlights"):
         out.append("")
