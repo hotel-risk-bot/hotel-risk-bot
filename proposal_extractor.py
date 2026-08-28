@@ -37,7 +37,8 @@ logger = logging.getLogger(__name__)
 
 # OpenAI client (lazy initialization)
 _client = None
-GPT_MODEL = "gpt-5.4"
+GPT_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6-sol")
+MINI_MODEL = os.environ.get("OPENAI_MINI_MODEL", "gpt-5.6-luna")  # OCR + fast focused passes
 
 
 def _get_openai_client():
@@ -322,7 +323,7 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 100000) -> str:
                             imgs[0].save(buffered, format="JPEG", quality=85)
                             img_b64 = base64.b64encode(buffered.getvalue()).decode()
                             ocr_resp = _get_openai_client().chat.completions.create(
-                                model="gpt-5.4-mini",
+                                model=MINI_MODEL,
                                 messages=[
                                     {"role": "system", "content": "Extract ALL text visible in this image, preserving tables, columns, and layout."},
                                     {"role": "user", "content": [
@@ -468,7 +469,7 @@ def _extract_with_ocr(pdf_path: str, total_pages: int = 0, max_pages: int = 20) 
         
         try:
             response = _get_openai_client().chat.completions.create(
-                model="gpt-5.4-mini",  # Faster model for OCR
+                model=MINI_MODEL,  # Faster model for OCR
                 messages=[
                     {"role": "system", "content": "You are an expert OCR assistant. Extract all text from the provided insurance document images accurately and completely."},
                     {"role": "user", "content": content_parts}
@@ -2802,7 +2803,7 @@ class ProposalExtractor:
                                             f"DOCUMENT TEXT:\n{_alt_schedule_text[:40000]}"
                                         )
                                         _alt_sched_resp = _get_openai_client().chat.completions.create(
-                                            model="gpt-5.4",
+                                            model=GPT_MODEL,
                                             messages=[
                                                 {"role": "system", "content": "You are an expert at extracting per-location liability exposure tables from insurance quotes. Return EVERY row of the Liability Premises Schedule."},
                                                 {"role": "user", "content": _alt_schedule_prompt},
@@ -2873,7 +2874,7 @@ TEXT:
 {_addl_text}"""
                     try:
                         _addl_resp = _get_openai_client().chat.completions.create(
-                            model="gpt-5.4-mini",
+                            model=MINI_MODEL,
                             messages=[
                                 {"role": "system", "content": "Extract additional GL limits beyond the standard 6 CGL limits."},
                                 {"role": "user", "content": _addl_prompt}
@@ -3021,7 +3022,7 @@ TEXT:
         if not isinstance(covs, dict):
             return data
         
-        PASS_MODEL = "gpt-5.4"  # Patch AC: full model. Mini repeatedly truncated
+        PASS_MODEL = GPT_MODEL  # Patch AC: full model. Mini repeatedly truncated
         # long lettered attachment schedules (Starr a.-rrr., ~70 forms) even with
         # the full source file prepended and explicit extract-every-item rules.
         # One focused call per coverage — cost delta is pennies per proposal.
@@ -3321,7 +3322,7 @@ DOCUMENT TEXT:
     def _pass3_address_extraction(self, data: dict, combined_text: str, all_items: list = None) -> dict:
         """Pass 3: Focused extraction of covered addresses for GL.
         Uses gpt-5.4-mini for speed since this is a focused extraction task."""
-        PASS_MODEL = "gpt-5.4"      
+        PASS_MODEL = GPT_MODEL      
         covs = data.get("coverages", {})
         gl = covs.get("general_liability", {})
         
@@ -3447,7 +3448,7 @@ DOCUMENT TEXT:
     def _pass4_sublimits_extraction(self, data: dict, combined_text: str) -> dict:
         """Pass 4: Focused extraction of property sublimits/extensions.
         Uses gpt-5.4-mini for speed since this is a focused extraction task."""
-        PASS_MODEL = "gpt-5.4-mini"
+        PASS_MODEL = MINI_MODEL
         covs = data.get("coverages", {})
         prop = covs.get("property", {})
         
