@@ -490,7 +490,7 @@ def draft_email(ctx, instruction=None, previous=None, model=None):
 
     client = OpenAI()
     resp = client.chat.completions.create(
-        model=model or os.environ.get("EMAIL_MODEL", "gpt-5.4-mini"),
+        model=model or os.environ.get("EMAIL_MODEL", "gpt-5.6-terra"),
         messages=messages,
         max_completion_tokens=2000,
     )
