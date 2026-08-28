@@ -1277,7 +1277,7 @@ def _run_extraction(session_id):
                     from openai import OpenAI
                     client = OpenAI()
                     resp = client.chat.completions.create(
-                        model="gpt-5.4-mini",  # Patch Z: was gpt-4.1-mini with 4K cap — dense dec pages truncated
+                        model=os.environ.get("OPENAI_MINI_MODEL", "gpt-5.6-luna"),  # Patch Z: was gpt-4.1-mini with 4K cap — dense dec pages truncated
                         messages=[{"role": "user", "content": [
                             {"type": "text", "text": "Extract ALL text from this insurance document image. Preserve structure, numbers, and formatting."},
                             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{img_b64}", "detail": "high"}}
