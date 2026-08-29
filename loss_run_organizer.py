@@ -618,7 +618,6 @@ If you cannot determine a field, use "Unknown" for strings, "1900-01-01" for dat
             json={
                 "model": os.environ.get("OPENAI_MINI_MODEL", "gpt-5.6-luna"),
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.0,
                 "max_completion_tokens": 500,
             },
             timeout=60,
@@ -687,7 +686,6 @@ def _extract_via_ocr(pdf_bytes, filename):
             json={
                 "model": os.environ.get("OPENAI_MINI_MODEL", "gpt-5.6-luna"),
                 "messages": [{"role": "user", "content": image_content}],
-                "temperature": 0.0,
                 "max_completion_tokens": 500,
             },
             timeout=90,
