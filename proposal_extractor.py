@@ -330,7 +330,6 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 100000) -> str:
                                         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
                                     ]}
                                 ],
-                                temperature=0.0,
                                 max_completion_tokens=8000
                             )
                             ocr_text = ocr_resp.choices[0].message.content.strip()
@@ -475,7 +474,6 @@ def _extract_with_ocr(pdf_path: str, total_pages: int = 0, max_pages: int = 20) 
                     {"role": "user", "content": content_parts}
                 ],
                 max_completion_tokens=16000,
-                temperature=0.1
             )
             
             result_text = response.choices[0].message.content
@@ -1787,7 +1785,6 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
                 {"role": "user", "content": EXTRACTION_USER_PROMPT.format(document_text=combined_text)}
             ],
             response_format={"type": "json_object"},
-            temperature=0.1,
             max_completion_tokens=32000
         )
 
@@ -2050,7 +2047,6 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
                         {"role": "user", "content": EXTRACTION_USER_PROMPT.format(document_text=combined_text)}
                     ],
                     response_format={"type": "json_object"},
-                    temperature=0.1,
                     max_completion_tokens=32000
                 )
                 result_text = response.choices[0].message.content
@@ -2251,7 +2247,6 @@ async def apply_corrections(data: dict, corrections_text: str) -> dict:
                 {"role": "user", "content": f"Current extracted data:\n{json.dumps(data, indent=2)}\n\nUser corrections:\n{corrections_text}\n\nReturn the corrected JSON:"}
             ],
             response_format={"type": "json_object"},
-            temperature=0.1,
             max_completion_tokens=32000
         )
         corrected = json.loads(response.choices[0].message.content)
@@ -2359,7 +2354,6 @@ class ProposalExtractor:
                     },
                 ],
                 response_format={"type": "json_object"},
-                temperature=0.1,
                 max_completion_tokens=32000,
             )
 
@@ -2454,7 +2448,6 @@ class ProposalExtractor:
                                     {"role": "user", "content": _xs_prompt},
                                 ],
                                 response_format={"type": "json_object"},
-                                temperature=0.1,
                                 max_completion_tokens=8000,
                             )
                             _xs_data = json.loads(_xs_response.choices[0].message.content)
@@ -2533,7 +2526,6 @@ class ProposalExtractor:
                                 {"role": "user", "content": _tower_prompt},
                             ],
                             response_format={"type": "json_object"},
-                            temperature=0.1,
                             max_completion_tokens=8000,
                         )
                         _tower_data = json.loads(_tower_response.choices[0].message.content)
@@ -2759,7 +2751,6 @@ class ProposalExtractor:
                                     {"role": "user", "content": _alt_prompt},
                                 ],
                                 response_format={"type": "json_object"},
-                                temperature=0.1,
                                 max_completion_tokens=16000,
                             )
                             _alt_data = json.loads(_alt_response.choices[0].message.content)
@@ -2809,7 +2800,6 @@ class ProposalExtractor:
                                                 {"role": "user", "content": _alt_schedule_prompt},
                                             ],
                                             response_format={"type": "json_object"},
-                                            temperature=0.0,
                                             max_completion_tokens=16000,
                                         )
                                         _alt_sched_data = json.loads(_alt_sched_resp.choices[0].message.content)
@@ -2880,7 +2870,6 @@ TEXT:
                                 {"role": "user", "content": _addl_prompt}
                             ],
                             response_format={"type": "json_object"},
-                            temperature=0.0,
                             max_completion_tokens=4000
                         )
                         _addl_data = json.loads(_addl_resp.choices[0].message.content)
@@ -3251,7 +3240,6 @@ DOCUMENT TEXT:
                         {"role": "user", "content": prompt}
                     ],
                     response_format={"type": "json_object"},
-                    temperature=0.0,
                     max_completion_tokens=16000
                 )
                 result = json.loads(response.choices[0].message.content)
@@ -3421,7 +3409,6 @@ DOCUMENT TEXT:
                     {"role": "user", "content": prompt}
                 ],
                 response_format={"type": "json_object"},
-                temperature=0.0,
                 max_completion_tokens=16000
             )
             result = json.loads(response.choices[0].message.content)
@@ -3536,7 +3523,6 @@ DOCUMENT TEXT:
                     {"role": "user", "content": prompt}
                 ],
                 response_format={"type": "json_object"},
-                temperature=0.0,
                 max_completion_tokens=8000
             )
             result = json.loads(response.choices[0].message.content)
