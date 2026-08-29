@@ -859,6 +859,21 @@ def _is_high_risk_exclusion(text):
     return any(kw in t for kw in HIGH_RISK_EXCLUSION_KEYWORDS)
 
 
+# Roof-related forms (limitation endorsements, ACV/cosmetic schedules) must
+# always be flagged in the forms tables — Stefan, Aug 2026.
+_ROOF_FORM_TERMS = ("roof", "cosmetic damage")
+_BASE_HIGH_RISK_CHECK = _is_high_risk_exclusion
+
+
+def _is_roof_form(text):
+    t = str(text or "").lower()
+    return any(k in t for k in _ROOF_FORM_TERMS)
+
+
+def _is_high_risk_exclusion(text):  # extended: roof forms always highlighted
+    return _is_roof_form(text) or _BASE_HIGH_RISK_CHECK(text)
+
+
 def _apply_high_risk_highlight(table, row_text_indices=(0, 1), start_row=1):
     """Scan a table for high-risk exclusion language in the specified columns
     (default: form number + description) and apply yellow highlight + bold red
@@ -1390,6 +1405,16 @@ def generate_payment_options(doc, data):
     """Section 4: Payment Options"""
     add_page_break(doc)
     add_section_header(doc, "Payment Options")
+    
+    # HUB standard payment policy — always shown, prominent (Stefan, Aug 2026)
+    add_formatted_paragraph(
+        doc, "PAYMENT IS DUE WITHIN 5 DAYS OF BINDING.",
+        size=13, color=RGBColor(0xCC, 0x00, 0x00), bold=True,
+        space_before=6, space_after=2)
+    add_formatted_paragraph(
+        doc, "Certificates of insurance will NOT be released to lenders or "
+        "franchisors until signed binding documents and payment are received.",
+        size=11, color=RGBColor(0xCC, 0x00, 0x00), bold=True, space_after=10)
     
     payment_opts = data.get("payment_options", [])
     if payment_opts:
@@ -2095,12 +2120,16 @@ def generate_information_summary(doc, data):
         liab_loc_count = min(liab_loc_count, total_loc_count)
     # Final check: total must be at least the property count.
     total_loc_count = max(total_loc_count, prop_loc_count)
-    if total_loc_count > 0:
-        rows.append(["Total Number of Locations", str(total_loc_count)])
-    if prop_loc_count > 0:
-        rows.append(["Property Locations", str(prop_loc_count)])
-    if liab_loc_count > 0:
-        rows.append(["Liability Locations", str(liab_loc_count)])
+    if total_loc_count == 1:
+        # Single-location account: one clean row, no property/liability split
+        rows.append(["# of Locations", "1"])
+    else:
+        if total_loc_count > 0:
+            rows.append(["Total Number of Locations", str(total_loc_count)])
+        if prop_loc_count > 0:
+            rows.append(["Property Locations", str(prop_loc_count)])
+        if liab_loc_count > 0:
+            rows.append(["Liability Locations", str(liab_loc_count)])
     
     # Count location types from SOV/property locations and GL schedule_of_classes
     # Use SOV descriptions and GL classifications for PHYSICAL locations only
@@ -2210,7 +2239,12 @@ def generate_information_summary(doc, data):
     for ot in sorted(other_types):
         type_parts.append(f"{other_types[ot]} {ot}")
     if type_parts:
-        rows.append(["Location Types", ", ".join(type_parts)])
+        if total_loc_count == 1 and len(type_parts) == 1:
+            # "1 Hotel(s)" -> "Hotel"
+            _tp = type_parts[0].split(" ", 1)[-1].replace("(s)", "").strip()
+            rows.append(["Location Type", _tp])
+        else:
+            rows.append(["Location Types", ", ".join(type_parts)])
     
     # Add TIV from SOV or property quote
     # Patch AA: require TIV > 1 — junk values like $1/$2 (from a mis-mapped SOV
@@ -4172,7 +4206,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     tower = cov.get("tower_structure", [])
     if tower:
         add_subsection_header(doc, "Umbrella Tower Structure")
-        headers = ["Layer", "Carrier", "Limits", "Premium", "Total (incl. taxes/fees)"]
+        headers = ["Layer", "Carrier", "Limits"]
         # Same isinstance guard as underlying_insurance — GPT occasionally
         # returns tower_structure rows as strings.
         rows = []
@@ -4182,13 +4216,11 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                     t.get("layer", ""),
                     t.get("carrier", ""),
                     t.get("limits", ""),
-                    fmt_currency(t.get("premium", 0)),
-                    fmt_currency(t.get("total_cost", 0))
                 ])
             else:
-                rows.append([str(t), "", "", "", ""])
+                rows.append([str(t), "", ""])
         create_styled_table(doc, headers, rows,
-                          col_widths=[0.8, 2.0, 1.5, 1.2, 1.5],
+                          col_widths=[1.0, 3.2, 2.8],
                           header_size=9, body_size=9)
     
     # ── Warrants (property-specific) ──────────────────────────────────────
