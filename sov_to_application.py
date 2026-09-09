@@ -123,26 +123,51 @@ def _fname(prefix="f"):
 class FormText(Flowable):
     """Editable text field, pre-filled with the SOV value."""
 
-    def __init__(self, value="", height=13, font_size=8.5, tooltip=""):
+    def __init__(self, value="", height=13, font_size=8.5, tooltip="",
+                 multiline=False):
         Flowable.__init__(self)
         self.value = "" if value in (None, "") else str(value)
         self.height = height
         self.font_size = font_size
         self.tooltip = tooltip
+        self.multiline = multiline
         self.width = 20
 
     def wrap(self, availWidth, availHeight):
-        self.width = max(min(availWidth, CONTENT_W), 20)
+        self.width = max(min(availWidth, CONTENT_W), 12)
         return (self.width, self.height)
 
     def draw(self):
         x, y = self.canv.absolutePosition(0, 0)
+        value = self.value
+        if self.multiline and value:
+            # greedy word-wrap so the pre-filled value fits the field width
+            words, lines, cur = value.split(), [], ""
+            maxw = self.width - 5
+            for w in words:
+                t = (cur + " " + w).strip()
+                if not cur or pdfmetrics.stringWidth(
+                        t, "Helvetica", self.font_size) <= maxw:
+                    cur = t
+                else:
+                    lines.append(cur)
+                    cur = w
+            if cur:
+                lines.append(cur)
+            value = "\n".join(lines)
         self.canv.acroForm.textfield(
-            name=_fname("t"), value=self.value, tooltip=self.tooltip,
+            name=_fname("t"), value=value, tooltip=self.tooltip,
             x=x, y=y, width=self.width, height=self.height,
             fontName="Helvetica", fontSize=self.font_size,
             borderWidth=0.5, borderColor=FIELD_BORDER, fillColor=FIELD_BG,
-            textColor=colors.black, maxlen=500, relative=False)
+            textColor=colors.black, maxlen=500, relative=False,
+            fieldFlags="multiline" if self.multiline else "")
+
+
+def sched_field(value, wide=False):
+    """Compact editable cell for the summary schedule tables."""
+    return FormText(value, height=16 if wide else 11, font_size=6.6,
+                    multiline=wide)
 
 
 class FormCheck(Flowable):
@@ -577,21 +602,21 @@ def build_property_schedule(story, locations):
         tbi += loc["bi_limit"] or 0; tt += loc["tiv"] or 0
         data.append([
             Paragraph(txt(loc["loc_no"]) or str(i), td),
-            Paragraph(txt(loc["dba"]), tdb),
-            Paragraph(txt(loc["construction"]), td),
-            Paragraph(txt(loc["yr_built"]), td),
-            Paragraph(pct(loc["sprinkler"]), td),
-            Paragraph(money(loc["bldg_limit"]), td),
-            Paragraph(money(loc["contents_limit"]), td),
-            Paragraph(money(loc["bi_limit"]), td),
-            Paragraph(money(loc["tiv"]), tdb),
-            Paragraph(roof_yr_age(loc["yr_roof"]), td),
+            sched_field(txt(loc["dba"]), wide=True),
+            sched_field(txt(loc["construction"]), wide=True),
+            sched_field(txt(loc["yr_built"])),
+            sched_field(pct(loc["sprinkler"])),
+            sched_field(money(loc["bldg_limit"])),
+            sched_field(money(loc["contents_limit"])),
+            sched_field(money(loc["bi_limit"])),
+            sched_field(money(loc["tiv"])),
+            sched_field(roof_yr_age(loc["yr_roof"])),
         ])
     data.append([
         Paragraph("", td), Paragraph("PORTFOLIO TOTAL", tot), Paragraph("", td),
-        Paragraph("", td), Paragraph("", td), Paragraph(money(tb), tot),
-        Paragraph(money(tc), tot), Paragraph(money(tbi), tot),
-        Paragraph(money(tt), tot), Paragraph("", td),
+        Paragraph("", td), Paragraph("", td), sched_field(money(tb)),
+        sched_field(money(tc)), sched_field(money(tbi)),
+        sched_field(money(tt)), Paragraph("", td),
     ])
     cw = [0.3, 1.45, 0.92, 0.4, 0.4, 0.76, 0.7, 0.72, 0.8, 0.82]
     scale = CONTENT_W / (sum(cw) * inch)
@@ -632,21 +657,21 @@ def build_liability_schedule(story, locations):
         tft += loc["ft"] or 0; tpt += loc["pt"] or 0
         data.append([
             Paragraph(txt(loc["loc_no"]) or str(i), td),
-            Paragraph(txt(loc["dba"]), tdb),
-            Paragraph(txt(int(loc["rooms"])) if loc["rooms"] else "", td),
-            Paragraph(money(loc["hotel_sales"]), td),
-            Paragraph(money(loc["restaurant_sales"]), td),
-            Paragraph(money(loc["liquor_sales"]), td),
-            Paragraph(money(loc["sundry_sales"]), td),
-            Paragraph(money(loc["total_sales"]), tdb),
-            Paragraph(f"{int(loc['ft'] or 0)} / {int(loc['pt'] or 0)}", td),
+            sched_field(txt(loc["dba"]), wide=True),
+            sched_field(txt(int(loc["rooms"])) if loc["rooms"] else ""),
+            sched_field(money(loc["hotel_sales"])),
+            sched_field(money(loc["restaurant_sales"])),
+            sched_field(money(loc["liquor_sales"])),
+            sched_field(money(loc["sundry_sales"])),
+            sched_field(money(loc["total_sales"])),
+            sched_field(f"{int(loc['ft'] or 0)} / {int(loc['pt'] or 0)}"),
         ])
     data.append([
         Paragraph("", td), Paragraph("PORTFOLIO TOTAL", tot),
-        Paragraph(str(int(trooms)), tot), Paragraph(money(thot), tot),
-        Paragraph(money(tres), tot), Paragraph(money(tliq), tot),
-        Paragraph(money(tsun), tot), Paragraph(money(ttot), tot),
-        Paragraph(f"{int(tft)} / {int(tpt)}", tot),
+        sched_field(str(int(trooms))), sched_field(money(thot)),
+        sched_field(money(tres)), sched_field(money(tliq)),
+        sched_field(money(tsun)), sched_field(money(ttot)),
+        sched_field(f"{int(tft)} / {int(tpt)}"),
     ])
     cw = [0.3, 1.55, 0.5, 0.82, 0.82, 0.72, 0.72, 0.86, 0.74]
     scale = CONTENT_W / (sum(cw) * inch)
