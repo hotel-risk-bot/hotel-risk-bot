@@ -3,9 +3,11 @@
 SOV -> Hotels & Motels Supplemental Application (signable PDF)
 =============================================================
 
-Reads a HUB hospitality SOV (Excel) and produces a pre-filled, plain-format
-"Hotels & Motels" supplemental application as a flat PDF with a signature line
-for the insured to sign. Mirrors the layout of the carrier sample form.
+Reads a HUB hospitality SOV (Excel) and produces a pre-filled "Hotels &
+Motels" supplemental application as a FILLABLE PDF: every answer is an
+editable AcroForm text field (pre-filled from the SOV) and every Yes/No or
+checkbox is a clickable form checkbox, so the client can correct or complete
+answers in any PDF viewer before signing. Mirrors the carrier sample layout.
 
 - Single location   -> one application, premises/pool/etc. filled from the row.
 - Multiple locations -> business info + signature appear once; the per-location
@@ -28,7 +30,7 @@ from reportlab.lib import colors
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import (
     SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, KeepTogether,
-    HRFlowable,
+    HRFlowable, Flowable,
 )
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -69,7 +71,7 @@ HUB_CLASSIC_LIGHT = colors.HexColor("#385263")
 HUB_GOLD = colors.HexColor("#f3b921")
 
 APP_TITLE = "Hotel Supplemental Application"
-APP_FOOTER = "Hotel Supplemental Application v2026Q2"
+APP_FOOTER = "Hotel Supplemental Application v2026Q3 (fillable)"
 
 # Canonical HUB hotel-program quote subjectivities. Each entry is
 # (display text, lowercase substring used to detect it in the SOV string).
@@ -104,22 +106,123 @@ FINE = ParagraphStyle("fine", fontName="Helvetica", fontSize=7.2, leading=9.5)
 CONTENT_W = 7.0 * inch  # printable width inside 0.75" margins
 
 
+# ---------------------------------------------------------------- form fields
+# Every answer is an editable AcroForm widget so the downloaded PDF can be
+# corrected/completed in any PDF viewer. Field names are auto-numbered so
+# each widget is independent.
+FIELD_BG = colors.HexColor("#f4f8fc")
+FIELD_BORDER = colors.HexColor("#9db8cc")
+_FIELD_SEQ = [0]
+
+
+def _fname(prefix="f"):
+    _FIELD_SEQ[0] += 1
+    return f"{prefix}_{_FIELD_SEQ[0]}"
+
+
+class FormText(Flowable):
+    """Editable text field, pre-filled with the SOV value."""
+
+    def __init__(self, value="", height=13, font_size=8.5, tooltip=""):
+        Flowable.__init__(self)
+        self.value = "" if value in (None, "") else str(value)
+        self.height = height
+        self.font_size = font_size
+        self.tooltip = tooltip
+        self.width = 20
+
+    def wrap(self, availWidth, availHeight):
+        self.width = max(min(availWidth, CONTENT_W), 20)
+        return (self.width, self.height)
+
+    def draw(self):
+        x, y = self.canv.absolutePosition(0, 0)
+        self.canv.acroForm.textfield(
+            name=_fname("t"), value=self.value, tooltip=self.tooltip,
+            x=x, y=y, width=self.width, height=self.height,
+            fontName="Helvetica", fontSize=self.font_size,
+            borderWidth=0.5, borderColor=FIELD_BORDER, fillColor=FIELD_BG,
+            textColor=colors.black, maxlen=500, relative=False)
+
+
+class FormCheck(Flowable):
+    """Single clickable checkbox with an optional static label."""
+
+    SIZE = 10
+
+    def __init__(self, checked=False, label=""):
+        Flowable.__init__(self)
+        self.checked = bool(checked)
+        self.label = label
+        self.height = 12
+        self.width = self.SIZE
+
+    def wrap(self, availWidth, availHeight):
+        w = self.SIZE
+        if self.label:
+            w += 4 + pdfmetrics.stringWidth(self.label, "Helvetica", 8.5)
+        self.width = min(max(w, self.SIZE), availWidth)
+        return (self.width, self.height)
+
+    def draw(self):
+        x, y = self.canv.absolutePosition(0, 1)
+        self.canv.acroForm.checkbox(
+            name=_fname("c"), checked=self.checked, x=x, y=y,
+            size=self.SIZE, buttonStyle="check", borderWidth=0.5,
+            borderColor=FIELD_BORDER, fillColor=FIELD_BG, relative=False)
+        if self.label:
+            self.canv.setFont("Helvetica", 8.5)
+            self.canv.setFillColor(colors.black)
+            self.canv.drawString(self.SIZE + 4, 3, self.label)
+
+
+class FormYN(Flowable):
+    """Yes / No pair of clickable checkboxes, pre-checked from the SOV."""
+
+    SIZE = 10
+
+    def __init__(self, val):
+        Flowable.__init__(self)
+        s = ("" if val is None else str(val)).strip().lower()
+        self.yes = s in ("yes", "y", "true", "1", "1.0")
+        self.no = s in ("no", "n", "false", "0", "0.0", "n/a", "na", "none")
+        self.height = 12
+        self.width = 72
+
+    def wrap(self, availWidth, availHeight):
+        self.width = min(72, availWidth)
+        return (self.width, self.height)
+
+    def draw(self):
+        c = self.canv
+        x, y = c.absolutePosition(0, 1)
+        c.acroForm.checkbox(
+            name=_fname("y"), checked=self.yes, x=x, y=y, size=self.SIZE,
+            buttonStyle="check", borderWidth=0.5,
+            borderColor=FIELD_BORDER, fillColor=FIELD_BG, relative=False)
+        c.acroForm.checkbox(
+            name=_fname("n"), checked=self.no, x=x + 40, y=y, size=self.SIZE,
+            buttonStyle="check", borderWidth=0.5,
+            borderColor=FIELD_BORDER, fillColor=FIELD_BG, relative=False)
+        c.setFont("Helvetica", 8.5)
+        c.setFillColor(colors.black)
+        c.drawString(self.SIZE + 3, 3, "Yes")
+        c.drawString(40 + self.SIZE + 3, 3, "No")
+
+
 # ---------------------------------------------------------------- helpers
 def P(text, style=BODY):
     return Paragraph("" if text is None else str(text), style)
 
 
 def yn(val):
-    """Render a Yes/No answer with the applicable box checked.
-    Returns a Paragraph. Blank value -> both boxes empty."""
-    s = ("" if val is None else str(val)).strip().lower()
-    yes = s in ("yes", "y", "true", "1", "1.0")
-    no = s in ("no", "n", "false", "0", "0.0", "n/a", "na", "none")
-    return Paragraph(f"{_box(yes)} Yes&nbsp;&nbsp;&nbsp;{_box(no)} No", BODY)
+    """Yes/No answer as clickable form checkboxes, pre-checked from the SOV.
+    Blank value -> both boxes empty."""
+    return FormYN(val)
 
 
 def checkbox(checked, label=""):
-    return Paragraph(f"{_box(checked)} {label}", BODY)
+    return FormCheck(checked, label)
 
 
 def money(v):
@@ -378,9 +481,8 @@ def lbl(text):
 
 
 def ans(text):
-    """Filled answer shown with a light underline feel via box border."""
-    return Paragraph(f"<u>{'' if text in (None,'') else text}</u>" if text not in (None, "")
-                     else "____________________", BODY)
+    """Pre-filled, editable answer field."""
+    return FormText("" if text in (None, "") else str(text))
 
 
 # ---------------------------------------------------------------- builders
@@ -405,8 +507,6 @@ def build_business_info(story, app):
     t = Table(rows, colWidths=[1.2 * inch, half + 0.3 * inch, 0.6 * inch, 1.3 * inch])
     t.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LINEBELOW", (1, 0), (1, 0), 0.4, colors.grey),
-        ("LINEBELOW", (3, 0), (3, 0), 0.4, colors.grey),
         ("LEFTPADDING", (0, 0), (-1, -1), 2), ("RIGHTPADDING", (0, 0), (-1, -1), 2),
         ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
     ]))
@@ -635,8 +735,8 @@ def build_location(story, loc, idx, multi):
     block.append(P("Property Values Being Used:", BOLD))
     pv = Table([
         [P("Building", BOLD), P("Contents", BOLD), P("Business Income", BOLD), P("TIV", BOLD)],
-        [P(money(loc["bldg_limit"])), P(money(loc["contents_limit"])),
-         P(money(loc["bi_limit"])), P(money(loc["tiv"]))],
+        [FormText(money(loc["bldg_limit"])), FormText(money(loc["contents_limit"])),
+         FormText(money(loc["bi_limit"])), FormText(money(loc["tiv"]))],
     ], colWidths=[CONTENT_W / 4.0] * 4)
     pv.setStyle(TableStyle([
         ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
@@ -683,7 +783,7 @@ def build_location(story, loc, idx, multi):
     hours = ""
     if loc["hours_open"] or loc["hours_closed"]:
         ho, hc = txt(loc["hours_open"]), txt(loc["hours_closed"])
-        hours = f"{ho} &ndash; {hc}".strip(" &ndash;")
+        hours = f"{ho} - {hc}".strip(" -")
     block.append(section_bar("Liquor Liability"))
     block.append(kv_table([
         [lbl("Liquor sold / furnished?"), yn(liquor_val),
@@ -720,8 +820,8 @@ def build_location(story, loc, idx, multi):
     block.append(Spacer(1, 4))
     gr = Table([
         [P("Hotel Operations", BOLD), P("Restaurant", BOLD), P("Liquor", BOLD), P("Other", BOLD), P("Total", BOLD)],
-        [P(money(loc["hotel_sales"])), P(money(loc["restaurant_sales"])),
-         P(money(loc["liquor_sales"])), P(money(loc["other_sales"])), P(money(loc["total_sales"]))],
+        [FormText(money(loc["hotel_sales"])), FormText(money(loc["restaurant_sales"])),
+         FormText(money(loc["liquor_sales"])), FormText(money(loc["other_sales"])), FormText(money(loc["total_sales"]))],
     ], colWidths=[CONTENT_W / 5.0] * 5)
     gr.setStyle(TableStyle([
         ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
@@ -776,19 +876,26 @@ def build_signature(story, app):
     story.append(Spacer(1, 22))
 
     sig = Table([
-        [P("X", BODY), "", P("", BODY), "", P("", BODY)],
+        [P("X", BODY), "", FormText("", height=14, tooltip="Title"), "",
+         FormText("", height=14, tooltip="Date")],
         [P("Applicant Signature", SMALL), "", P("Title", SMALL), "", P("Date", SMALL)],
     ], colWidths=[3.0 * inch, 0.3 * inch, 1.8 * inch, 0.3 * inch, 1.6 * inch])
     sig.setStyle(TableStyle([
         ("LINEABOVE", (0, 1), (0, 1), 0.6, colors.black),
-        ("LINEABOVE", (2, 1), (2, 1), 0.6, colors.black),
-        ("LINEABOVE", (4, 1), (4, 1), 0.6, colors.black),
         ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
         ("TOPPADDING", (0, 0), (0, 0), 14),
     ]))
     story.append(sig)
     story.append(Spacer(1, 8))
-    story.append(P(f"Printed name: {txt(app['contact']) or '____________________________'}", SMALL))
+    pn = Table([[P("Printed name:", SMALL),
+                 FormText(txt(app["contact"]), tooltip="Printed name")]],
+               colWidths=[0.9 * inch, 3.0 * inch])
+    pn.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (0, 0), 0),
+    ]))
+    pn.hAlign = "LEFT"
+    story.append(pn)
 
 
 def _truthy(v):
@@ -810,6 +917,7 @@ def _footer(canvas, doc):
 
 # ---------------------------------------------------------------- main
 def generate(sov_path, out_path):
+    _FIELD_SEQ[0] = 0  # unique widget names per document
     app, locations = read_sov(sov_path)
     multi = len(locations) > 1
 
