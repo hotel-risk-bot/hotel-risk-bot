@@ -1881,7 +1881,8 @@ def application_generate():
     try:
         _gen_application(in_path, out_path)
     except Exception as e:
-        return ("Could not generate the application: %s" % e, 500)
+        import traceback
+        return ("Could not generate the application: %s\n%s" % (e, traceback.format_exc()), 500)
     return send_file(out_path, as_attachment=True, download_name=out_name, mimetype="application/pdf")
 
 
