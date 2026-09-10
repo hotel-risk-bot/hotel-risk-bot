@@ -112,7 +112,26 @@ CONTENT_W = 7.0 * inch  # printable width inside 0.75" margins
 # each widget is independent.
 FIELD_BG = colors.HexColor("#f4f8fc")
 FIELD_BORDER = colors.HexColor("#9db8cc")
+# Highlighted fields (HUB Cheerful Gold) — missing answers or underwriting
+# flags the client must review/complete before signing.
+HL_BG = colors.HexColor("#fdf0c9")
+HL_BORDER = colors.HexColor("#f3b921")
 _FIELD_SEQ = [0]
+
+
+def _blank(v):
+    return v in (None, "")
+
+
+def _age_flag(v, max_age):
+    """True when an update year is blank or older than max_age years."""
+    if _blank(v):
+        return True
+    try:
+        yr = int(float(str(v).replace(",", "").strip()))
+    except (TypeError, ValueError):
+        return False
+    return (datetime.date.today().year - yr) > max_age
 
 
 def _fname(prefix="f"):
@@ -124,13 +143,14 @@ class FormText(Flowable):
     """Editable text field, pre-filled with the SOV value."""
 
     def __init__(self, value="", height=13, font_size=8.5, tooltip="",
-                 multiline=False):
+                 multiline=False, highlight=False):
         Flowable.__init__(self)
         self.value = "" if value in (None, "") else str(value)
         self.height = height
         self.font_size = font_size
         self.tooltip = tooltip
         self.multiline = multiline
+        self.highlight = highlight
         self.width = 20
 
     def wrap(self, availWidth, availHeight):
@@ -159,7 +179,9 @@ class FormText(Flowable):
             name=_fname("t"), value=value, tooltip=self.tooltip,
             x=x, y=y, width=self.width, height=self.height,
             fontName="Helvetica", fontSize=self.font_size,
-            borderWidth=0.5, borderColor=FIELD_BORDER, fillColor=FIELD_BG,
+            borderWidth=1 if self.highlight else 0.5,
+            borderColor=HL_BORDER if self.highlight else FIELD_BORDER,
+            fillColor=HL_BG if self.highlight else FIELD_BG,
             textColor=colors.black, maxlen=500, relative=False,
             fieldFlags="multiline" if self.multiline else "")
 
@@ -206,11 +228,12 @@ class FormYN(Flowable):
 
     SIZE = 10
 
-    def __init__(self, val):
+    def __init__(self, val, highlight=False):
         Flowable.__init__(self)
         s = ("" if val is None else str(val)).strip().lower()
         self.yes = s in ("yes", "y", "true", "1", "1.0")
         self.no = s in ("no", "n", "false", "0", "0.0", "n/a", "na", "none")
+        self.highlight = highlight
         self.height = 12
         self.width = 72
 
@@ -220,15 +243,18 @@ class FormYN(Flowable):
 
     def draw(self):
         c = self.canv
+        bw = 1 if self.highlight else 0.5
+        bc = HL_BORDER if self.highlight else FIELD_BORDER
+        bg = HL_BG if self.highlight else FIELD_BG
         x, y = c.absolutePosition(0, 1)
         c.acroForm.checkbox(
             name=_fname("y"), checked=self.yes, x=x, y=y, size=self.SIZE,
-            buttonStyle="check", borderWidth=0.5,
-            borderColor=FIELD_BORDER, fillColor=FIELD_BG, relative=False)
+            buttonStyle="check", borderWidth=bw,
+            borderColor=bc, fillColor=bg, relative=False)
         c.acroForm.checkbox(
             name=_fname("n"), checked=self.no, x=x + 40, y=y, size=self.SIZE,
-            buttonStyle="check", borderWidth=0.5,
-            borderColor=FIELD_BORDER, fillColor=FIELD_BG, relative=False)
+            buttonStyle="check", borderWidth=bw,
+            borderColor=bc, fillColor=bg, relative=False)
         c.setFont("Helvetica", 8.5)
         c.setFillColor(colors.black)
         c.drawString(self.SIZE + 3, 3, "Yes")
@@ -240,10 +266,10 @@ def P(text, style=BODY):
     return Paragraph("" if text is None else str(text), style)
 
 
-def yn(val):
+def yn(val, highlight=False):
     """Yes/No answer as clickable form checkboxes, pre-checked from the SOV.
     Blank value -> both boxes empty."""
-    return FormYN(val)
+    return FormYN(val, highlight=highlight)
 
 
 def checkbox(checked, label=""):
@@ -505,9 +531,10 @@ def lbl(text):
     return Paragraph(text, BOLD)
 
 
-def ans(text):
+def ans(text, highlight=False):
     """Pre-filled, editable answer field."""
-    return FormText("" if text in (None, "") else str(text))
+    return FormText("" if text in (None, "") else str(text),
+                    highlight=highlight)
 
 
 # ---------------------------------------------------------------- builders
@@ -523,6 +550,18 @@ def title_bar(text):
 
 def build_business_info(story, app):
     story.append(title_bar(APP_TITLE))
+    story.append(Spacer(1, 4))
+    lg = Table([["", P("<b>Highlighted fields</b> are missing or need review "
+                       "&mdash; please complete or confirm before signing.", FINE)]],
+               colWidths=[0.18 * inch, CONTENT_W - 0.18 * inch])
+    lg.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (0, 0), HL_BG),
+        ("BOX", (0, 0), (0, 0), 1, HL_BORDER),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (1, 0), (1, 0), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]))
+    story.append(lg)
     story.append(Spacer(1, 6))
     half = CONTENT_W / 2
     rows = [
@@ -736,20 +775,29 @@ def build_location(story, loc, idx, multi):
         [lbl("Number of buildings at this location:"), ans(txt(loc["num_buildings"]))],
         [lbl("Construction / Year built / Floors:"),
          ans(", ".join([x for x in [txt(loc["construction"]), txt(loc["yr_built"]), (txt(loc["floors"]) + " floors" if loc["floors"] else "")] if x]))],
-        [lbl("EIFS (Exterior Insulating Finishing System):"), ans(txt(loc["eifs"]))],
+        [lbl("EIFS (Exterior Insulating Finishing System):"),
+         ans(txt(loc["eifs"]), highlight=_blank(loc["eifs"]))],
         [lbl("Corridor (Interior / Exterior):"), ans(txt(loc["corridor"]))],
-        [lbl("Updates &ndash; Electrical:"), ans(year_age(loc["yr_elec"]))],
-        [lbl("Updates &ndash; Plumbing:"), ans(year_age(loc["yr_plumb"]))],
-        [lbl("Updates &ndash; Roofing:"), ans(year_age(loc["yr_roof"]))],
+        [lbl("Updates &ndash; Electrical:"),
+         ans(year_age(loc["yr_elec"]), highlight=_age_flag(loc["yr_elec"], 25))],
+        [lbl("Updates &ndash; Plumbing:"),
+         ans(year_age(loc["yr_plumb"]), highlight=_age_flag(loc["yr_plumb"], 40))],
+        [lbl("Updates &ndash; Roofing:"),
+         ans(year_age(loc["yr_roof"]), highlight=_age_flag(loc["yr_roof"], 15))],
         [lbl("Updates &ndash; HVAC:"), ans(year_age(loc["yr_hvac"]))],
     ], [w1, w2]))
     block.append(kv_table([
-        [lbl("Are buildings sprinklered?"), yn("Yes" if _truthy(loc["sprinkler"]) else ""),
-         lbl("Percentage:"), ans(pct(loc["sprinkler"]))],
-        [lbl("Smoke detectors?"), yn("Yes" if loc["smoke"] else ""),
-         lbl("Type:"), ans(txt(loc["smoke"]))],
-        [lbl("Fire alarms?"), yn("Yes" if loc["fire"] else ""),
-         lbl("Type:"), ans(txt(loc["fire"]))],
+        [lbl("Are buildings sprinklered?"),
+         yn("Yes" if _truthy(loc["sprinkler"]) else "",
+            highlight=_blank(loc["sprinkler"])),
+         lbl("Percentage:"),
+         ans(pct(loc["sprinkler"]), highlight=_blank(loc["sprinkler"]))],
+        [lbl("Smoke detectors?"),
+         yn("Yes" if loc["smoke"] else "", highlight=_blank(loc["smoke"])),
+         lbl("Type:"), ans(txt(loc["smoke"]), highlight=_blank(loc["smoke"]))],
+        [lbl("Fire alarms?"),
+         yn("Yes" if loc["fire"] else "", highlight=_blank(loc["fire"])),
+         lbl("Type:"), ans(txt(loc["fire"]), highlight=_blank(loc["fire"]))],
         [lbl("Aluminum wiring on premises?"),
          yn("No" if loc["wiring"] and "alum" not in str(loc["wiring"]).lower() else ""),
          lbl("Wiring type:"), ans(txt(loc["wiring"]))],
@@ -795,7 +843,13 @@ def build_location(story, loc, idx, multi):
     block.append(Spacer(1, 6))
 
     # --- Restaurant / Cooking
+    # Restaurant and/or liquor sales on the SOV mean there IS a food &
+    # beverage exposure: force "Restaurant on premises?" to Yes.
+    has_fnb = bool((loc["restaurant_sales"] or 0) > 0
+                   or (loc["liquor_sales"] or 0) > 0)
     restaurant_val = loc["restaurant"] if loc["restaurant"] not in (None, "") else "No"
+    if has_fnb and str(restaurant_val).strip().lower() not in ("yes", "y"):
+        restaurant_val = "Yes"
     block.append(section_bar("Restaurant / Cooking Exposure"))
     block.append(kv_table([
         [lbl("Restaurant on premises?"), yn(restaurant_val),
@@ -812,7 +866,8 @@ def build_location(story, loc, idx, multi):
     block.append(section_bar("Liquor Liability"))
     block.append(kv_table([
         [lbl("Liquor sold / furnished?"), yn(liquor_val),
-         lbl("Hours of operation:"), ans(hours)],
+         lbl("Hours of operation:"),
+         ans(hours, highlight=has_fnb and not hours)],
     ], [2.0 * inch, 1.1 * inch, 1.6 * inch, CONTENT_W - 4.7 * inch]))
     block.append(Spacer(1, 6))
 
@@ -839,8 +894,11 @@ def build_location(story, loc, idx, multi):
     block.append(section_bar("Gross Receipts &mdash; This Location"))
     block.append(kv_table([
         [lbl("Average room rate (ADR):"),
-         ans(money(loc["adr"]) + ("  per " + txt(loc["room_rentals"]) if loc["room_rentals"] else "")),
-         lbl("Occupancy rate:"), ans(pct(loc["occupancy"]))],
+         ans(money(loc["adr"]) + ("  per " + txt(loc["room_rentals"])
+                                  if loc["room_rentals"] and not _blank(loc["adr"]) else ""),
+             highlight=_blank(loc["adr"])),
+         lbl("Occupancy rate:"),
+         ans(pct(loc["occupancy"]), highlight=_blank(loc["occupancy"]))],
     ], [1.9 * inch, 1.9 * inch, 1.3 * inch, CONTENT_W - 5.1 * inch]))
     block.append(Spacer(1, 4))
     gr = Table([
