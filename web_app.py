@@ -1886,6 +1886,192 @@ def application_generate():
     return send_file(out_path, as_attachment=True, download_name=out_name, mimetype="application/pdf")
 
 
+# ─── ACORD 125 from Hospitality SOV (xlsx / csv) ───
+
+_ACORD125_DIR = os.path.join(tempfile.gettempdir(), "acord125_out")
+_ACORD125_TTL = 60 * 60  # generated PDFs live for one hour
+
+_ACORD125_FORM_HTML = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ACORD 125 Builder — HUB International</title>
+<style>
+  body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#0f1a28;color:#e8eef5;display:flex;min-height:100vh;align-items:flex-start;justify-content:center;padding:28px 0}
+  .card{background:#16202f;border:1px solid #2b3a4f;border-radius:16px;max-width:640px;width:92%;padding:34px 34px 30px}
+  .brand{color:#0678d5;font-weight:700;letter-spacing:.04em;font-size:13px;text-transform:uppercase}
+  h1{margin:8px 0 6px;font-size:24px;color:#fff}
+  p.sub{color:#9fb0c3;font-size:14px;line-height:1.55;margin:0 0 18px}
+  ul.pts{color:#b9c6d6;font-size:13px;line-height:1.5;margin:0 0 20px;padding-left:18px}
+  .drop{border:1.5px dashed #3a4a61;border-radius:12px;padding:26px;text-align:center;background:#0f1a28;margin-bottom:14px;cursor:pointer;transition:border-color .15s,background .15s}
+  .drop.over{border-color:#0678d5;background:#12233a}
+  .drop input{display:none}
+  .drop .big{font-size:15px;color:#e8eef5;font-weight:600}
+  .drop .hint{color:#6b7a8d;font-size:12.5px;margin-top:8px}
+  .drop .file{color:#7dd3fc;font-size:13px;margin-top:10px;word-break:break-all}
+  label.lbl{display:block;color:#9fb0c3;font-size:12.5px;margin:12px 0 5px}
+  input.txt{width:100%;box-sizing:border-box;background:#0f1a28;border:1px solid #2b3a4f;border-radius:9px;color:#e8eef5;padding:11px 12px;font-size:14px}
+  input.txt:focus{outline:none;border-color:#0678d5}
+  button{background:#0678d5;color:#fff;border:none;border-radius:10px;padding:13px 22px;font-size:15px;font-weight:600;cursor:pointer;width:100%;margin-top:16px}
+  button:hover{background:#0a86ea}
+  button:disabled{background:#2b3a4f;color:#7f8ea1;cursor:default}
+  .note{color:#6b7a8d;font-size:12px;margin-top:14px;text-align:center}
+  #out{display:none;margin-top:22px;border-top:1px solid #2b3a4f;padding-top:18px}
+  .stat{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:0 0 14px}
+  .stat div{background:#0f1a28;border:1px solid #2b3a4f;border-radius:10px;padding:10px 8px;text-align:center}
+  .stat b{display:block;font-size:17px;color:#fff}
+  .stat span{font-size:11px;color:#7f8ea1;text-transform:uppercase;letter-spacing:.04em}
+  h3{margin:14px 0 6px;font-size:13px;color:#9fb0c3;text-transform:uppercase;letter-spacing:.05em}
+  ul.rep{margin:0;padding-left:18px;font-size:13px;line-height:1.5;color:#cbd5e1}
+  ul.rep.fix li{color:#f3b921}
+  ul.rep.warn li{color:#fca5a5}
+  a.dl{display:block;text-align:center;background:#3ebd3e;color:#fff;border-radius:10px;padding:13px 22px;font-size:15px;font-weight:600;text-decoration:none;margin-top:16px}
+  a.dl:hover{background:#34a834}
+  .err{display:none;background:#3b1a22;border:1px solid #ac1534;color:#fecaca;border-radius:10px;padding:12px 14px;font-size:13px;margin-top:14px;white-space:pre-wrap}
+  .ni{color:#e8eef5;font-size:14px;margin:4px 0 0}
+</style></head>
+<body>
+  <div class="card">
+    <div class="brand">HUB International</div>
+    <h1>ACORD 125 Builder</h1>
+    <p class="sub">Drop a hospitality SOV (.xlsx or .csv) and get a completed, still-editable ACORD 125 FL commercial application, with a premises continuation schedule for every location.</p>
+    <ul class="pts">
+      <li>First Named Insured = the corporate/parent entity; the SOV Named Insured goes in the second slot</li>
+      <li>More than 4 locations: the premises page is repeated so every location appears in the ACORD layout</li>
+      <li>Producer block, lines of business, attachments, prior carriers and remarks are filled from the SOV</li>
+    </ul>
+    <div class="drop" id="drop">
+      <input type="file" id="sov" accept=".xlsx,.xlsm,.csv">
+      <div class="big">Drop the SOV here or click to choose</div>
+      <div class="hint">Excel (.xlsx) or CSV — HUB pipeline layout, one row per location</div>
+      <div class="file" id="fname"></div>
+    </div>
+    <label class="lbl" for="ni1">First Named Insured (corporate / parent entity) — optional, used when the SOV "Corporate Name (LLC)" column is blank</label>
+    <input class="txt" id="ni1" type="text" placeholder="e.g. Murphco of Florida Inc" autocomplete="off">
+    <button id="go" disabled>Generate ACORD 125</button>
+    <div class="err" id="err"></div>
+    <div id="out">
+      <div class="stat">
+        <div><b id="s-loc">-</b><span>Locations</span></div>
+        <div><b id="s-rooms">-</b><span>Rooms</span></div>
+        <div><b id="s-tiv">-</b><span>TIV</span></div>
+        <div><b id="s-pages">-</b><span>Pages</span></div>
+      </div>
+      <h3>Named insureds</h3><p class="ni" id="r-ni"></p>
+      <div id="fixwrap"><h3>Data corrections</h3><ul class="rep fix" id="r-fix"></ul></div>
+      <div id="warnwrap"><h3>Warnings</h3><ul class="rep warn" id="r-warn"></ul></div>
+      <h3>Left blank — for the client to complete</h3><ul class="rep" id="r-blank"></ul>
+      <a class="dl" id="dl" href="#">Download ACORD 125 PDF</a>
+    </div>
+    <div class="note">Nothing is stored — generated files are discarded after one hour.</div>
+  </div>
+<script>
+(function(){
+  var drop=document.getElementById('drop'), inp=document.getElementById('sov'), go=document.getElementById('go'),
+      fname=document.getElementById('fname'), err=document.getElementById('err'), out=document.getElementById('out');
+  var file=null;
+  function setFile(f){
+    if(!f) return;
+    if(!/\\.(xlsx|xlsm|csv)$/i.test(f.name)){ err.style.display='block'; err.textContent='Please choose an .xlsx or .csv SOV.'; return; }
+    file=f; fname.textContent=f.name; err.style.display='none'; go.disabled=false;
+  }
+  drop.addEventListener('click',function(){ inp.click(); });
+  inp.addEventListener('change',function(){ setFile(inp.files[0]); });
+  ['dragenter','dragover'].forEach(function(ev){ drop.addEventListener(ev,function(e){ e.preventDefault(); drop.classList.add('over'); }); });
+  ['dragleave','drop'].forEach(function(ev){ drop.addEventListener(ev,function(e){ e.preventDefault(); drop.classList.remove('over'); }); });
+  drop.addEventListener('drop',function(e){ if(e.dataTransfer.files&&e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); });
+  function fill(id, items){ var ul=document.getElementById(id); ul.innerHTML=''; (items||[]).forEach(function(t){ var li=document.createElement('li'); li.textContent=t; ul.appendChild(li); }); }
+  function money(n){ return '$'+Number(n||0).toLocaleString('en-US'); }
+  go.addEventListener('click',function(){
+    if(!file) return;
+    go.disabled=true; go.textContent='Generating…'; err.style.display='none'; out.style.display='none';
+    var fd=new FormData(); fd.append('sov',file); fd.append('first_named_insured',document.getElementById('ni1').value||'');
+    fetch('/acord125/generate',{method:'POST',body:fd}).then(function(r){ return r.text().then(function(t){ return {ok:r.ok,text:t}; }); })
+    .then(function(res){
+      go.disabled=false; go.textContent='Generate ACORD 125';
+      if(!res.ok){ err.style.display='block'; err.textContent=res.text; return; }
+      var j=JSON.parse(res.text), r=j.report;
+      document.getElementById('s-loc').textContent=r.locations;
+      document.getElementById('s-rooms').textContent=Number(r.rooms).toLocaleString('en-US');
+      document.getElementById('s-tiv').textContent=money(r.tiv);
+      document.getElementById('s-pages').textContent=r.pages;
+      document.getElementById('r-ni').textContent=(r.named_insureds||[]).join('  |  ')+'   —   effective '+r.effective+' to '+r.expiration+'   —   '+r.lines;
+      fill('r-fix',r.corrections); document.getElementById('fixwrap').style.display=(r.corrections&&r.corrections.length)?'block':'none';
+      fill('r-warn',r.warnings); document.getElementById('warnwrap').style.display=(r.warnings&&r.warnings.length)?'block':'none';
+      fill('r-blank',r.blanks);
+      var dl=document.getElementById('dl'); dl.href='/acord125/download/'+j.token; dl.textContent='Download '+j.out_name;
+      out.style.display='block'; out.scrollIntoView({behavior:'smooth',block:'start'});
+    }).catch(function(e){ go.disabled=false; go.textContent='Generate ACORD 125'; err.style.display='block'; err.textContent='Request failed: '+e; });
+  });
+})();
+</script>
+</body></html>"""
+
+
+def _acord125_sweep():
+    """Drop generated PDFs older than the TTL."""
+    import time
+    try:
+        now = time.time()
+        for n in os.listdir(_ACORD125_DIR):
+            p = os.path.join(_ACORD125_DIR, n)
+            if os.path.isfile(p) and now - os.path.getmtime(p) > _ACORD125_TTL:
+                os.remove(p)
+    except Exception:
+        pass
+
+
+@app.route("/acord125", methods=["GET"])
+def acord125_form():
+    return _ACORD125_FORM_HTML
+
+
+@app.route("/acord125/generate", methods=["POST"])
+def acord125_generate():
+    from acord125_from_sov import generate as _gen_acord125
+    f = request.files.get("sov")
+    if not f or not f.filename:
+        return ("Please choose an SOV .xlsx or .csv file.", 400)
+    ext = os.path.splitext(f.filename)[1].lower()
+    if ext not in (".xlsx", ".xlsm", ".csv"):
+        return ("Please upload an Excel .xlsx workbook or a .csv export of the SOV.", 400)
+    os.makedirs(_ACORD125_DIR, exist_ok=True)
+    _acord125_sweep()
+    token = uuid.uuid4().hex
+    in_path = os.path.join(_ACORD125_DIR, token + "_in" + ext)
+    out_path = os.path.join(_ACORD125_DIR, token + ".pdf")
+    f.save(in_path)
+    try:
+        info = _gen_acord125(in_path, out_path, first_named_insured=request.form.get("first_named_insured", ""))
+    except Exception as e:
+        import traceback
+        logger.error("ACORD 125 generation failed: %s\n%s", e, traceback.format_exc())
+        return ("Could not generate the ACORD 125: %s" % e, 500)
+    finally:
+        try:
+            os.remove(in_path)
+        except Exception:
+            pass
+    with open(os.path.join(_ACORD125_DIR, token + ".name"), "w") as fh:
+        fh.write(info["out_name"])
+    return jsonify({"token": token, "out_name": info["out_name"], "report": info})
+
+
+@app.route("/acord125/download/<token>", methods=["GET"])
+def acord125_download(token):
+    if not token.isalnum():
+        return ("Not found", 404)
+    pdf = os.path.join(_ACORD125_DIR, token + ".pdf")
+    if not os.path.exists(pdf):
+        return ("That download has expired - generate the ACORD 125 again.", 404)
+    name = "ACORD 125.pdf"
+    try:
+        with open(os.path.join(_ACORD125_DIR, token + ".name")) as fh:
+            name = fh.read().strip() or name
+    except Exception:
+        pass
+    return send_file(pdf, as_attachment=True, download_name=name, mimetype="application/pdf")
+
+
 # ─── Main ───
 
 if __name__ == "__main__":
