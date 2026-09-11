@@ -1997,7 +1997,17 @@ def generate_information_summary(doc, data):
             if isinstance(s, dict) and _parse_currency(s.get("tiv", 0)) > 1
         ]
         if _prop_sov_nonzero:
-            prop_loc_count = len(_prop_sov_nonzero)
+            # Count unique ADDRESSES, not rows — HotelBound schedules list one row per
+            # building, so two buildings at one hotel must count as one location.
+            import re as _re_sovk
+            _sov_addr_keys = set()
+            for s in _prop_sov_nonzero:
+                _a = (s.get("address") or s.get("location") or "")
+                _a = _re_sovk.sub(r"^\s*\d+(?:-\d+)?\s*:\s*", "", str(_a))
+                _parts = [p.strip() for p in _a.split(",")]
+                _k = (_normalize_addr(_parts[0]) + "|" + _normalize_city(_parts[1] if len(_parts) > 1 else "")) if _parts and _parts[0] else ""
+                _sov_addr_keys.add(_k or f"row{len(_sov_addr_keys)}")
+            prop_loc_count = len(_sov_addr_keys)
         else:
             # Fall back to num_locations only when no SOV breakdown exists
             prop_loc_count = int(_prop_cov.get("num_locations", 0) or 0)
@@ -3461,6 +3471,269 @@ def generate_locations(doc, data):
         add_formatted_paragraph(doc, "Location schedule to be confirmed.", size=11)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# HotelBound (RT Specialty / Lloyd's) property blocks — data comes from
+# hotelbound_quote.apply_hotelbound_to_data(); the quote supersedes the SOV.
+# ─────────────────────────────────────────────────────────────────────────────
+def _hb_header(doc, text):
+    """Subsection header that stays with the table/paragraph that follows it."""
+    p = add_subsection_header(doc, text)
+    p.paragraph_format.keep_with_next = True
+    return p
+
+
+def _render_hotelbound_property_blocks(doc, cov, hb):
+    """Premium & Fees table + Schedule of Insured Values by location and building."""
+    L = WD_ALIGN_PARAGRAPH.LEFT
+    R = WD_ALIGN_PARAGRAPH.RIGHT
+    C = WD_ALIGN_PARAGRAPH.CENTER
+
+    # ── Premium & Fees (all-in Total Policy Cost) ─────────────────────────
+    items = cov.get("premium_breakdown") or []
+    total = cov.get("total_premium") or hb.get("total_policy_cost") or 0
+    if items or total:
+        _hb_header(doc, "Premium & Fees")
+        rows = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            amt = it.get("amount", 0) or 0
+            rows.append([it.get("label", ""), fmt_currency_cents(amt) if amt else "$0.00"])
+        if hb.get("terrorism_included"):
+            rows.append(["Terrorism", "Included in premium"])
+        rows.append(["TOTAL POLICY COST", fmt_currency_cents(total) if total else "—"])
+        tbl = create_styled_table(doc, ["Item", "Amount"], rows, col_widths=[5.0, 2.5],
+                                  header_size=10, body_size=10,
+                                  header_alignments={0: L, 1: R}, col_alignments={1: R})
+        last = tbl.rows[-1]
+        for cell in last.cells:
+            set_cell_shading(cell, ELECTRIC_BLUE_HEX)
+            for p in cell.paragraphs:
+                for run in p.runs:
+                    run.font.bold = True
+                    run.font.color.rgb = WHITE
+        _fee_bits = []
+        if hb.get("program_brokerage_fee"):
+            _fee_bits.append(f"program brokerage fee of {fmt_currency(hb['program_brokerage_fee'])}")
+        if hb.get("association_fee"):
+            _fee_bits.append(f"HotelBound Association fee of {fmt_currency(hb['association_fee'])}")
+        note = ("The Total Policy Cost is the amount payable and includes the non-admitted premium, "
+                "state surplus lines tax and stamping fee, and all program fees")
+        if _fee_bits:
+            note += " (" + " and ".join(_fee_bits) + ")"
+        note += ". Program fees are fully earned at binding — see Minimum Earned Premium & Fully Earned Fees below."
+        add_formatted_paragraph(doc, note, size=9, italic=True, color=CHARCOAL, space_before=4, space_after=6)
+
+    # ── Schedule of Insured Values by location / building ─────────────────
+    cbl = [c for c in (cov.get("coverage_by_location") or []) if isinstance(c, dict)]
+    if cbl:
+        _hb_header(doc, "Schedule of Insured Values")
+        add_formatted_paragraph(doc,
+            "Values below are per the HotelBound quote and are scheduled per location subject to the "
+            "Scheduled Limits Per Location (100% margin clause) endorsement: recovery at any one location is "
+            "capped at the values shown for that location.",
+            size=9, italic=True, color=CHARCOAL, space_after=6)
+        headers = ["#", "Location / Building", "Yr Built · Constr. · Sprk · Units · Sq Ft", "Building", "Contents", "Business Income", "TIV"]
+        rows = []
+        t_b = t_c = t_bi = t_t = 0.0
+        for c in cbl:
+            addr = f"{c.get('street') or ''}, {c.get('city') or ''}, {c.get('state') or ''} {c.get('zip') or ''}".strip(", ")
+            county = c.get("county") or ""
+            flood = c.get("flood_zone") or ""
+            loc_txt = addr
+            extras = []
+            if county:
+                extras.append(f"{county} County")
+            if flood:
+                extras.append(f"Flood Zone {flood}")
+            if extras:
+                loc_txt += "\n" + " · ".join(extras)
+            spr = {"Y": "Sprinklered", "N": "Non-sprinklered", "P": "Partially sprinklered"}.get(
+                str(c.get("sprinklered") or "").upper(), "")
+            attrs = [x for x in [
+                str(c.get("year_built") or ""),
+                c.get("construction") or "",
+                spr,
+                f"{c['num_units']} units" if c.get("num_units") else "",
+                f"{int(c['sqft']):,} sq ft" if c.get("sqft") else "",
+            ] if x]
+            b = float(c.get("building_value_num") or _parse_currency(c.get("building_value")) or 0)
+            cv = float(c.get("bpp_value_num") or _parse_currency(c.get("bpp_value")) or 0)
+            bi = float(c.get("bi_value_num") or _parse_currency(c.get("business_income")) or 0)
+            tv = float(c.get("tiv_num") or _parse_currency(c.get("tiv")) or 0)
+            t_b += b; t_c += cv; t_bi += bi; t_t += tv
+            rows.append([
+                str(c.get("label") or c.get("premise") or ""),
+                loc_txt,
+                " · ".join(attrs),
+                fmt_currency(b), fmt_currency(cv), fmt_currency(bi), fmt_currency(tv),
+            ])
+        rows.append(["", "TOTAL", "", fmt_currency(t_b), fmt_currency(t_c), fmt_currency(t_bi), fmt_currency(t_t)])
+        tbl = create_styled_table(doc, headers, rows,
+                                  col_widths=[0.4, 2.3, 1.5, 0.85, 0.8, 0.85, 0.8],
+                                  header_size=8, body_size=8,
+                                  header_alignments={0: C, 1: L, 2: L, 3: R, 4: R, 5: R, 6: R},
+                                  col_alignments={0: C, 3: R, 4: R, 5: R, 6: R})
+        last = tbl.rows[-1]
+        for cell in last.cells:
+            set_cell_shading(cell, ELECTRIC_BLUE_HEX)
+            for p in cell.paragraphs:
+                for run in p.runs:
+                    run.font.bold = True
+                    run.font.color.rgb = WHITE
+        add_formatted_paragraph(doc,
+            "Construction per ISO code on the quote (1 Frame, 2 Joisted Masonry, 3 Non-Combustible, "
+            "4 Masonry Non-Combustible, 5 Modified Fire Resistive, 6 Fire Resistive). A Unit of Insurance with no "
+            "dollar value on the statement of values has no coverage for a loss involving that unit.",
+            size=8, italic=True, color=CHARCOAL, space_before=4, space_after=6)
+
+
+def _render_hotelbound_deductibles(doc, cov, deductibles):
+    """Deductibles reduced to the clauses that apply to the scheduled locations."""
+    L = WD_ALIGN_PARAGRAPH.LEFT
+    _hb_header(doc, "Deductibles")
+    # distinct locations across all rows
+    _all_locs = []
+    for d in deductibles:
+        if isinstance(d, dict):
+            for a in d.get("applies_to") or []:
+                if a not in _all_locs:
+                    _all_locs.append(a)
+    show_applies = len(_all_locs) > 1
+    rows = []
+    for d in deductibles:
+        if not isinstance(d, dict):
+            rows.append([str(d), ""] + ([""] if show_applies else []))
+            continue
+        desc = d.get("description") or d.get("type") or ""
+        amt = d.get("amount") or ""
+        row = [desc, amt]
+        if show_applies:
+            ap = d.get("applies_to") or []
+            row.append("All scheduled locations" if (ap and len(ap) == len(_all_locs)) else "\n".join(ap))
+        rows.append(row)
+    if show_applies:
+        create_styled_table(doc, ["Peril", "Deductible", "Applies To"], rows,
+                            col_widths=[2.4, 3.0, 2.1], header_size=10, body_size=9,
+                            header_alignments={0: L, 1: L, 2: L})
+    else:
+        create_styled_table(doc, ["Peril", "Deductible"], rows,
+                            col_widths=[3.0, 4.5], header_size=10, body_size=9,
+                            header_alignments={0: L, 1: L})
+    for note in cov.get("deductible_notes") or []:
+        add_formatted_paragraph(doc, note, size=9, italic=True, color=CHARCOAL, space_before=4, space_after=2)
+
+
+def _render_hotelbound_earned_premium(doc, cov, hb):
+    """Fully earned fees + minimum earned premium disclosure for the HotelBound program."""
+    _hb_header(doc, "Minimum Earned Premium & Fully Earned Fees")
+    RED = RGBColor(0xCC, 0x00, 0x00)
+    lines = [l for l in (cov.get("earned_premium_disclosure") or []) if l]
+    for i, line in enumerate(lines):
+        # The RT program brokerage fee sentence is the one clients most often miss — bold red.
+        is_fee = i == 0 and ("brokerage fee" in line.lower())
+        add_formatted_paragraph(doc, line, size=9 if not is_fee else 10,
+                                bold=is_fee, color=RED if is_fee else CLASSIC_BLUE,
+                                space_before=2, space_after=4)
+    tier_locs = hb.get("tier_locations") or []
+    if tier_locs:
+        add_formatted_paragraph(doc,
+            "Tier One / Tier Two locations on this schedule subject to the June 1 – November 30 "
+            "minimum earned premium condition: " + "; ".join(tier_locs) + ".",
+            size=9, italic=True, color=CHARCOAL, space_before=2, space_after=4)
+
+
+def generate_hotelbound_shared_limits(doc, data):
+    """Shared Capacity & Dedicated Limits Disclosure page — required whenever the property
+    placement is a HotelBound quote through RT Specialty (Stefan, Sep 2026)."""
+    cov = (data.get("coverages") or {}).get("property") or {}
+    hb = cov.get("hotelbound") if isinstance(cov.get("hotelbound"), dict) else None
+    if not hb or not hb.get("detected"):
+        return
+    sl = hb.get("shared_limits") or {}
+    prog = sl.get("program_limit") or 400000000
+    ded_cap = sl.get("dedicated_cap") or 100000000
+    agg = sl.get("aggregate_layer_per_occurrence") or 500000
+    agg_ins = sl.get("aggregate_layer_insurer") or "Navigators Specialty Insurance Company"
+    tpa = sl.get("aggregate_layer_tpa") or "McLarens"
+    margin = sl.get("margin_clause") or "100%"
+    eoc_limit = hb.get("program_limit") or hb.get("tiv") or 0
+    am_best = sl.get("min_am_best") or "A-8"
+
+    add_page_break(doc)
+    add_section_header(doc, "Shared Capacity & Dedicated Limits Disclosure")
+    add_formatted_paragraph(doc,
+        "The property coverage proposed is provided through the HotelBound Insurance Program, a master policy "
+        "program in which many hotel owners (Members) are insured under shared master policies. Each Member "
+        "receives an Evidence of Coverage (EOC) rather than a stand-alone policy. Because the program limits are "
+        "shared, HUB International is required to explain how limits work before you bind. The points below "
+        "summarize the Shared Capacity and Dedicated Limits Disclosure, the Aggregate Layer Disclosure Endorsement "
+        "and the Scheduled Limits Per Location endorsement attached to the quote; the full disclosure text will be "
+        "attached to your EOC and governs.",
+        size=10, space_after=10)
+
+    _hb_header(doc, "How the Limits Work")
+    L = WD_ALIGN_PARAGRAPH.LEFT
+    rows = [
+        ["Your Limit of Liability (EOC)",
+         (fmt_currency(eoc_limit) + " any one Occurrence, scheduled per location") if eoc_limit else "Per quote"],
+        ["Program shared limit",
+         f"{fmt_currency(prog)} per Occurrence under the master policies, shared by ALL Members and insureds "
+         "in the program. Program sublimits and aggregate sublimits (Flood, Earth Movement, Terrorism) are also shared."],
+        ["Dedicated limit",
+         f"A dedicated limit equal to your EOC Limit of Liability, not to exceed {fmt_currency(ded_cap)}, is reserved "
+         "for you alone. It sits excess of, and in addition to, the shared limits and responds only if the shared "
+         "limits are insufficient to indemnify you. Flood, Earth Movement and Terrorism aggregates are NOT increased "
+         "by the dedicated limit."],
+        ["Aggregate Layer",
+         f"The first {fmt_currency(agg)} per Occurrence (excess of your deductible) is paid from a segregated "
+         f"account insured by {agg_ins} and administered by {tpa}, funded by a portion of every Member's premium. "
+         "That portion of your premium is 100% earned. If the account is exhausted, the primary and excess layers "
+         "respond excess of your deductible as if the Aggregate Layer never existed."],
+        ["Scheduled limits per location",
+         f"Recovery for buildings, contents and time element at any one location is capped at the values shown on "
+         f"the Schedule of Insured Values for that location (margin clause {margin}). If no Business Income value is "
+         "scheduled for a location, there is no time element coverage there."],
+        ["Reinstatement",
+         "Per-Occurrence limits reinstate automatically for subsequent Occurrences. Aggregate limits (Flood, "
+         "Earthquake, Terrorism) do not reinstate within the policy term."],
+        ["Insurers",
+         "The participating insurers and their shares may change during the term or at renewal without prior notice; "
+         f"all other EOC terms remain unchanged and every insurer will carry a minimum AM Best rating of {am_best}."],
+    ]
+    create_styled_table(doc, ["Item", "What it means for you"], rows, col_widths=[2.0, 5.5],
+                        header_size=10, body_size=9, header_alignments={0: L, 1: L})
+
+    add_subsection_header(doc, "What This Means in a Large Loss")
+    add_formatted_paragraph(doc,
+        "If one event (for example a regional hurricane or hailstorm) damages the property of more than one Member, "
+        "the shared per-Occurrence and aggregate limits are divided among all affected Members in proportion to their "
+        "covered loss. Your dedicated limit then responds to the balance of your covered loss, up to your EOC limit. "
+        "Even so, if total insured values exceed the dedicated limit cap and a single Occurrence loss exceeds that cap, "
+        "the combination of your proportional share of the shared limits and your dedicated limit could be insufficient "
+        "to fully indemnify you.",
+        size=10, space_after=8)
+    add_formatted_paragraph(doc,
+        "Prompt claim reporting matters more under a shared-limits program than under a stand-alone policy: a delay "
+        "in reporting relative to other Members could reduce your recovery. All claims are reported to the program's "
+        "third-party adjuster named on the quote, and all loss measurement and coverage determinations are made by the "
+        "insurers, with payment issued by the insurers or the program's claims administrator.",
+        size=10, space_after=8)
+
+    add_subsection_header(doc, "HUB Recommendation")
+    add_formatted_paragraph(doc,
+        "The shared-limits structure is what allows the HotelBound program to offer its pricing, all-risk manuscript "
+        "form and included equipment breakdown to individual hotel owners; the trade-off is described above. If your "
+        "lender or franchisor requires a stand-alone per-occurrence limit dedicated solely to your property, or if your "
+        "portfolio's total insured value approaches the dedicated limit cap, please tell your HUB service team before "
+        "binding so we can quote a stand-alone alternative for comparison.",
+        size=10, space_after=10)
+    add_callout_box(doc,
+        "By signing the Confirmation to Bind, the insured acknowledges receipt of this summary and of the Shared "
+        "Capacity and Dedicated Limits Disclosure, the Aggregate Layer Disclosure Endorsement and the Scheduled Limits "
+        "Per Location endorsement contained in the HotelBound quote, and accepts that limits are provided on a shared basis.")
+
+
 def generate_coverage_section(doc, data, coverage_key, display_name):
     """Generate a coverage section (Property, GL, Umbrella, WC, Auto)."""
     # Standard crime insuring clause names (fallback when GPT extraction is incomplete)
@@ -3532,6 +3805,27 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     if layer_desc and coverage_key in ("excess_property", "excess_property_2"):
         carrier_rows.append(["Layer", layer_desc])
     
+    # HotelBound program rows (deterministic parser output — see hotelbound_quote.py)
+    _hb = cov.get("hotelbound") if isinstance(cov.get("hotelbound"), dict) else None
+    if _hb and _hb.get("detected"):
+        carrier_rows.append(["Program", "HotelBound Insurance Program — shared-limits master policy "
+                                        "(see Shared Capacity & Dedicated Limits Disclosure)"])
+        if _hb.get("program_limit"):
+            _fe = _hb.get("coverage_type_text") or ""
+            _fe_note = (" (Flood and Earth Movement excluded)" if "excluding flood" in _fe.lower()
+                        else " (Flood and Earth Movement per quote)")
+            carrier_rows.append(["Program Limit of Liability",
+                                 f"{fmt_currency(_hb['program_limit'])} any one Occurrence{_fe_note}"])
+        if _hb.get("coverage_type_text"):
+            carrier_rows.append(["Coverage Basis", _hb["coverage_type_text"]])
+        carrier_rows.append(["Terrorism", "Included — premium included in the Total Policy Cost"
+                             if _hb.get("terrorism_included") else (_hb.get("terrorism") or "See quote")])
+        if _hb.get("valuation"):
+            carrier_rows.append(["Valuation", "; ".join(_hb["valuation"])])
+        if _hb.get("monthly_limit_of_indemnity"):
+            carrier_rows.append(["Business Income Monthly Limit of Indemnity",
+                                 f"{_hb['monthly_limit_of_indemnity']} of the scheduled BI value in any 30 consecutive days"])
+
     # Add TIV if present (for property coverages)
     tiv = cov.get("tiv", "")
     if tiv and coverage_key in ("property", "excess_property", "excess_property_2"):
@@ -3573,7 +3867,11 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     sov_data = data.get("sov_data")
     sov_from_quote = cov.get("schedule_of_values", [])
     sov_rendered = False
-    if coverage_key == "property" and sov_data and sov_data.get("locations"):
+    if coverage_key == "property" and _hb and _hb.get("detected"):
+        # The HotelBound quote supersedes any uploaded SOV / Excel for the property section.
+        _render_hotelbound_property_blocks(doc, cov, _hb)
+        sov_rendered = True
+    elif coverage_key == "property" and sov_data and sov_data.get("locations"):
         # Use SOV spreadsheet data for detailed Schedule of Values
         add_subsection_header(doc, "Schedule of Values")
         sov_rendered = True
@@ -3967,7 +4265,9 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                 else:
                     _filtered.append(ded)
             deductibles = _filtered
-    if deductibles:
+    if deductibles and _hb and _hb.get("detected"):
+        _render_hotelbound_deductibles(doc, cov, deductibles)
+    elif deductibles:
         add_subsection_header(doc, "Deductibles")
         headers = ["Peril", "Deductible"]
         rows = [[ded.get("description", "") or ded.get("type", ""), ded.get("amount", "")] if isinstance(ded, dict) else [str(ded), ""] for ded in deductibles]
@@ -4020,7 +4320,11 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
             create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
                                header_size=10, body_size=10,
                                header_alignments={0: L, 1: L})
-    
+
+    # Minimum Earned Premium & Fully Earned Fees (HotelBound)
+    if _hb and _hb.get("detected") and cov.get("earned_premium_disclosure"):
+        _render_hotelbound_earned_premium(doc, cov, _hb)
+
     # Layer Description (Excess Property)
     layer_desc = cov.get("layer_description", "")
     if layer_desc and coverage_key in ("excess_property", "excess_property_2"):
@@ -5220,6 +5524,8 @@ def generate_proposal(data: dict, output_path: str) -> str:
     coverages = data.get("coverages", {})
     if "property" in coverages:
         generate_coverage_section(doc, data, "property", "Property Coverage")
+        # HotelBound (RT Specialty) placements carry a mandatory shared-limits disclosure page
+        generate_hotelbound_shared_limits(doc, data)
     if "property_alt_1" in coverages:
         generate_coverage_section(doc, data, "property_alt_1", "Property Coverage — Option 2")
     if "property_alt_2" in coverages:

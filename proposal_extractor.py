@@ -840,6 +840,35 @@ def _parse_hotelbound_costs(combined_text: str) -> dict:
     return result
 
 
+def _run_hotelbound_pass(data: dict, items: list, combined_text: str = "") -> bool:
+    """
+    Full deterministic HotelBound quote pass (hotelbound_quote.py). Picks the untruncated text
+    of the HotelBound quote file out of `items` ([{filename, text}]) — the fair-budget
+    combined_text can cut the back of a 35-page quote where the Schedule of Values, Cost Break
+    Out and Shared Limits disclosure live — parses it, and writes the result over the property
+    coverage (premium/fees, subjectivities, terrorism, applicable deductibles, earned-premium
+    disclosure, per-building schedule, shared-limits figures).
+
+    Returns True when a HotelBound quote was detected and applied.
+    """
+    try:
+        from hotelbound_quote import parse_hotelbound_quote, apply_hotelbound_to_data, find_hotelbound_text
+    except Exception as _imp_err:
+        logger.warning(f"hotelbound_quote module unavailable: {_imp_err}")
+        return False
+    text = find_hotelbound_text(items) or ""
+    if not text and combined_text and "HOTELBOUND" in combined_text.upper():
+        text = combined_text
+    if not text:
+        return False
+    hb = parse_hotelbound_quote(text)
+    if not hb.get("detected"):
+        return False
+    apply_hotelbound_to_data(data, hb)
+    logger.info("HotelBound pass: property section now sourced from the HotelBound quote")
+    return True
+
+
 def _apply_hotelbound_overrides(data: dict, hb: dict) -> None:
     """
     Apply HotelBound parser output to the extracted `data` dict, overriding the GPT-extracted
@@ -1947,8 +1976,10 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
         # Also populates coverage_by_location + locations[] from the Cost Break Out By Location table
         # when the HotelBound quote covers more than one location.
         try:
-            _hb_costs = _parse_hotelbound_costs(combined_text)
-            _apply_hotelbound_overrides(data, _hb_costs)
+            _hb_applied = _run_hotelbound_pass(data, [{"filename": "combined", "text": combined_text}], combined_text)
+            if not _hb_applied:
+                _hb_costs = _parse_hotelbound_costs(combined_text)
+                _apply_hotelbound_overrides(data, _hb_costs)
         except Exception as _hb_err:
             logger.warning(f"HotelBound override pass failed (non-fatal): {_hb_err}")
 
@@ -2938,6 +2969,14 @@ TEXT:
                             _ccov["forms_endorsements"] = _d
             except Exception as _cleanup_err:
                 logger.warning(f"Patch M forms cleanup failed (non-fatal): {_cleanup_err}")
+
+            # HOTELBOUND PASS (Sep 2026): when one of the uploaded files is a HotelBound / RT
+            # Specialty property quote, its parsed values supersede GPT (and any uploaded SOV)
+            # for the PROPERTY section — runs last so nothing downstream overwrites it.
+            try:
+                _run_hotelbound_pass(data, all_items, combined_text)
+            except Exception as _hb_err:
+                logger.warning(f"HotelBound pass failed (non-fatal): {_hb_err}")
 
             return data
 
