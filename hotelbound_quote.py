@@ -698,12 +698,13 @@ def applicable_deductibles(hb):
 
     if skipped:
         if len(skipped) == len([c for c in hb.get("deductible_clauses") or [] if c["kind"] in ("named_windstorm", "hail_belt")]):
-            notes.append("The HotelBound program's percentage deductibles for Named Windstorm (Florida, Texas and "
-                         "Louisiana Tier One / Tier Two counties, Tier One counties Louisiana through Maine, and Hawaii) "
-                         "and for Wind, Tornado and Hail in the Hail Belt do not apply to the scheduled location(s), "
-                         "which sit outside those territories. Only the deductibles shown above apply.")
+            _where = "; ".join(sorted({f"{l['county']} County, {l['state']}" if l['county'] else l['state'] for l in locs}))
+            notes.append(f"The scheduled location(s) ({_where}) are outside the program's Tier One / Tier Two "
+                         "Named Windstorm counties and the Hail Belt, so no percentage wind deductible applies. "
+                         "Only the deductibles shown above apply.")
         else:
-            notes.append("Not applicable to the scheduled locations: " + "; ".join(skipped) + ".")
+            notes.append("The remaining percentage deductibles in the program schedule apply to territories "
+                         "where none of the scheduled locations are situated.")
     hail_named = any("HAIL" in l["zones"] and "TIER1" not in l["zones"] for l in locs)
     if hail_named and any(r["letter"] and r["description"].startswith("Wind, Tornado") for r in rows):
         notes.append("If a loss at a Hail Belt location outside a Tier One county is caused by a Named Windstorm, "
@@ -736,6 +737,12 @@ def apply_hotelbound_to_data(data: dict, hb: dict) -> None:
         prop["carrier"] = hb.get("lead_insurer") or prop.get("carrier") or "Certain Underwriters at Lloyd's, London"
     prop["carrier_admitted"] = False
     prop["program"] = "HotelBound Insurance Program"
+    # GPT tends to lift "Minimum AM Best Financial Rating of A-8" off the Remarks page
+    _amb = str(prop.get("am_best_rating") or "")
+    if not _amb.strip() or "minimum" in _amb.lower() or "a-8" in _amb.lower():
+        _min = (hb.get("shared_limits") or {}).get("min_am_best") or "A-8"
+        _min = _min.replace("A-8", "A- VIII")
+        prop["am_best_rating"] = f"A (Excellent) XV — Lloyd's; all participating program insurers rated {_min} or better"
     prop["policy_form"] = prop.get("policy_form") or "HotelBound Manuscript Wording"
     if hb.get("policy_period"):
         prop["policy_period"] = hb["policy_period"]

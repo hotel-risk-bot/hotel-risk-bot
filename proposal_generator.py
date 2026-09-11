@@ -3572,8 +3572,8 @@ def _render_hotelbound_property_blocks(doc, cov, hb):
         tbl = create_styled_table(doc, headers, rows,
                                   col_widths=[0.4, 2.3, 1.5, 0.85, 0.8, 0.85, 0.8],
                                   header_size=8, body_size=8,
-                                  header_alignments={0: C, 1: L, 2: L, 3: R, 4: R, 5: R, 6: R},
-                                  col_alignments={0: C, 3: R, 4: R, 5: R, 6: R})
+                                  header_alignments={0: C, 1: L, 2: L, 3: C, 4: C, 5: C, 6: C},
+                                  col_alignments={0: C, 3: C, 4: C, 5: C, 6: C})
         last = tbl.rows[-1]
         for cell in last.cells:
             set_cell_shading(cell, ELECTRIC_BLUE_HEX)
@@ -4218,7 +4218,14 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                     if len(addr) > 45:
                         addr = addr[:42] + "..."
                     prem = loc.get("premise", "")
-                    label = f"Prem {prem}: {addr}" if prem else addr
+                    # Only prefix with a short premises number — never a carrier LID
+                    # (HotelBound "Prem 37745781502:" bled through here before).
+                    _prem_ok = False
+                    try:
+                        _prem_ok = 0 < int(str(prem).strip()) < 1000
+                    except (TypeError, ValueError):
+                        _prem_ok = bool(prem) and len(str(prem)) <= 4
+                    label = f"Loc {prem}: {addr}" if _prem_ok else addr
                     row = [
                         label,
                         loc.get("building_value", ""),
@@ -4230,9 +4237,13 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                         row.append(loc.get("tiv", ""))
                     cbl_rows.append(row)
             if cbl_rows:
+                _C = WD_ALIGN_PARAGRAPH.CENTER
+                _val_cols = {i: _C for i in range(1, len(cbl_headers))}
                 create_styled_table(doc, cbl_headers, cbl_rows,
                                    col_widths=_col_widths,
-                                   header_size=9, body_size=9)
+                                   header_size=9, body_size=9,
+                                   header_alignments={0: WD_ALIGN_PARAGRAPH.LEFT, **_val_cols},
+                                   col_alignments=_val_cols)
 
     # Deductibles (Property)
     deductibles = cov.get("deductibles", [])
