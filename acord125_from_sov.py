@@ -15,7 +15,8 @@ Rules (per Stefan / acord-125-from-sov skill):
   * A premises continuation schedule (all locations) goes at the end - no
     "ACORD 125" in the title, no footer.
   * Yellow Highlight annotations on the template are stripped.
-  * Producer block is constant HUB International Florida / Stefan Burkey.
+  * Producer block is constant HUB International Midwest Limited, 203 N LaSalle
+    Suite 2000, Chicago IL 60601 / Stefan Burkey.
     No wholesale broker information anywhere.
   * Output name: ACORD 125 - <First NI> (<Second NI>) <MM-DD-YYYY eff>.pdf
 
@@ -34,9 +35,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_BLANK = os.path.join(HERE, "assets", "acord125_blank.pdf")
 
 PRODUCER = {
-    "Producer_FullName_A": "HUB International Florida",
-    "Producer_MailingAddress_LineOne_A": "1560 Orange Ave, Suite 750",
-    "Producer_MailingAddress_LineTwo_A": "Winter Park FL 32789",
+    "Producer_FullName_A": "HUB International Midwest Limited",
+    "Producer_MailingAddress_LineOne_A": "203 N LaSalle, Suite 2000",
+    "Producer_MailingAddress_LineTwo_A": "Chicago, IL 60601",
     "Producer_ContactPerson_FullName_A": "Stefan Burkey",
     "Producer_ContactPerson_PhoneNumber_A": "407-636-8133",
     "Producer_ContactPerson_EmailAddress_A": "Stefan.Burkey@HUBInternational.com",
