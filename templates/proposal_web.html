@@ -613,6 +613,8 @@
     <!-- ═══════ STEP 2: Review & Edit ═══════ -->
     <div id="panel-review" class="hidden">
 
+        <div id="extract-warnings" class="hidden" style="margin-bottom:1rem;"></div>
+
         <div class="tabs">
             <div class="tab active" data-tab="tab-visual">Visual Editor</div>
             <div class="tab" data-tab="tab-json">JSON Editor</div>
@@ -1049,10 +1051,33 @@ btnExtract.addEventListener('click', async () => {
 });
 
 // ─── Review / Edit ───
+function renderExtractWarnings(d) {
+    const box = document.getElementById('extract-warnings');
+    if (!box) return;
+    const ws = Array.isArray(d.warnings) ? d.warnings.filter(w => typeof w === 'string' && w.trim()) : [];
+    if (!ws.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+    const critical = ws.filter(w => /REVIEW REQUIRED|Coverage recovery|Forms schedule audit/i.test(w));
+    const other = ws.filter(w => !critical.includes(w));
+    let html = '';
+    if (critical.length) {
+        html += `<div style="background:#fee2e2;border:1px solid #ac1534;border-radius:8px;padding:0.75rem 1rem;font-size:0.82rem;margin-bottom:0.5rem;">
+            <div style="font-weight:700;color:#ac1534;margin-bottom:0.25rem;">Extraction checks - read before generating</div>
+            <ul style="margin:0;padding-left:1.1rem;">${critical.map(w => `<li>${escHtml(w)}</li>`).join('')}</ul></div>`;
+    }
+    if (other.length) {
+        html += `<details style="background:#fef9c3;border:1px solid #f3b921;border-radius:8px;padding:0.5rem 1rem;font-size:0.8rem;">
+            <summary style="cursor:pointer;font-weight:600;">${other.length} extraction note(s)</summary>
+            <ul style="margin:0.4rem 0 0;padding-left:1.1rem;">${other.map(w => `<li>${escHtml(w)}</li>`).join('')}</ul></details>`;
+    }
+    box.innerHTML = html;
+    box.classList.remove('hidden');
+}
+
 function populateReview() {
     if (!extractedData) return;
     const d = extractedData;
     const ci = d.client_info || {};
+    renderExtractWarnings(d);
 
     // Client info
     document.getElementById('edit-named-insured').value = ci.named_insured || '';
