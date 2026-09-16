@@ -1078,7 +1078,12 @@ _NONPROPERTY_FORM_PREFIXES = (
 _NONUMBRELLA_FORM_PREFIXES = (
     # Property — ISO + Tower Hill/Vantage Risk + HotelBound jacket
     "CP ", "CPF", "CFP", "TC ", "VR ", "EC ", "EB-", "EB0",
-    "MS PR", "MS DEC", "MS EBC", "HSIC SP", "HSIC SOS", "MS GEN", "HSIC",
+    # NOTE (Sep 15 2026, Neptune Lodging E&O near-miss): a bare "HSIC" prefix here
+    # stripped EVERY Houston Specialty excess form (HSIC CX ES 01 44 Assault or
+    # Battery, HSIC CX ES 01 35 Total Firearms, HSIC CX ES 01 80 Sublimits/Reduced
+    # Limits in Underlying, ...). Only the property-jacket HSIC forms are listed now,
+    # and _is_umbrella_native_form_number() below overrides every prefix on this list.
+    "MS PR", "MS DEC", "MS EBC", "HSIC SP", "HSIC SOS", "HSIC PR", "HSIC CP", "MS GEN",
     "HB ",
     # ISO General Liability — compact and spaced
     "CG ", "CG0", "CG1", "CG2", "CG3", "CG4", "CG5", "CG7", "CG9",
@@ -1236,11 +1241,73 @@ def _clean_property_forms_endorsements(forms: list) -> list:
     return cleaned
 
 
+# Form-number tokens that mark a form as UMBRELLA / EXCESS-native regardless of the
+# carrier prefix in front of them: "HSIC CX ES 01 44", "HSIC EX DS 01", "CX 21 13",
+# "HS XS 001", "CSXC 100", "EXL 003", "CU 21 23", "XS 100". A form number carrying one
+# of these tokens is NEVER rejected from an umbrella section by any prefix rule.
+_UMBRELLA_NATIVE_TOKEN_RE = re.compile(
+    r"(?:^|[\s\-_/])(?:CX|XS|CU|UMB|UMBR|UMBRELLA|EXL|EXS|EXC|EXCESS|CSXC|NXLL|SCU|SCX|XSL|EX)(?=$|[\s\-_/\d])"
+)
+
+
+def _is_umbrella_native_form_number(form_number) -> bool:
+    fn = str(form_number or "").upper().strip()
+    if not fn:
+        return False
+    return bool(_UMBRELLA_NATIVE_TOKEN_RE.search(fn))
+
+
+_EXCLUSION_DESC_RE = re.compile(r"EXCLU|LIMITATION|SUBLIMIT|REDUCED LIMIT|RETAINED LIMIT|NOT COVERED", re.I)
+
+
+def _is_exclusion_form(f) -> bool:
+    """True when the form description reads like an exclusion / limitation. These
+    are the rows whose omission creates an E&O exposure, so no cleaner may drop
+    them from the coverage they were extracted for."""
+    if not isinstance(f, dict):
+        return False
+    return bool(_EXCLUSION_DESC_RE.search(str(f.get("description") or "")))
+
+
+# Description keywords that reject a form from an UMBRELLA list. Deliberately much
+# narrower than _LIABILITY_DESCRIPTION_KEYWORDS (which is a PROPERTY cleaner): excess
+# policies legitimately carry their own Nuclear, Silica, Punitive, EPL, PFAS,
+# Communicable Disease, Minimum Earned, Service of Suit and Forms Schedule forms,
+# and the old cleaner was throwing all of those away. Only GL-structural forms that
+# can never belong to an excess policy are listed here.
+_UMBRELLA_DESCRIPTION_REJECT_KEYWORDS = (
+    "commercial general liability coverage form",
+    "general liability coverage form",
+    "commercial general liability coverage part declarations",
+    "commercial general liability declarations",
+    "limitation of coverage to designated",
+    "schedule of classes",
+    "liability premises schedule",
+    "hired auto liability insurance",
+    "non-owned auto liability insurance",
+    "hired and non-owned auto liability insurance",
+    "deductible liability insurance",
+    "swimming pool barrier",
+    "lifesaving equipment",
+    "water related hazard sign",
+    "liability for guests' property",
+    "guests' property",
+    "location schedule",
+    "products/completed operations hazard redefined",
+)
+
+
 def _clean_umbrella_forms_endorsements(forms: list) -> list:
-    """Strip non-umbrella forms from an umbrella forms_endorsements list. Same dual-filter
-    approach as the property cleaner. Umbrella keeps forms with unusual prefixes (HS XS,
-    EXL, FUT, NMA, LMA, NUF, CSXC, CX, SCU, NXLL, etc.) — we blacklist GL/property/EPLI/
-    Liquor/Auto rather than whitelist umbrella prefixes."""
+    """Strip non-umbrella forms from an umbrella forms_endorsements list.
+
+    Rules (Sep 15 2026 rewrite after the Neptune Lodging / Houston Specialty miss):
+      * A form number carrying an umbrella-native token (CX, XS, EX, CU, CSXC...) is
+        always kept, whatever carrier prefix sits in front of it.
+      * Exclusion / limitation rows are always kept — an umbrella that silently
+        loses its Firearms or Sublimits exclusion is an E&O, a stray GL row is not.
+      * Otherwise reject by _NONUMBRELLA_FORM_PREFIXES, then by the narrow
+        _UMBRELLA_DESCRIPTION_REJECT_KEYWORDS list (GL-structural forms only).
+    """
     if not isinstance(forms, list):
         return forms or []
     cleaned = []
@@ -1249,12 +1316,54 @@ def _clean_umbrella_forms_endorsements(forms: list) -> list:
             cleaned.append(f)
             continue
         fn = str(f.get("form_number") or "").upper().strip()
-        if fn and any(fn.startswith(p) for p in _NONUMBRELLA_FORM_PREFIXES):
+        if _is_umbrella_native_form_number(fn) or _is_exclusion_form(f):
+            cleaned.append(f)
             continue
-        if _is_liability_form_by_description(f):
+        if fn and any(fn.startswith(p) for p in _NONUMBRELLA_FORM_PREFIXES):
+            logger.warning(f"Umbrella forms cleaner: dropped by prefix -> {fn} | {f.get('description', '')}")
+            continue
+        desc_l = str(f.get("description") or "").lower()
+        if desc_l and any(kw in desc_l for kw in _UMBRELLA_DESCRIPTION_REJECT_KEYWORDS):
+            logger.warning(f"Umbrella forms cleaner: dropped by description -> {fn} | {f.get('description', '')}")
             continue
         cleaned.append(f)
     return cleaned
+
+
+_GL_AUDIT_REJECT_PREFIXES = (
+    "CP ", "CP0", "CP1", "PR 0", "PR 9", "HSIC SP", "HSIC PR", "SSPN", "LMA", "6133",
+    "TC ", "VR ", "EC ", "EB ", "EB0", "EB-", "MS PR",
+    "EMD", "EMO", "EGD", "PN0", "CA ", "CA-", "WC ", "CYB ", "EPL", "LL ", "LL-",
+    "CSXC", "EXL ", "HS XS", "CX ", "CU ",
+)
+
+
+def _forms_audit_reject_factory(coverage_key: str):
+    """Veto function handed to forms_schedule_audit so that, when one PDF carries two
+    quotes, a sibling coverage's rows are not appended to this coverage. Exclusion rows
+    and umbrella-native numbers are never vetoed from an umbrella section."""
+    key = (coverage_key or "").lower()
+    if key.startswith("umbrella"):
+        def _veto(f):
+            fn = str(f.get("form_number") or "").upper().strip()
+            if _is_umbrella_native_form_number(fn) or _is_exclusion_form(f):
+                return False
+            if fn.startswith("IL"):
+                # IL jacket / TRIA disclosure forms literally on the excess schedule stay.
+                return False
+            if fn and any(fn.startswith(p) for p in _NONUMBRELLA_FORM_PREFIXES):
+                return True
+            desc_l = str(f.get("description") or "").lower()
+            return bool(desc_l and any(kw in desc_l for kw in _UMBRELLA_DESCRIPTION_REJECT_KEYWORDS))
+        return _veto
+    if key.startswith("general_liability"):
+        def _veto(f):
+            fn = str(f.get("form_number") or "").upper().strip()
+            if _is_umbrella_native_form_number(fn):
+                return True
+            return bool(fn and any(fn.startswith(p) for p in _GL_AUDIT_REJECT_PREFIXES))
+        return _veto
+    return None
 
 
 def _dedup_forms_endorsements(forms: list) -> list:
@@ -1742,9 +1851,9 @@ IMPORTANT:
 - For Property deductibles: Do NOT extract deductibles for perils marked "NOT COVERED" in the sublimits. If Named Windstorm sublimit says "NOT COVERED", omit the Named Storm/Named Windstorm deductible entirely. Only extract deductibles for perils that actually have coverage on this specific policy.
 - For Property additional_coverages (sublimits/extensions): This section is MANDATORY. Extract ALL sublimits of liability, also called extensions of coverage or additional coverages. Common property sublimits include: Flood, Earthquake, Equipment Breakdown, Ordinance or Law, Spoilage, Business Income Extended Period, Sign Coverage, Accounts Receivable, Valuable Papers, Fine Arts, Newly Acquired Property, Transit, Debris Removal, Pollutant Cleanup, Utility Services, Green Building, Sewer/Drain Backup, Water Damage, Mold/Fungi, and any other sublimit or extension listed in the quote. Include the limit and deductible for each.
 - For Property forms_endorsements: This section is MANDATORY. Extract EVERY policy form and endorsement listed in the property quote. Include the exact form number (e.g., CP 00 10 06/07, PR 001, PR 902, SSPN-018, LMA 5401, NMA1191) and description. These are typically listed under "Endorsements/Additional Endorsements" or "Forms Schedule" - may span MULTIPLE PAGES. Extract ALL items (a through z, aa through zz, etc.). Do NOT skip this section even if the list is long (50+ forms is normal for property).
-- For General Liability forms_endorsements: This section is MANDATORY. Extract EVERY form and endorsement listed under "PRIMARY GENERAL LIABILITY FORMS & ENDORSEMENTS" or similar GL-specific forms schedule. These forms have form numbers starting with CG, AD, AI, DE, JA, IL (liability-specific), etc. Do NOT copy property forms (CP, MS PR, HSIC, MS DEC, MS EBC) into the GL section. Each coverage type must have ONLY its own forms.
-- For Umbrella/Excess forms_endorsements: Extract the forms listed under the umbrella/excess liability quote. If the umbrella quote shares a forms schedule with GL (common with Admiral), extract the umbrella-specific forms. Do NOT copy property forms into the umbrella section.
-- FORMS SEPARATION RULE: Each coverage's forms_endorsements array must contain ONLY forms from that specific coverage's quote document. Property forms (CP, PR, MS PR, HSIC, SSPN, LMA, NMA, 6133x forms) go ONLY in the property section. GL forms (CG, AD, AI, DE, JA forms) go ONLY in the general_liability section. Umbrella/excess forms (SCX, NXLL, CSXC forms) go ONLY in the umbrella section. EPLI forms (BR, EMD, EMO, EGD, PN forms) go ONLY in the epli section. Crime forms should contain ONLY crime/fidelity-specific forms (e.g., CR, bond, fidelity forms) — do NOT copy property, GL, umbrella, or EPLI forms into the crime section. When a single carrier (e.g., Coalition) provides both EPLI and Crime, extract separate forms for each — crime gets only crime-specific endorsements, EPLI gets only EPLI endorsements. Shared policy jacket forms (IL, EMN, EMJ) should go in the primary coverage only, not duplicated across both.
+- For General Liability forms_endorsements: This section is MANDATORY. Extract EVERY form and endorsement listed under "PRIMARY GENERAL LIABILITY FORMS & ENDORSEMENTS" or similar GL-specific forms schedule. These forms have form numbers starting with CG, AD, AI, DE, JA, IL (liability-specific), etc. Do NOT copy property forms (CP, MS PR, HSIC SP, HSIC PR, MS DEC, MS EBC) into the GL section. Each coverage type must have ONLY its own forms.
+- For Umbrella/Excess forms_endorsements: This section is MANDATORY and must be EXHAUSTIVE. Extract EVERY row of the umbrella/excess quote's "Forms", "Forms Schedule" or "Schedule of Forms and Endorsements" list - every exclusion, every condition, every notice, every jacket form - in the order listed, including rows whose description wraps onto a second line (join the wrapped text into one description). Never stop early and never summarize; 30-45 rows is normal for an excess quote. Every EXCLUSION row is critical (Assault or Battery, Sexual Misconduct, Total Firearms, Sublimits or Reduced Limits in Underlying Insurance, Communicable Disease, Punitive Damages, Care Custody or Control, Cyber/Data, PFAS, etc.). If the umbrella quote shares a forms schedule with GL (common with Admiral), extract the umbrella-specific forms. Do NOT copy property forms into the umbrella section.
+- FORMS SEPARATION RULE: Each coverage's forms_endorsements array must contain ONLY forms from that specific coverage's quote document. Property forms (CP, PR, MS PR, HSIC SP, HSIC PR, SSPN, LMA, NMA, 6133x forms) go ONLY in the property section. Houston Specialty EXCESS forms (HSIC CX ES ..., HSIC EX DS ..., CX 21 ..., CX 00 01) are UMBRELLA forms and go in the umbrella section. GL forms (CG, AD, AI, DE, JA forms) go ONLY in the general_liability section. Umbrella/excess forms (SCX, NXLL, CSXC forms) go ONLY in the umbrella section. EPLI forms (BR, EMD, EMO, EGD, PN forms) go ONLY in the epli section. Crime forms should contain ONLY crime/fidelity-specific forms (e.g., CR, bond, fidelity forms) — do NOT copy property, GL, umbrella, or EPLI forms into the crime section. When a single carrier (e.g., Coalition) provides both EPLI and Crime, extract separate forms for each — crime gets only crime-specific endorsements, EPLI gets only EPLI endorsements. Shared policy jacket forms (IL, EMN, EMJ) should go in the primary coverage only, not duplicated across both.
 - For General Liability limits: Extract ALL limits of liability listed on the quote, not just the standard 6 CGL limits. Many hotel GL policies include additional limits for Employee Benefits (Each Claim and Aggregate), Sexual Abuse (Each Act and Aggregate), Hired & Non-Owned Auto, and Assault & Battery (Each Event and Aggregate). Include EVERY limit line item shown on the carrier quote in the "limits" array. Also extract the ACTUAL dollar amounts from the quote - do not use defaults like $100,000 for Damage to Rented Premises or $5,000 for Medical Payments if the quote shows different amounts.
 - For General Liability total_sales and schedule_of_classes exposure: The "total_sales" field must contain the ACTUAL total gross sales figure from the quote's rate basis line. Look for text like "Per $1,000 Gross Sales ($X)" or "Gross Sales: $X" and extract $X as total_sales. Do NOT fabricate or estimate per-class exposure amounts in schedule_of_classes - if the quote does not show individual per-class exposure breakdowns, leave the exposure field empty for each class entry. The total_sales field is the authoritative source for the Information Summary.
 - For EPLI / Employment Practices Liability / Management Liability (ProEx): Extract as coverage_type "epli". ProEx Management Liability proposals from carriers like Coalition, Travelers, or Hartford contain EPL coverage. Look for "Employment Practices", "EPL", "EPLI", "Management Liability", or "ProEx" in the document. Extract the carrier name, AM Best rating, premium, surplus lines tax, total_premium (premium + SLT only, no broker fees), defense provisions (Duty to Defend or Non-Duty to Defend), aggregate limit, third-party discrimination/harassment sublimit, additional defense limit, retention per claim, and all sublimits (wage & hour, workplace violence, immigration, WARN Act, biometric, employee privacy). Also extract notable endorsements like "Bodily Injury & Property Damage Exclusion" or "Physical or Sexual Abuse Exclusion" with their coverage detail (e.g., "Yes - absolute language"). CRITICAL: The ProEx/Management Liability PDF is a SEPARATE coverage from General Liability — do NOT merge EPLI data into the GL section.
@@ -2978,6 +3087,20 @@ TEXT:
             except Exception as _hb_err:
                 logger.warning(f"HotelBound pass failed (non-fatal): {_hb_err}")
 
+            # FORMS SCHEDULE AUDIT (Sep 15 2026): deterministic completeness check that
+            # re-reads each liability quote's own forms schedule and appends every
+            # numbered row GPT (or a cleaner above) dropped. Runs LAST so nothing can
+            # strip the rows again. See forms_schedule_audit.py for the why.
+            try:
+                from forms_schedule_audit import run_forms_schedule_audit
+                _audit_items = [{"filename": it.get("filename", ""), "text": it.get("text", "")}
+                                for it in all_items]
+                _aw = run_forms_schedule_audit(data, _audit_items, _forms_audit_reject_factory)
+                if _aw:
+                    logger.warning(f"Forms schedule audit raised {len(_aw)} warning(s)")
+            except Exception as _fa_err:
+                logger.warning(f"Forms schedule audit failed (non-fatal): {_fa_err}")
+
             return data
 
         except json.JSONDecodeError as e:
@@ -3211,7 +3334,8 @@ CRITICAL RULES FOR UMBRELLA/EXCESS LIABILITY EXTRACTION:
    - FUT, FUT-SS  (Southlake / Futuristic Underwriters GL)
    - FLSL, FLNOTICE, GL STATE NOTICE  (Florida GL surplus-lines notices)
    - EP100, EPL, CYB, WPA  (GL-package add-ons)
-   - CP, PR, HSIC, SSPN, LMA, 6133, TC, VR, EC, EB  (property)
+   - CP, PR, HSIC SP, HSIC PR, SSPN, LMA, 6133, TC, VR, EC, EB  (property)
+     (HSIC CX ES / HSIC EX DS / CX forms are Houston Specialty EXCESS forms - KEEP them)
    - CG, AD, AI, DE, JA, GLF  (GL ISO + carrier)
    - LL, CA  (liquor, auto)
    - EMD, EMO, EGD, PN  (EPLI)

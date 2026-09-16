@@ -16,6 +16,7 @@ from docx.enum.section import WD_ORIENT
 from docx.oxml.ns import qn, nsdecls
 from docx.oxml import parse_xml
 import datetime
+import re
 
 # Constants and lookup tables extracted to separate module
 from proposal_constants import (
@@ -242,9 +243,15 @@ CA_LICENSES = [
 # ─── Helper Functions ─────────────────────────────────────────
 
 def set_cell_shading(cell, color_hex):
-    """Set cell background color."""
+    """Set cell background color. Replaces any existing <w:shd> — appending a second
+    one is schema-invalid and Word keeps the FIRST, which meant the yellow
+    high-risk-exclusion highlight silently lost to the alternating-row gray on
+    every even row (found Sep 15 2026)."""
+    tcPr = cell._tc.get_or_add_tcPr()
+    for old in tcPr.findall(qn("w:shd")):
+        tcPr.remove(old)
     shading = parse_xml(f'<w:shd {nsdecls("w")} w:fill="{color_hex}" w:val="clear"/>')
-    cell._tc.get_or_add_tcPr().append(shading)
+    tcPr.append(shading)
 
 
 def set_cell_border(cell, **kwargs):
@@ -624,8 +631,10 @@ COVERAGE_FORM_REJECT_PREFIXES = {
         "CSXC", "EXL ", "HS XS",  # umbrella prefixes
     ),
     "umbrella": (
-        # Property
-        "CP ", "CP0", "CP1", "PR 0", "PR 9", "HSIC", "SSPN", "LMA",
+        # Property. NOTE: never a bare "HSIC" here — Houston Specialty EXCESS forms are
+        # "HSIC CX ES ..." / "HSIC EX DS ..." and a bare prefix wiped every one of them
+        # off the Neptune Lodging proposal (Sep 15 2026). Property-jacket HSIC only.
+        "CP ", "CP0", "CP1", "PR 0", "PR 9", "HSIC SP", "HSIC PR", "HSIC CP", "SSPN", "LMA",
         "6133", "TC ", "VR ", "EC ", "EB ", "EB0", "EB-",
         # GL
         "CG ", "CG0", "CG2", "AD ", "AI ", "DE ", "JA ", "GLF",
@@ -791,6 +800,23 @@ def _matches_property_description(form_dict):
     return any(kw in desc for kw in _PROPERTY_DESCRIPTION_KEYWORDS)
 
 
+_UMBRELLA_NATIVE_TOKEN_RE = re.compile(
+    r"(?:^|[\s\-_/])(?:CX|XS|CU|UMB|UMBR|UMBRELLA|EXL|EXS|EXC|EXCESS|CSXC|NXLL|SCU|SCX|XSL|EX)(?=$|[\s\-_/\d])"
+)
+_EXCLUSION_DESC_RE = re.compile(r"EXCLU|LIMITATION|SUBLIMIT|REDUCED LIMIT|RETAINED LIMIT|NOT COVERED", re.I)
+
+
+def _is_umbrella_native_form_number(form_number):
+    fn = str(form_number or "").upper().strip()
+    return bool(fn) and bool(_UMBRELLA_NATIVE_TOKEN_RE.search(fn))
+
+
+def _is_exclusion_form(form_dict):
+    if not isinstance(form_dict, dict):
+        return False
+    return bool(_EXCLUSION_DESC_RE.search(str(form_dict.get("description") or "")))
+
+
 def _filter_cross_contaminated_forms(forms, coverage_key):
     """Strip forms whose prefixes belong to a sibling coverage in the same
     submission. Rows with an empty form_number are kept by default (plain-text
@@ -806,17 +832,33 @@ def _filter_cross_contaminated_forms(forms, coverage_key):
     kept = []
     dropped = 0
     _strip_prop_desc = coverage_key in _REJECT_PROPERTY_DESCRIPTIONS_IN
+    _is_umb = str(coverage_key or "").startswith("umbrella")
     for f in forms:
         fn = (f.get("form_number", "") if isinstance(f, dict) else "").upper().strip()
+        # Rows the forms-schedule audit verified against the carrier quote, umbrella-
+        # native form numbers in an umbrella section, and ANY exclusion/limitation row
+        # are never dropped at render time — this is the last step before the client
+        # sees the document and there is no human review after it (Sep 15 2026).
+        if isinstance(f, dict) and f.get("schedule_verified"):
+            kept.append(f)
+            continue
+        if _is_umb and _is_umbrella_native_form_number(fn):
+            kept.append(f)
+            continue
         if not fn:
             # Plain-text entry — keep by default, but reject if it looks like a
             # property endorsement leaking into a non-property coverage section.
-            if _strip_prop_desc and _matches_property_description(f):
+            if _strip_prop_desc and _matches_property_description(f) and not _is_exclusion_form(f):
                 dropped += 1
                 continue
             kept.append(f)
             continue
         if reject and any(fn.startswith(p.upper()) for p in reject):
+            if _is_exclusion_form(f):
+                logger.warning(f"Forms filter ({coverage_key}): KEPT exclusion row despite foreign prefix -> {fn} | {f.get('description', '')}")
+                kept.append(f)
+                continue
+            logger.warning(f"Forms filter ({coverage_key}): dropped -> {fn} | {f.get('description', '')}")
             dropped += 1
             continue
         # Form-number-prefix check passed — also reject if description is property-side
@@ -842,10 +884,33 @@ HIGH_RISK_EXCLUSION_KEYWORDS = [
     "assault and battery",
     "assault & battery",
     "assault/battery",
+    "assault or battery",
+    "assault",
+    "battery exclusion",
     # Patch AB (Stefan 2026-07-21): flag these on liability/umbrella forms too
     "total pollution",
     "employment related practices exclusion",
     "employment-related practices exclusion",
+    "exclusion - employment-related practices",
+    "exclusion - employment related practices",
+    # Sep 15 2026 (Stefan, Neptune Lodging): umbrella/excess exclusions that must
+    # ALWAYS be flagged — firearms, and any exclusion of underlying coverage that is
+    # sublimited (it removes excess over the $300K A&B sublimit, liquor sublimits, etc.)
+    "firearm",
+    "weapons",
+    "sublimit",
+    "sub-limit",
+    "reduced limit",
+    "sexual misconduct",
+    "bed bug",
+    "bedbug",
+    "active shooter",
+    "active assailant",
+    "liquor liability exclusion",
+    "total liquor",
+    "exclusion - liquor",
+    "communicable disease exclusion",
+    "exclusion - communicable disease",
 ]
 HIGHLIGHT_YELLOW_HEX = "FFFF00"
 
@@ -4622,6 +4687,32 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         # Flag high-risk exclusions (trafficking, abuse/molestation, assault & battery)
         # with yellow highlight + bold red text so they stand out for the broker/client
         _apply_high_risk_highlight(_forms_table)
+        # Call out the flagged rows in words so the client cannot miss them, and
+        # surface any schedule rows the audit could not place.
+        try:
+            _flagged = []
+            for _f in forms:
+                _fd = _f.get("description", "") if isinstance(_f, dict) else str(_f)
+                _fn = _f.get("form_number", "") if isinstance(_f, dict) else ""
+                if _is_high_risk_exclusion(f"{_fn} {_fd}") and _is_exclusion_form(_f if isinstance(_f, dict) else {"description": _fd}):
+                    _flagged.append(" ".join(str(_fd).split()))
+            if _flagged:
+                add_formatted_paragraph(doc,
+                    "Key exclusions and limitations (highlighted above): " + "; ".join(_flagged) + ". "
+                    "These forms remove or restrict coverage for exposures common to hotel operations. "
+                    "Where the excess policy excludes coverage that is sublimited in the underlying policy, "
+                    "the excess limit does not respond above that sublimit. Please review with your HUB service team before binding.",
+                    size=8.5, italic=True, color=CHARCOAL, space_after=6)
+            _audit = cov.get("forms_audit") if isinstance(cov, dict) else None
+            if isinstance(_audit, dict) and _audit.get("vetoed"):
+                add_formatted_paragraph(doc,
+                    "Review Required - the carrier quote's forms schedule lists additional forms that could not be "
+                    "placed in this section automatically: " +
+                    "; ".join(f"{v.get('form_number', '')} {v.get('description', '')}".strip() for v in _audit["vetoed"]) +
+                    ". Verify the complete schedule against the carrier-issued policy.",
+                    size=8.5, italic=True, color=CHARCOAL, space_after=6)
+        except Exception as _note_err:
+            logger.warning(f"Forms note failed (non-fatal): {_note_err}")
     elif coverage_key in _critical_form_coverages:
         add_subsection_header(doc, "Forms & Endorsements")
         add_formatted_paragraph(doc,
