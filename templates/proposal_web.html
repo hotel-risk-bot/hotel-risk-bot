@@ -1331,13 +1331,31 @@ function renderCoverageFields(key, cov) {
 
     // Forms & Endorsements
     const forms = cov.forms_endorsements || [];
-    html += `<h3 class="section-toggle" onclick="toggleSection(this)">Forms &amp; Endorsements (${forms.length})</h3>`;
-    html += `<div class="section-content" style="display:none">`;
+    const audit = cov.forms_audit || null;
+    const auditAdded = audit && audit.added ? audit.added.length : 0;
+    const auditVetoed = audit && audit.vetoed ? audit.vetoed.length : 0;
+    const auditBadge = audit
+        ? ` <span style="font-size:0.7rem; font-weight:400; color:${auditVetoed ? '#92400e' : '#166534'};">— schedule check: ${audit.schedule_rows} numbered forms on quote${auditAdded ? ', ' + auditAdded + ' auto-added' : ''}${auditVetoed ? ', ' + auditVetoed + ' NOT placed' : ''}</span>`
+        : '';
+    html += `<h3 class="section-toggle" onclick="toggleSection(this)">Forms &amp; Endorsements (${forms.length})${auditBadge}</h3>`;
+    html += `<div class="section-content" style="display:${auditVetoed ? 'block' : 'none'}">`;
+    if (audit) {
+        if (auditAdded) {
+            html += `<div style="background:#fef9c3; border:1px solid #f3b921; border-radius:6px; padding:0.5rem 0.75rem; font-size:0.78rem; margin-bottom:0.5rem;">
+                <strong>Forms schedule audit:</strong> the carrier quote (${escHtml(audit.source_file || '')}) lists ${audit.schedule_rows} numbered forms; the AI extraction had ${audit.extracted_before}. ${auditAdded} missing row(s) were added from the quote's own schedule and are shaded yellow below.</div>`;
+        }
+        if (auditVetoed) {
+            html += `<div style="background:#fee2e2; border:1px solid #ac1534; border-radius:6px; padding:0.5rem 0.75rem; font-size:0.78rem; margin-bottom:0.5rem;">
+                <strong>Review required:</strong> ${auditVetoed} row(s) on the quote's forms schedule look like another coverage's forms and were NOT added. Verify and add manually if they belong here:<ul style="margin:0.25rem 0 0 1rem; padding:0;">${audit.vetoed.map(v => `<li>${escHtml(v.form_number)} — ${escHtml(v.description)}</li>`).join('')}</ul></div>`;
+        }
+    }
     html += `<div class="forms-list">`;
     forms.forEach((f, i) => {
         const num = typeof f === 'string' ? f : (f.form_number || '');
         const desc = typeof f === 'string' ? '' : (f.description || '');
-        html += `<div class="form-entry">
+        const verified = typeof f === 'object' && f && f.schedule_verified;
+        const rowStyle = verified ? ' style="background:#fef9c3;"' : '';
+        html += `<div class="form-entry"${rowStyle} title="${verified ? 'Added by the forms schedule audit from the carrier quote' : ''}">
             <input value="${escHtml(num)}" onchange="updateForm('${key}',${i},'form_number',this.value)">
             <input value="${escHtml(desc)}" onchange="updateForm('${key}',${i},'description',this.value)">
             <button class="remove-btn" onclick="removeForm('${key}',${i})">✕</button>
