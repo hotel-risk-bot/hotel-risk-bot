@@ -827,6 +827,7 @@
                     <label>Body</label>
                     <textarea id="email-body" rows="18" style="width:100%;padding:0.65rem;border:1px solid var(--gray-300);border-radius:var(--radius);font-size:0.85rem;font-family:inherit;line-height:1.5;"></textarea>
                 </div>
+                <div id="email-excl-check" class="hidden" style="border:1px solid var(--gray-300);border-radius:var(--radius);padding:0.5rem 0.75rem;font-size:0.78rem;margin-top:0.5rem;"></div>
                 <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.75rem;">
                     <button class="btn btn-primary btn-sm" onclick="copyEmail()">&#128203; Copy Email</button>
                     <button class="btn btn-outline btn-sm" onclick="draftEmail()">Regenerate</button>
@@ -1871,6 +1872,7 @@ async function draftEmail(instruction) {
         if (!res.ok) throw new Error(d.error || 'Draft failed');
         document.getElementById('email-subject').value = d.subject || '';
         document.getElementById('email-body').value = d.body || '';
+        renderEmailExclusionCheck(d);
         content.classList.remove('hidden');
         status.classList.add('hidden');
         if (instruction) showToast('Email refined');
@@ -1878,6 +1880,26 @@ async function draftEmail(instruction) {
         status.classList.remove('hidden');
         status.textContent = 'Could not draft the email (' + (err.message || 'error') + '). The proposal above is unaffected.';
     }
+}
+
+function renderEmailExclusionCheck(d) {
+    const box = document.getElementById('email-excl-check');
+    if (!box) return;
+    const ctx = d.context || {};
+    const lines = (ctx.coverages || []).filter(c => (c.key_exclusions || []).length);
+    if (!lines.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+    const missing = d.missing_exclusions || [];
+    let html = `<div style="font-weight:600;margin-bottom:0.25rem;">Key exclusions called out in this email</div>`;
+    html += lines.map(c => `<div><span style="color:var(--gray-600);">${escHtml(c.coverage)}:</span> ${c.key_exclusions.map(escHtml).join('; ')}</div>`).join('');
+    if (ctx.sublimit_note) html += `<div style="margin-top:0.25rem;font-style:italic;">${escHtml(ctx.sublimit_note)}</div>`;
+    if (missing.length) {
+        html += `<div style="margin-top:0.4rem;color:#ac1534;font-weight:600;">Not found in the draft, add before sending: ${missing.map(escHtml).join('; ')}</div>`;
+        box.style.borderColor = '#ac1534'; box.style.background = '#fee2e2';
+    } else {
+        box.style.borderColor = '#3ebd3e'; box.style.background = '#f0fdf4';
+    }
+    box.innerHTML = html;
+    box.classList.remove('hidden');
 }
 
 function refineEmail() {
