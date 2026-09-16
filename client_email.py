@@ -19,6 +19,8 @@ from proposal_generator import (
     _clean_carrier_name,
     _parse_currency,
     fmt_currency_cents,
+    _is_high_risk_exclusion,
+    _is_exclusion_form,
 )
 
 logger = logging.getLogger(__name__)
@@ -126,6 +128,103 @@ def _deductibles(cov):
                 out.append(amt)
         elif isinstance(d, str) and d.strip():
             out.append(d.strip())
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Key exclusions (Sep 16 2026, Stefan): the email must call out the same
+# high-risk exclusions the proposal highlights in yellow - firearms, assault or
+# battery, abuse/molestation, human trafficking, sexual misconduct, sublimited
+# underlying coverage, etc. Deterministic, from the coverage's forms list; the
+# model is told it may not drop any of them.
+# ---------------------------------------------------------------------------
+_EXCL_STRIP_RES = (
+    re.compile(r"^\s*(total\s+)?exclusion\s*[-\u2013\u2014:]+\s*", re.I),
+    re.compile(r"^\s*exclusion\s+of\s+(?!coverage\b)", re.I),
+    re.compile(r"^\s*exclusion\s+of\s+", re.I),
+    re.compile(r"\s*[-\u2013\u2014:]*\s*exclusion(\s+endorsement)?\s*(\(broad form\))?\s*$", re.I),
+    re.compile(r"^\s*exclusion\s*[-\u2013\u2014:]\s*", re.I),
+)
+_SMALL_WORDS = {"a", "an", "and", "or", "of", "in", "to", "the", "for", "with", "by", "on", "at"}
+
+
+def _exclusion_topic(desc):
+    """'EXCLUSION - ASSAULT OR BATTERY' -> 'Assault or Battery';
+    'TOTAL FIREARMS EXCLUSION' -> 'Total Firearms';
+    'EXCLUSION OF COVERAGE SUBJECT TO SUBLIMITS OR OTHER REDUCED LIMITS IN
+    UNDERLYING INSURANCE' -> 'Coverage Subject to Sublimits or Other Reduced
+    Limits in Underlying Insurance'."""
+    t = " ".join(str(desc or "").split())
+    for rx in _EXCL_STRIP_RES:
+        t = rx.sub("", t)
+    t = t.strip(" -:\u2013\u2014")
+    if not t:
+        return ""
+    words = t.split()
+    out = []
+    for i, w in enumerate(words):
+        lw = w.lower()
+        if i > 0 and lw in _SMALL_WORDS:
+            out.append(lw)
+        elif w.isupper() or w.islower():
+            out.append("-".join(part[:1].upper() + part[1:].lower() for part in w.split("-")))
+        else:
+            out.append(w)
+    return " ".join(out)
+
+
+def _key_exclusions(cov):
+    """Prose-ready list of the coverage's flagged exclusions, in schedule order,
+    de-duplicated. Only rows that are BOTH an exclusion/limitation AND on the
+    high-risk keyword list (same test as the yellow highlight in the DOCX)."""
+    if not isinstance(cov, dict):
+        return []
+    seen, out = set(), []
+    rows = list(cov.get("forms_endorsements") or [])
+    # Some extractions carry a plain-text exclusions array as well.
+    for x in (cov.get("exclusions") or cov.get("key_exclusions") or []):
+        rows.append(x if isinstance(x, dict) else {"form_number": "", "description": str(x)})
+    for f in rows:
+        if isinstance(f, dict):
+            desc = str(f.get("description") or "")
+            fn = str(f.get("form_number") or "")
+        else:
+            desc, fn = str(f), ""
+        if not desc:
+            continue
+        if not _is_exclusion_form({"description": desc}):
+            continue
+        if not _is_high_risk_exclusion(f"{fn} {desc}"):
+            continue
+        topic = _exclusion_topic(desc)
+        k = topic.lower()
+        if topic and k not in seen:
+            seen.add(k)
+            out.append(topic)
+    return out
+
+
+_SUBLIMIT_LIMIT_RE = re.compile(r"assault|battery|abuse|molestation|trafficking|liquor|firearm", re.I)
+
+
+def _underlying_sublimits(coverages):
+    """GL / liquor limits that are sublimited (A&B $300K etc.) - the excess
+    'sublimits or reduced limits' exclusion bites exactly here."""
+    out, seen = [], set()
+    for key, cov in (coverages or {}).items():
+        if not isinstance(cov, dict) or not (key.startswith("general_liability") or key.startswith("liquor")):
+            continue
+        for lim in (cov.get("coverage_limits") or []) + (cov.get("additional_coverages") or []):
+            if not isinstance(lim, dict):
+                continue
+            desc = str(lim.get("description") or "").strip()
+            amt = str(lim.get("limit") or lim.get("amount") or "").strip()
+            if desc and amt and "$" in amt and _SUBLIMIT_LIMIT_RE.search(desc):
+                label = re.sub(r"\s*[-\u2013]\s*(each occurrence|aggregate|per occurrence).*$", "", desc, flags=re.I)
+                k = label.lower()
+                if k not in seen:
+                    seen.add(k)
+                    out.append(f"{amt} {label} limit")
     return out
 
 
@@ -285,6 +384,7 @@ def build_email_context(data, answers=None):
             "carrier": _short_carrier(_clean_carrier_name(cov.get("carrier", ""))) or "TBD",
             "key_limit": _key_limit(cov),
             "deductibles": _deductibles(cov),
+            "key_exclusions": _key_exclusions(cov),
             "expiring_carrier": _short_carrier(expiring_carriers.get(key) or ""),
             "proposed_premium": fmt_currency_cents(proposed) if proposed else "",
             "expiring_premium": fmt_currency_cents(exp) if exp else "",
@@ -334,8 +434,24 @@ def build_email_context(data, answers=None):
             r"[,]?\s+\b(LLC|L\.L\.C\.|LLLP|LLP|LP|INC|INC\.|CORP|CORPORATION|CO|COMPANY|LTD)\b\.?$",
             "", (client.get("named_insured") or "").strip(), flags=re.I).strip()
 
+    # Excess "sublimits / reduced limits in underlying" exclusion + a sublimited
+    # GL coverage (Limited A&B $300K...) = the excess does not sit over that
+    # coverage at all. State it plainly; owners assume the umbrella follows.
+    _sublimit_note = ""
+    _umb_has_sublimit_excl = any(
+        any("sublimit" in x.lower() or "reduced limit" in x.lower() for x in e.get("key_exclusions") or [])
+        for e in lines if e["coverage"].lower().startswith(("umbrella", "excess"))
+    )
+    if _umb_has_sublimit_excl:
+        _subs = _underlying_sublimits(coverages)
+        if _subs:
+            _sublimit_note = ("Because the excess policy excludes coverage that is sublimited in the underlying "
+                              "policy, the excess limit does not apply above the " + "; ".join(_subs) +
+                              " in the General Liability policy.")
+
     team = data.get("service_team") or {}
     return {
+        "sublimit_note": _sublimit_note,
         "contact_first_name": (answers.get("contact_first_name") or "").strip(),
         "highlights": (answers.get("highlights") or "").strip(),
         "signoff": (answers.get("signoff") or "").strip(),
@@ -367,6 +483,7 @@ Proposed carriers are Starr Surplus Lines Insurance Company for Property, Berkle
 The key points are:
 - Property includes a $10,000 property damage deductible, $10,000 time element deductible, $25,000 water damage deductible, $50,000 wind deductible, and 3% named windstorm subject to a $100,000 minimum per occurrence.
 - Equipment Breakdown carries a $25,000 combined deductible with $4,000 property damage and 24 hours business income.
+- Please note the General Liability policy excludes Human Trafficking and Total Pollution, and the Umbrella/Excess excludes Assault or Battery, Total Firearms, Sexual Misconduct, and Coverage Subject to Sublimits or Other Reduced Limits in Underlying Insurance. Because the excess excludes coverage that is sublimited underneath, the excess limit does not apply above the $300,000 Limited Assault and Battery limit in the General Liability policy.
 - Crime and Cyber are recommended but not included in the total premium; Cyber was quoted separately at $3,476.42. Supplemental applications may be needed to finalize quotes for the optional coverages.
 
 Let me know if you would like to walk through the proposal next week or if you have any questions.
@@ -379,7 +496,7 @@ Structure, in this order:
 1. Greeting by contact first name. If no name is given, skip the greeting line entirely.
 2. One sentence: "Attached, is the finalized proposal for <hotel name>" plus the dollar and percent change and the total insured value. Use the HOTEL NAME you are given, never the legal entity. Mention the number of locations only when it is more than one.
 3. One sentence listing proposed carriers: "Proposed carriers are <carrier> for <line>, <carrier> for <line>, and <carrier> for <line>." Keep the lines in EXACTLY the order the facts give them - they are already sorted Property, General Liability, Umbrella, Auto, Workers Compensation, EPLI, Cyber, then ancillary. Do not alphabetize and do not regroup.
-4. "The key points are:" followed by short bullets. One bullet per line of coverage that actually has deductibles or terms worth stating, in the same line order. A final bullet listing the coverages that are recommended but not included in the total premium (name each one; include a separately quoted premium where one exists), closing with the sentence "Supplemental applications may be needed to finalize quotes for the optional coverages." Skip the whole section if there is nothing substantive.
+4. "The key points are:" followed by short bullets. One bullet per line of coverage that actually has deductibles or terms worth stating, in the same line order. Then ONE bullet that starts "Please note" and names EVERY key exclusion you are given, line by line ("the General Liability policy excludes X and Y, and the Umbrella/Excess excludes A, B, and C"), followed by the sublimit sentence when one is given. This bullet is mandatory whenever key exclusions are listed in the facts; it is the client's notice of what the program does not cover and it may never be shortened, softened, or left out. A final bullet listing the coverages that are recommended but not included in the total premium (name each one; include a separately quoted premium where one exists), closing with the sentence "Supplemental applications may be needed to finalize quotes for the optional coverages." Skip the whole section if there is nothing substantive.
 5. Offer to walk through it.
 6. Sign-off flavor if one was given, then "Stefan" on its own line.
 
@@ -389,6 +506,7 @@ Rules:
 - Name the proposed carrier. If NO expiring carrier is given for a line, say nothing about moving, switching, or renewing carriers. Only when an expiring carrier is actually given may you say the account is moving from that carrier to the proposed one, or that the incumbent held or improved the program if they match.
 - Use the carrier names exactly as given. They are already shortened for a client email; never expand them back to full legal names.
 - Never invent numbers, carriers, limits, deductibles, or dates. Use only what you are given. Omit rather than guess.
+- Every key exclusion in the facts must appear in the email, using the exclusion names exactly as given. Never summarize them as "standard exclusions" or "certain exclusions".
 - No em dashes. No emoji. No markdown bold or headers. Plain text for Outlook.
 - Warm and direct. No "I hope this email finds you well." No corporate padding. Keep the whole email under about 200 words.
 
@@ -444,6 +562,15 @@ def _context_to_prompt(ctx):
             bits.append("deductibles " + "; ".join(c["deductibles"]))
         out.append(", ".join(bits))
 
+    _excl_lines = [c for c in ctx["coverages"] if c.get("key_exclusions")]
+    if _excl_lines:
+        out.append("")
+        out.append("KEY EXCLUSIONS (mandatory 'Please note' bullet - name every one, line by line, exactly as written):")
+        for c in _excl_lines:
+            out.append(f"- {c['coverage']} excludes: " + "; ".join(c["key_exclusions"]))
+        if ctx.get("sublimit_note"):
+            out.append("Add this sentence to the same bullet: " + ctx["sublimit_note"])
+
     rec = [f"{c['coverage']} (quoted separately at {c['proposed_premium']})"
            for c in ctx["optional_coverages"]]
     rec += [f"{name} (not yet quoted)" for name in ctx.get("not_quoted") or []]
@@ -489,13 +616,53 @@ def draft_email(ctx, instruction=None, previous=None, model=None):
         })
 
     client = OpenAI()
+    _model = model or os.environ.get("EMAIL_MODEL", "gpt-5.6-terra")
     resp = client.chat.completions.create(
-        model=model or os.environ.get("EMAIL_MODEL", "gpt-5.6-terra"),
+        model=_model,
         messages=messages,
         max_completion_tokens=2000,
     )
     text = (resp.choices[0].message.content or "").strip()
-    return _split_subject_body(text)
+    result = _split_subject_body(text)
+
+    # Guarantee (Sep 16 2026): every key exclusion in the facts must be in the
+    # email. If the model dropped any, send it back once with the missing list.
+    missing = missing_exclusions(ctx, result.get("body", ""))
+    if missing:
+        logger.warning(f"Client email: model omitted key exclusions {missing}; re-drafting once")
+        messages.append({"role": "assistant", "content": text})
+        messages.append({"role": "user", "content": (
+            "The email left out these key exclusions, which is not acceptable: " + "; ".join(missing) +
+            ". Rewrite the full email keeping every figure unchanged and add a 'Please note' bullet in the "
+            "key points that names every key exclusion from the facts, line by line, exactly as written"
+            + (", followed by this sentence: " + ctx["sublimit_note"] if ctx.get("sublimit_note") else "") + "."
+        )})
+        resp = client.chat.completions.create(model=_model, messages=messages, max_completion_tokens=2000)
+        text2 = (resp.choices[0].message.content or "").strip()
+        result2 = _split_subject_body(text2)
+        if len(missing_exclusions(ctx, result2.get("body", ""))) < len(missing):
+            result = result2
+    result["missing_exclusions"] = missing_exclusions(ctx, result.get("body", ""))
+    return result
+
+
+def _excl_key(topic):
+    """Loose match key: first three significant words, lower-cased."""
+    words = [w for w in re.sub(r"[^a-z0-9 ]", " ", topic.lower()).split() if w not in _SMALL_WORDS]
+    return " ".join(words[:3])
+
+
+def missing_exclusions(ctx, body):
+    """Key exclusions from the facts that the drafted body does not mention."""
+    b = re.sub(r"[^a-z0-9 ]", " ", (body or "").lower())
+    b = " ".join(w for w in b.split() if w not in _SMALL_WORDS)
+    out = []
+    for c in ctx.get("coverages") or []:
+        for topic in c.get("key_exclusions") or []:
+            k = _excl_key(topic)
+            if k and k not in b:
+                out.append(f"{c['coverage']}: {topic}")
+    return out
 
 
 def _split_subject_body(text):
