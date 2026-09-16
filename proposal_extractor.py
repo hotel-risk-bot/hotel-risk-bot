@@ -2602,6 +2602,37 @@ class ProposalExtractor:
                                 logger.warning(f"Umbrella re-extraction did not return umbrella key. Keys: {list(_xs_data.keys())}")
                     except Exception as e:
                         logger.error(f"Umbrella re-extraction failed: {e}")
+            # ===== PER-FILE COVERAGE RECOVERY (Sep 16 2026) =====
+            # Deterministically classify every uploaded quote file by line of coverage
+            # and, for any line that has a quote file but came back with no coverage,
+            # re-run the SAME full extraction on that one file and merge the result.
+            # Born from the Jalabapa seven-file run where the Great Point umbrella and
+            # At-Bay cyber quotes were silently dropped. See coverage_recovery.py.
+            try:
+                from coverage_recovery import run_coverage_recovery
+
+                def _single_file_extract(_ftext, _fname):
+                    _hdr = f"\n{'='*60}\nFILE: {_fname}\n{'='*60}\n"
+                    _resp = _get_openai_client().chat.completions.create(
+                        model=GPT_MODEL,
+                        messages=[
+                            {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
+                            {"role": "user", "content": EXTRACTION_USER_PROMPT.format(
+                                document_text=_hdr + _ftext[:120000])},
+                        ],
+                        response_format={"type": "json_object"},
+                        max_completion_tokens=32000,
+                    )
+                    return json.loads(_resp.choices[0].message.content or "{}")
+
+                _rec_items = [{"filename": it.get("filename", ""), "text": it.get("text", "")} for it in all_items]
+                _rw = run_coverage_recovery(data, _rec_items, _single_file_extract)
+                if _rw:
+                    logger.warning(f"Coverage recovery raised {len(_rw)} warning(s)")
+                covs = data.get("coverages", {})
+            except Exception as _cr_err:
+                logger.warning(f"Coverage recovery failed (non-fatal): {_cr_err}")
+
             # ===== TOWER VALIDATION (MULTI-LAYER EXCESS) =====
             # If the source contains multiple distinct excess PDFs but fewer layers were
             # extracted, re-run a targeted GPT call to recover missing layers.
