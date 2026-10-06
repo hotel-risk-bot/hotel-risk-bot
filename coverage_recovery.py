@@ -16,7 +16,19 @@ This module makes the omission impossible to miss:
      full extraction prompt — and merges the returned coverage(s) in;
   3. every recovery, and every file whose line is still missing afterwards, is written
      to data["warnings"] so the review screen shows it.
+
+Oct 6 2026 (Bloom Ventures run): three false "REVIEW REQUIRED" flags came from this
+classifier, not from the extractor. A Futuristic GL + auto package quote scored as a
+workers compensation quote because its exclusions and class schedule say "employers
+liability", "workers compensation" and "class code"; the Starr "Ground Up x Flood" property
+quote scored as a flood AND an equipment breakdown quote although "x Flood" means flood is
+excluded and equipment breakdown is a coverage extension inside the property quote. Now:
+workers comp needs a WC-specific signal; "x / ex / excluding flood" in the file name or text
+cancels the flood signal; and a line that already appears inside an extracted coverage
+(flood, equipment breakdown, liquor, EPLI, cyber, crime as a sublimit, extension or
+endorsement) is reported as an info note instead of being re-extracted and red-flagged.
 """
+import json
 import logging
 import re
 
@@ -62,8 +74,9 @@ _LINE_SIGNALS = {
     ),
     "flood": (
         ("flood insurance", "standard flood insurance policy", "nfip", "flood zone", "private flood",
-         "flood coverage", "ground up x flood", "flood quote"),
-        (),
+         "flood coverage", "flood quote"),
+        ("flood excluded", "excluding flood", "flood exclusion", "x flood", "ex flood", "excl flood",
+         "excl. flood", "flood: excluded", "flood - excluded"),
     ),
     "commercial_auto": (
         ("business auto", "commercial auto", "auto liability", "hired and non-owned auto",
@@ -110,6 +123,47 @@ _KEY_ALIASES = {
 
 _MIN_SCORE = 3
 
+# Workers comp is only ever a quote of its own when the file talks like one. GL and auto
+# quotes mention "employers liability", "workers compensation" and "class code" in their
+# exclusions and class schedules, which was enough to trip the generic score.
+_WC_STRONG = ("wc 00 00", "part one", "part two", "experience modification", "experience mod",
+              "per $100", "per 100 of payroll", "rate per $100", "statutory limits", "state of hire",
+              "workers compensation and employers liability", "workers' compensation and employers' liability",
+              "workers compensation policy", "workers' compensation policy", "wc policy", "assigned risk",
+              "ncci", "bodily injury by disease", "bodily injury by accident")
+_X_FLOOD_RE = re.compile(r"\b(?:x|ex|exc|excl|excluding)\.?\s*[- ]?\s*flood\b", re.I)
+
+# Lines that a hotel program carries inside another coverage at least as often as on their
+# own paper: flood and equipment breakdown as property extensions, liquor / EPLI / cyber /
+# crime as endorsements to a GL package. {line: (host coverage-key prefixes, phrases)}.
+_EMBEDDED_LINES = {
+    "flood": (("property", "excess_property"), ("flood",)),
+    "equipment_breakdown": (("property", "excess_property"), ("equipment breakdown", "boiler", "mechanical breakdown")),
+    "liquor_liability": (("general_liability", "gl"), ("liquor",)),
+    "epli": (("general_liability", "gl"), ("employment practices", "epli", "epl ")),
+    "cyber": (("general_liability", "gl"), ("cyber", "breach response", "data breach")),
+    "crime": (("general_liability", "gl", "property"), ("crime", "employee theft", "employee dishonesty", "forgery")),
+}
+
+
+def _embedded_host(coverages: dict, line: str):
+    """Name of the extracted coverage that already carries `line` as a sublimit,
+    extension or endorsement, else None."""
+    spec = _EMBEDDED_LINES.get(line)
+    if not spec:
+        return None
+    prefixes, phrases = spec
+    for k, v in (coverages or {}).items():
+        if not isinstance(v, dict) or not any(str(k).lower().startswith(p) for p in prefixes):
+            continue
+        try:
+            blob = json.dumps(v, default=str).lower()
+        except Exception:
+            blob = str(v).lower()
+        if any(p in blob for p in phrases):
+            return str(k)
+    return None
+
 
 def classify_file(text: str, filename: str = "") -> dict:
     """Return {line: score} for every line this file looks like a quote for.
@@ -137,6 +191,11 @@ def classify_file(text: str, filename: str = "") -> dict:
             s += 4
         if line == "workers_compensation" and re.search(r"\bwc\b", fn):
             s += 4
+        if line == "flood" and (_X_FLOOD_RE.search(fn) or _X_FLOOD_RE.search(low)):
+            s = 0   # "Ground Up x Flood": the quote EXCLUDES flood
+        if line == "workers_compensation" and s >= _MIN_SCORE:
+            if not (re.search(r"\bwc\b", fn) or re.search(r"workers'? comp", fn) or any(p in low for p in _WC_STRONG)):
+                s = 0   # GL / auto exclusion wording, not a workers comp quote
         if s >= _MIN_SCORE:
             scores[line] = s
     # Property and GL both mention each other's words; keep only the dominant one
@@ -233,6 +292,15 @@ def run_coverage_recovery(data: dict, items: list, extract_fn) -> list:
         if not lines:
             continue
         missing = {ln for ln in lines if not _has_line(covs, ln)}
+        for ln in sorted(missing):
+            host = _embedded_host(covs, ln)
+            if host:
+                missing.discard(ln)
+                w = (f"Coverage check — '{fname}': {ln.replace('_', ' ')} is carried inside the extracted "
+                     f"{host.replace('_', ' ')} coverage (sublimit, extension or endorsement), not as a separate line. "
+                     f"Nothing was re-extracted; confirm it is shown where you want it.")
+                warnings.append(w)
+                logger.info(w)
         if not missing:
             logger.info(f"Coverage recovery: '{fname}' -> {sorted(lines)} all present")
             continue

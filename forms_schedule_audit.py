@@ -20,6 +20,16 @@ forms_endorsements list:
 
 It is deliberately conservative: it only ever ADDS rows that literally appear with a
 form number in the coverage's own quote file, and it never removes anything.
+
+Package quotes (Oct 6 2026, Bloom Ventures / Futuristic GL + Liquor + Business Auto in
+one PDF): such a schedule carries a Line column ("General Liability", "Business Auto",
+"Liquor Liability", "Interline") after the title. Before this the whole 53-row schedule
+was reconciled against EVERY liability coverage from that file, so the Business Auto
+section gained 42 General Liability forms. The parser now reads that column: a row
+tagged for another line is never offered to this coverage, Interline rows go to every
+coverage on the policy, a row the carrier tags for this line is accepted even when a
+prefix rule would have vetoed it, and a leading edition date ("01/25") moves from the
+title into the form number.
 """
 import logging
 import re
@@ -58,6 +68,33 @@ _SCHEDULE_END_RE = re.compile(
 )
 _COLUMN_HEADER_RE = re.compile(r"^\s*FORM\s+(NAME|TITLE|NUMBER|#|DESCRIPTION)\b", re.I)
 _COLUMN_SPLIT_RE = re.compile(r"\s{2,}|\t")
+_EDITION_RE = re.compile(r"^(\d{2}[/-]\d{2,4})\s+(?=\S)(.*)$")
+
+# Line-of-business labels a package schedule prints as its last column (longest first so
+# "commercial general liability" wins over "general liability" and "liability" alone never
+# matches). Short, ambiguous labels (property, auto, crime, ...) only count once the schedule
+# has shown it uses a Line column at all — see _tag_schedule_lobs.
+_LOB_LABELS = (
+    ("commercial general liability", "gl"), ("general liability", "gl"), ("cgl", "gl"), ("gl", "gl"),
+    ("liquor liability", "liquor"), ("liquor", "liquor"),
+    ("business auto", "auto"), ("commercial auto", "auto"), ("business automobile", "auto"),
+    ("automobile", "auto"), ("auto", "auto"), ("garage", "auto"),
+    ("interline", "interline"), ("common policy", "interline"), ("common", "interline"),
+    ("all lines", "interline"), ("package", "interline"), ("il", "interline"),
+    ("employment practices liability", "epli"), ("employment practices", "epli"), ("epli", "epli"), ("epl", "epli"),
+    ("cyber liability", "cyber"), ("cyber", "cyber"),
+    ("commercial property", "property"), ("property", "property"),
+    ("umbrella", "umbrella"), ("excess liability", "umbrella"), ("commercial excess", "umbrella"), ("excess", "umbrella"),
+    ("workers compensation", "wc"), ("workers' compensation", "wc"), ("workers comp", "wc"),
+    ("crime", "crime"), ("inland marine", "inland_marine"),
+    ("equipment breakdown", "eb"), ("boiler and machinery", "eb"), ("boiler & machinery", "eb"),
+)
+_LOB_TAIL_RE = re.compile(
+    r"^(?P<title>.*?\S)\s+(?P<lob>" + "|".join(re.escape(l) for l, _ in _LOB_LABELS) + r")\s*$", re.I)
+_LOB_MID_RE = re.compile(
+    r"^(?P<title>.*\S)\s+(?P<lob>" + "|".join(re.escape(l) for l, _ in _LOB_LABELS) + r")\s+(?P<tail>[A-Za-z][^\n]*?)\s*$", re.I)
+_LOB_KEY = {l: k for l, k in _LOB_LABELS}
+_AMBIGUOUS_LOBS = {"property", "auto", "automobile", "crime", "excess", "common", "package", "il", "gl", "epl", "cyber", "liquor", "garage"}
 
 
 def _compact(num: str) -> str:
@@ -144,7 +181,12 @@ def parse_forms_schedule(text: str) -> list[dict]:
         j = i + 1
         if j < len(lines) and _looks_like_continuation(lines[j]):
             desc = f"{desc} {lines[j].strip()}"
-        rows.append({"form_number": num, "description": " ".join(desc.split()), "line_no": i, "in_block": in_block})
+        desc = " ".join(desc.split())
+        # "FUT 1025 | 01/25 | Vehicle Schedule | Business Auto": the edition belongs with the number
+        m_ed = _EDITION_RE.match(desc)
+        if m_ed and not re.search(r"\d{2}[/-]\d{2,4}$", num):
+            num, desc = f"{num} {m_ed.group(1)}", m_ed.group(2).strip()
+        rows.append({"form_number": num, "description": desc, "line_no": i, "in_block": in_block})
 
     kept, run = [], []
     for r in rows:
@@ -169,8 +211,73 @@ def parse_forms_schedule(text: str) -> list[dict]:
         if c in seen:
             continue
         seen.add(c)
-        out.append({"form_number": r["form_number"], "description": r["description"]})
+        out.append({"form_number": r["form_number"], "description": r["description"], "lob": None})
+    _tag_schedule_lobs(out)
     return out
+
+
+def _tag_schedule_lobs(rows: list) -> bool:
+    """Read the Line column off the end of each title when the schedule has one.
+    A label counts only when the schedule uses it on at least two rows (or it is an
+    unambiguous multi-word label), and the column is accepted only when at least three
+    rows and half the schedule carry a label. Sets row['lob'] and trims the title.
+    Returns True when the schedule turned out to be line-tagged."""
+    hits = []
+    for r in rows:
+        m = _LOB_TAIL_RE.match(r["description"])
+        hits.append((m.group("title"), _LOB_KEY[m.group("lob").lower()], m.group("lob").lower()) if m else None)
+    counts = {}
+    for h in hits:
+        if h:
+            counts[h[2]] = counts.get(h[2], 0) + 1
+    usable = {lab for lab, n in counts.items() if n >= 2 or lab not in _AMBIGUOUS_LOBS}
+    tagged = [h for h in hits if h and h[2] in usable]
+    if len(tagged) < 3 or len(tagged) < 0.5 * len(rows):
+        return False
+    for r, h in zip(rows, hits):
+        if h and h[2] in usable and h[0].strip():
+            r["description"], r["lob"] = h[0].strip(" -–—|"), h[1]
+    # A wrapped title ("Notice Of Cancellation Additional Insureds Per | General Liability" +
+    # "Written Contract" on the next line) puts the label mid-string: take the rightmost
+    # usable label when only a short, number-free tail follows it.
+    for r in rows:
+        if r["lob"]:
+            continue
+        m = _LOB_MID_RE.match(r["description"])
+        if m and m.group("lob").lower() in usable and len(m.group("tail")) <= 40 and not re.search(r"[\d:$]", m.group("tail")):
+            r["description"] = (m.group("title").strip(" -–—|") + " " + m.group("tail").strip()).strip()
+            r["lob"] = _LOB_KEY[m.group("lob").lower()]
+    return True
+
+
+def schedule_is_tagged(rows: list) -> bool:
+    n = sum(1 for r in rows if r.get("lob"))
+    return n >= 3 and n >= 0.5 * len(rows)
+
+
+# Forms that can never belong to an auto or liquor section (GL / umbrella / excess forms),
+# used when the extractor hands no veto function for those coverages: a prefix test on
+# the number plus a token test so carrier-prefixed excess numbers ("HSIC CX ES 01 44")
+# are caught too.
+_EXCESS_TOKENS = {"CX", "XS", "EX", "CU", "CSXC", "EXL", "UMB", "EXCESS", "UMBRELLA"}
+_DEFAULT_REJECT_PREFIXES = {
+    "commercial_auto": ("CG ", "CG-", "GLF", "LL ", "LL-", "CYB", "EPL"),
+    "liquor": ("CA ", "CA-", "CYB", "EPL"),
+}
+
+
+def _default_reject(coverage_key: str):
+    for k, prefixes in _DEFAULT_REJECT_PREFIXES.items():
+        if (coverage_key or "").lower().startswith(k):
+            def _veto(f, _p=prefixes):
+                fn = str(f.get("form_number") or "").upper().strip()
+                if not fn:
+                    return False
+                if fn.startswith(_p):
+                    return True
+                return any(t in _EXCESS_TOKENS for t in re.split(r"[\s\-/]+", fn))
+            return _veto
+    return None
 
 
 def pick_source_text(items: list, carrier: str, coverage_key: str) -> tuple[str, str]:
@@ -212,11 +319,16 @@ def pick_source_text(items: list, carrier: str, coverage_key: str) -> tuple[str,
 
 
 def reconcile_coverage_forms(cov: dict, source_text: str, source_name: str, coverage_key: str,
-                             reject_fn=None) -> dict:
+                             reject_fn=None, lob_allow=None) -> dict:
     """Merge schedule rows the extractor missed into cov['forms_endorsements'].
     `reject_fn(form_dict) -> bool` may veto a candidate (used to keep sibling-coverage
-    rows out when one PDF holds two quotes). Returns the audit dict."""
+    rows out when one PDF holds two quotes). `lob_allow` is the set of Line-column keys
+    (see _LOB_LABELS) that belong to this coverage; on a line-tagged schedule a row tagged
+    for another line is skipped outright and a row tagged for this line is accepted even
+    when reject_fn would veto it (the carrier's own schedule outranks a prefix rule).
+    Returns the audit dict."""
     schedule = parse_forms_schedule(source_text)
+    tagged = schedule_is_tagged(schedule) and lob_allow is not None
     existing = cov.get("forms_endorsements") or []
     if not isinstance(existing, list):
         existing = []
@@ -226,16 +338,23 @@ def reconcile_coverage_forms(cov: dict, source_text: str, source_name: str, cove
             c = _compact(f.get("form_number"))
             if c:
                 have.add(c)
-    added, vetoed = [], []
+    added, vetoed, other_line = [], [], 0
+    line_rows = 0
     for row in schedule:
         c = _compact(row["form_number"])
         if not c:
             continue
+        lob = row.get("lob")
+        if tagged and lob and lob not in lob_allow:
+            other_line += 1
+            continue
+        line_rows += 1
         # Edition-date variants: "CX 21 13" vs "CX 21 13 04 13" count as present.
         if c in have or any(h.startswith(c) or c.startswith(h) for h in have if len(h) >= 6 and len(c) >= 6):
             continue
         cand = {"form_number": row["form_number"], "description": row["description"], "schedule_verified": True}
-        if reject_fn and reject_fn(cand):
+        carrier_says_ours = bool(tagged and lob and lob in lob_allow)
+        if not carrier_says_ours and reject_fn and reject_fn(cand):
             vetoed.append(cand)
             continue
         added.append(cand)
@@ -262,6 +381,9 @@ def reconcile_coverage_forms(cov: dict, source_text: str, source_name: str, cove
     audit = {
         "source_file": source_name,
         "schedule_rows": len(schedule),
+        "line_rows": line_rows if tagged else len(schedule),
+        "line_tagged": tagged,
+        "other_line_rows": other_line,
         "extracted_before": len(existing),
         "added": [{"form_number": a["form_number"], "description": a["description"]} for a in added],
         "vetoed": [{"form_number": v["form_number"], "description": v["description"]} for v in vetoed],
@@ -280,6 +402,32 @@ def run_forms_schedule_audit(data: dict, items: list, reject_fn_factory=None) ->
         return warnings
     targets = [k for k in covs if k.startswith("umbrella") or k.startswith("general_liability")
                or k.startswith("liquor") or k.startswith("commercial_auto")]
+    present = {k.lower() for k in covs if isinstance(covs.get(k), dict)}
+
+    def _has(prefixes):
+        return any(k.startswith(p) for k in present for p in prefixes)
+
+    def _allow(key):
+        """Line-column keys that belong to this coverage. A line with no coverage of its
+        own (liquor, EPLI, cyber, crime, ... written as endorsements to the GL policy)
+        rides with the general liability section; Interline forms go to every section."""
+        k = key.lower()
+        if k.startswith("general_liability"):
+            allow = {"gl", "interline"}
+            for lob, prefixes in (("liquor", ("liquor",)), ("epli", ("epli", "employment")), ("cyber", ("cyber",)),
+                                  ("crime", ("crime",)), ("eb", ("equipment_breakdown", "boiler")),
+                                  ("inland_marine", ("inland",))):
+                if not _has(prefixes):
+                    allow.add(lob)
+            return allow
+        if k.startswith("liquor"):
+            return {"liquor", "interline"}
+        if k.startswith("commercial_auto"):
+            return {"auto", "interline"}
+        if k.startswith("umbrella") or k.startswith("excess_liab"):
+            return {"umbrella", "interline"}
+        return None
+
     for key in targets:
         cov = covs.get(key)
         if not isinstance(cov, dict):
@@ -289,10 +437,15 @@ def run_forms_schedule_audit(data: dict, items: list, reject_fn_factory=None) ->
         if not text:
             logger.info(f"Forms audit: no distinct source file identified for {key} ({carrier}) - skipped")
             continue
-        reject_fn = reject_fn_factory(key) if reject_fn_factory else None
-        audit = reconcile_coverage_forms(cov, text, fname, key, reject_fn)
-        msg = (f"{key}: quote '{fname}' lists {audit['schedule_rows']} numbered forms; "
-               f"extractor had {audit['extracted_before']}")
+        reject_fn = (reject_fn_factory(key) if reject_fn_factory else None) or _default_reject(key)
+        audit = reconcile_coverage_forms(cov, text, fname, key, reject_fn, lob_allow=_allow(key))
+        if audit.get("line_tagged"):
+            msg = (f"{key}: quote '{fname}' lists {audit['schedule_rows']} numbered forms, "
+                   f"{audit['line_rows']} for this line (its Line column, interline included); "
+                   f"extractor had {audit['extracted_before']}")
+        else:
+            msg = (f"{key}: quote '{fname}' lists {audit['schedule_rows']} numbered forms; "
+                   f"extractor had {audit['extracted_before']}")
         if audit["added"]:
             names = "; ".join(f"{a['form_number']} {a['description']}" for a in audit["added"][:12])
             more = "" if len(audit["added"]) <= 12 else f" (+{len(audit['added']) - 12} more)"
