@@ -18,7 +18,7 @@ from datetime import datetime
 from flask import Flask, request, jsonify, send_file, render_template
 
 from proposal_extractor import ProposalExtractor, extract_text_from_pdf_smart, extract_text_from_excel
-from proposal_generator import generate_proposal
+from proposal_generator import generate_proposal, _sanitize_for_render
 from extraction_validator import validate_extraction
 from sov_parser import parse_sov, is_sov_file, aggregate_locations
 
@@ -1595,7 +1595,11 @@ def generate_doc(session_id):
 
         # Map web UI expiring premiums into the format the generator expects
         gen_data = session["extracted_data"]
-        
+
+        # Normalise the extractor's JSON shapes (nulls, bare strings, single objects)
+        # before anything below reads them with .get()/.strip()/len()
+        _sanitize_for_render(gen_data)
+
         # SAFETY: Ensure sov_data is always available for the generator
         # The web UI doesn't send sov_data back, so it must be preserved from the session
         if not gen_data.get("sov_data") and session.get("sov_data"):

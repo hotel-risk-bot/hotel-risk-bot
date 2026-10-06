@@ -48,7 +48,7 @@ _STATE_ABBREVS = {
 
 def _normalize_state(s):
     """Normalize state name/abbreviation to 2-letter code."""
-    s = s.strip().upper()
+    s = str(s or "").strip().upper()
     return _STATE_ABBREVS.get(s, s)
 
 def _clean_carrier_name(name):
@@ -834,7 +834,7 @@ def _filter_cross_contaminated_forms(forms, coverage_key):
     _strip_prop_desc = coverage_key in _REJECT_PROPERTY_DESCRIPTIONS_IN
     _is_umb = str(coverage_key or "").startswith("umbrella")
     for f in forms:
-        fn = (f.get("form_number", "") if isinstance(f, dict) else "").upper().strip()
+        fn = str((f.get("form_number") if isinstance(f, dict) else "") or "").upper().strip()
         # Rows the forms-schedule audit verified against the carrier quote, umbrella-
         # native form numbers in an umbrella section, and ANY exclusion/limitation row
         # are never dropped at render time — this is the last step before the client
@@ -2034,7 +2034,7 @@ def generate_information_summary(doc, data):
         "DISTRICT OF COLUMBIA": "DC",
     }
     def _normalize_state(s):
-        s = s.strip().upper()
+        s = str(s or "").strip().upper()
         return _state_abbrevs.get(s, s)
 
     def _loc_key(loc):
@@ -2410,7 +2410,7 @@ def _normalize_addr(s):
     Handles U.S. 51 / US 51 / US-51 / Highway 51 / Hwy 51 all mapping to the same form.
     Also strips trailing zip codes."""
     import re as _re_norm
-    s = s.strip().upper()
+    s = str(s or "").strip().upper()   # None (JSON null from the model) normalises to ""
     # Remove periods, commas, and dashes ("Burlington - Mount Holly" -> "Burlington Mount Holly")
     s = s.replace(".", "").replace(",", "").replace(" - ", " ").replace("-", " ")
     # Normalize route designators: "U.S. 51" / "US 51" / "US-51" / "US HWY 51" -> "HWY 51"
@@ -2480,7 +2480,7 @@ def _normalize_addr(s):
 def _normalize_city(s):
     """Normalize city name for dedup: uppercase, remove spaces/punctuation.
     Handles 'La Place' vs 'LaPlace' vs 'LA PLACE' all mapping to 'LAPLACE'."""
-    s = s.strip().upper()
+    s = str(s or "").strip().upper()
     s = s.replace(".", "").replace(",", "").replace("-", "").replace("'", "")
     # Remove ALL spaces so 'LA PLACE' == 'LAPLACE' == 'LA  PLACE'
     s = s.replace(" ", "")
@@ -2585,7 +2585,12 @@ def _dedup_locations(raw_locations):
     Preserves distinct buildings at the same campus address (e.g., multi-building hotel)."""
     seen_keys = set()
     locations = []
-    for loc in raw_locations:
+    for loc in raw_locations or []:
+        if not isinstance(loc, dict):
+            if isinstance(loc, str) and loc.strip():
+                loc = {"address": loc.strip()}   # a bare address line from the model
+            else:
+                continue
         addr_key = (_normalize_addr(loc.get("address", "")) + "|" + 
                     _normalize_city(loc.get("city", "")) + "|" +
                     _normalize_state(loc.get("state", "")))
@@ -4094,7 +4099,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         for clause in insuring_clauses:
             if isinstance(clause, dict):
                 # Use extracted description if available, otherwise use standard clause name
-                clause_name = clause.get("description", "").strip()
+                clause_name = str(clause.get("description") or "").strip()
                 if not clause_name and clause_idx < len(STANDARD_CRIME_CLAUSES):
                     clause_name = STANDARD_CRIME_CLAUSES[clause_idx]
                 rows.append([
@@ -5590,19 +5595,164 @@ def generate_coverage_recommendations(doc):
         "which coverages are appropriate for your specific operations and risk profile.")
 
 
+# ─── Extraction output normalisation ──────────────────────────
+# The GPT-6 extractor returns JSON nulls where the 5.6 models returned "" / [] / {},
+# and sometimes a bare string (or a single object) where a list of objects is
+# expected (rating_basis: "Sales", locations: ["123 Main St"]). Nearly every
+# renderer below reads the data with .get() / .strip() assumptions, so the shape
+# is normalised once here, in place, before anything is rendered.
+
+# keys whose value is a list of rows at coverage level (and, where it matters,
+# the field a bare string in that list is promoted into)
+_SAN_ROW_LISTS = {
+    "limits": "description", "deductibles": "description", "forms_endorsements": "description",
+    "additional_coverages": "description", "exclusions": "description", "subjectivities": None,
+    "conditions": "description", "endorsements": "description", "sublimits": "description",
+    "extensions": "description", "coverage_limits": "description", "warrants": "description",
+    "coinsurance": "description", "rating_basis": "classification",
+    "schedule_of_classes": "classification", "schedule_of_hazards": "classification",
+    "sov": "location", "schedule_of_values": "location", "coverage_by_location": "location",
+    "designated_premises": "address", "locations": "address", "named_insureds": "name",
+    "additional_named_insureds": "name", "additional_insureds": "name",
+    "additional_interests": "name", "underlying": "coverage", "underlying_insurance": "coverage",
+    "tower_structure": "layer_description", "policy_attachments": "description",
+    "vehicle_schedule": "description", "vehicles": "description", "drivers": "name",
+    "insuring_clauses": "description", "insuring_agreements": "description",
+    "payment_options": "terms", "warnings": None,
+}
+# keys that are always dicts
+_SAN_DICT_KEYS = frozenset({"client_info", "coverages", "expiring_premiums", "expiring_details",
+                            "summary", "totals", "forms_audit", "sov_data"})
+# keys read as strings somewhere in the renderers (None -> "")
+_SAN_STR_KEYS = frozenset({
+    "address", "am_best_rating", "basis", "bpp_value", "brand_dba", "carrier", "city", "class_code",
+    "classification", "client_name", "code", "condition", "consequence", "corporate_entity",
+    "corporate_name", "coverage", "coverage_type", "dba", "deductible", "defense_basis",
+    "description", "effective_date", "expiration_date", "exposure", "exposure_basis", "form_number",
+    "garage_location", "gl_deductible", "hotel", "hotel_flag", "insured", "insured_location",
+    "label", "layer", "layer_description", "limit", "limitation", "location", "make", "mep",
+    "model", "name", "name_address", "named_insured", "occupancy", "payroll", "percentage",
+    "premise", "rate", "relationship", "retention", "state", "terms", "total_sales", "type",
+    "valuation", "vin", "year", "zip", "notes", "policy_number", "policy_term", "entity_type",
+    "mailing_address", "property_name", "edition", "title", "comment", "status", "reason",
+})
+# keys that are strings inside rows but a list at coverage level
+_SAN_LIST_AT_COVERAGE_ONLY = frozenset({"limits"})
+
+
+def _sanitize_rows(rows, promote_key):
+    """Normalise a list-of-rows value: drop nulls, promote bare strings to a row dict,
+    wrap a single object, and clean each row dict in place."""
+    if rows is None:
+        return []
+    if isinstance(rows, dict):
+        rows = [rows]
+    if isinstance(rows, str):
+        rows = [rows]
+    if not isinstance(rows, list):
+        return []
+    out = []
+    for r in rows:
+        if r is None:
+            continue
+        if isinstance(r, dict):
+            _sanitize_dict(r, coverage_root=False)
+            out.append(r)
+        elif isinstance(r, str):
+            s = r.strip()
+            if not s:
+                continue
+            out.append({promote_key: s} if promote_key else s)
+        else:
+            out.append(r)
+    return out
+
+
+def _sanitize_dict(d, coverage_root=False):
+    """Normalise one dict in place (a coverage, a row, client_info, ...)."""
+    for k in list(d.keys()):
+        v = d[k]
+        if k in _SAN_LIST_AT_COVERAGE_ONLY and not coverage_root:
+            if v is None:
+                d[k] = ""
+            elif isinstance(v, dict):
+                _sanitize_dict(v)
+            elif isinstance(v, list):
+                d[k] = _sanitize_rows(v, None)
+            continue
+        if k in _SAN_ROW_LISTS:
+            d[k] = _sanitize_rows(v, _SAN_ROW_LISTS[k])
+        elif k in _SAN_DICT_KEYS:
+            if v is None:
+                d[k] = {}
+            elif isinstance(v, dict):
+                _sanitize_dict(v)
+        elif v is None:
+            if k in _SAN_STR_KEYS:
+                d[k] = ""
+        elif isinstance(v, dict):
+            _sanitize_dict(v)
+        elif isinstance(v, list):
+            d[k] = [x for x in v if x is not None]
+            for x in d[k]:
+                if isinstance(x, dict):
+                    _sanitize_dict(x)
+    return d
+
+
+def _sanitize_for_render(data):
+    """Normalise extractor output in place so the renderers never meet a null or a
+    bare string where they expect "" / [] / {} / a row dict. Returns the same dict."""
+    if not isinstance(data, dict):
+        return data
+    ci = data.get("client_info")
+    if ci is None:
+        data["client_info"] = {}
+    elif isinstance(ci, str):
+        data["client_info"] = {"named_insured": ci.strip()}
+    covs = data.get("coverages")
+    if not isinstance(covs, dict):
+        data["coverages"] = {}
+    else:
+        for key in list(covs.keys()):
+            cov = covs[key]
+            if cov is None:
+                del covs[key]
+            elif not isinstance(cov, dict):
+                logger.warning(f"Dropping non-object coverage block '{key}' ({type(cov).__name__})")
+                del covs[key]
+            else:
+                _sanitize_dict(cov, coverage_root=True)
+    for k in list(data.keys()):
+        if k == "coverages":
+            continue
+        v = data[k]
+        if k in _SAN_ROW_LISTS:
+            data[k] = _sanitize_rows(v, _SAN_ROW_LISTS[k])
+        elif k in _SAN_DICT_KEYS:
+            if v is None:
+                data[k] = {}
+            elif isinstance(v, dict):
+                _sanitize_dict(v)
+        elif v is None and k in _SAN_STR_KEYS:
+            data[k] = ""
+    return data
+
+
 # ─── Main Generator ───────────────────────────────────────────
 
 def generate_proposal(data: dict, output_path: str) -> str:
     """
     Generate a complete branded DOCX proposal.
-    
+
     Args:
         data: Structured insurance data from extraction
         output_path: Path to save the DOCX file
-        
+
     Returns:
         Path to the generated DOCX file
     """
+    _sanitize_for_render(data)
     logger.info(f"Generating proposal for: {data.get('client_info', {}).get('named_insured', 'Unknown')}")
     
     doc = Document()
