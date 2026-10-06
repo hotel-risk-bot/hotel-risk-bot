@@ -1486,9 +1486,13 @@ def generate_payment_options(doc, data):
         # Filter out commission-related entries and clean commission text from terms
         import re
         filtered_opts = []
+        if isinstance(payment_opts, (str, dict)):
+            payment_opts = [payment_opts]
         for po in payment_opts:
-            terms = po.get("terms", "")
-            carrier = po.get("carrier", "")
+            if not isinstance(po, dict):
+                po = {"terms": str(po or "")}   # a bare sentence from the model
+            terms = str(po.get("terms", "") or "")
+            carrier = str(po.get("carrier", "") or "")
             # Skip entries that are purely about commission
             if carrier.lower().strip() in ("commission", "broker fee", "broker"):
                 continue
@@ -3088,6 +3092,8 @@ def generate_locations(doc, data):
     
     # Second: extracted locations not already in SOV (skip vacant land)
     for loc in locations:
+        if not isinstance(loc, dict):
+            continue
         desc_check = (loc.get("description", "") or loc.get("corporate_entity", "") or "").lower()
         if "vacant" in desc_check or ("land" in desc_check and "hotel" not in desc_check):
             # Track but skip
@@ -4504,20 +4510,23 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     
     # Rating Basis (WC)
     rating = cov.get("rating_basis", [])
-    if rating:
+    if isinstance(rating, (str, dict)):
+        rating = [rating]          # a single row or a one-line basis ("Sales") — never crash on it
+    if isinstance(rating, list) and rating:
         add_subsection_header(doc, "Rating Basis")
         headers = ["State", "Location", "Class Code", "Classification", "Payroll", "Rate"]
-        rows = [[
-            r.get("state", ""),
-            r.get("location", ""),
-            r.get("class_code", ""),
-            r.get("classification", ""),
-            r.get("payroll", ""),
-            r.get("rate", "")
-        ] for r in rating]
-        create_styled_table(doc, headers, rows,
-                          col_widths=[0.6, 1.5, 0.8, 2.0, 1.2, 0.9],
-                          header_size=9, body_size=9)
+        rows = []
+        for r in rating:
+            if isinstance(r, dict):
+                rows.append([str(r.get("state", "") or ""), str(r.get("location", "") or ""), str(r.get("class_code", "") or ""),
+                             str(r.get("classification", "") or r.get("description", "") or ""),
+                             str(r.get("payroll", "") or r.get("exposure", "") or ""), str(r.get("rate", "") or "")])
+            elif r not in (None, ""):
+                rows.append(["", "", "", str(r), "", ""])
+        if rows:
+            create_styled_table(doc, headers, rows,
+                              col_widths=[0.6, 1.5, 0.8, 2.0, 1.2, 0.9],
+                              header_size=9, body_size=9)
     
     # Vehicle Schedule (Auto)
     vehicles = cov.get("vehicle_schedule", [])
