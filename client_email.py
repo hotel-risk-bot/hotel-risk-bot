@@ -21,6 +21,7 @@ from proposal_generator import (
     fmt_currency_cents,
     _is_high_risk_exclusion,
     _is_exclusion_form,
+    _proper_case,
 )
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,10 @@ def _exclusion_topic(desc):
     UNDERLYING INSURANCE' -> 'Coverage Subject to Sublimits or Other Reduced
     Limits in Underlying Insurance'."""
     t = " ".join(str(desc or "").split())
+    # "Cannabis Exclusion With Hemp and Lessor Risk Exceptions" ->
+    # "Cannabis (with Hemp and Lessor Risk exceptions)"
+    t = re.sub(r"^(.*?)\s+exclusion\s+with\s+(.+?)\s+exceptions?\s*$",
+               lambda m: f"{m.group(1)} (with {m.group(2)} exceptions)", t, flags=re.I)
     for rx in _EXCL_STRIP_RES:
         t = rx.sub("", t)
     t = t.strip(" -:\u2013\u2014")
@@ -173,10 +178,11 @@ def _exclusion_topic(desc):
     return " ".join(out)
 
 
-def _key_exclusions(cov):
+def _key_exclusions(cov, coverage_key=None):
     """Prose-ready list of the coverage's flagged exclusions, in schedule order,
     de-duplicated. Only rows that are BOTH an exclusion/limitation AND on the
-    high-risk keyword list (same test as the yellow highlight in the DOCX)."""
+    high-risk keyword list (same line-aware test as the yellow highlight in the
+    DOCX: property sublimits are not exclusions)."""
     if not isinstance(cov, dict):
         return []
     seen, out = set(), []
@@ -194,7 +200,7 @@ def _key_exclusions(cov):
             continue
         if not _is_exclusion_form({"description": desc}):
             continue
-        if not _is_high_risk_exclusion(f"{fn} {desc}"):
+        if not _is_high_risk_exclusion(f"{fn} {desc}", coverage_key):
             continue
         topic = _exclusion_topic(desc)
         k = topic.lower()
@@ -381,11 +387,11 @@ def build_email_context(data, answers=None):
         entry = {
             "_rank": _line_rank(key),
             "coverage": _email_label(key, label),
-            "carrier": _short_carrier(_clean_carrier_name(cov.get("carrier", ""))) or "TBD",
+            "carrier": _proper_case(_short_carrier(_clean_carrier_name(cov.get("carrier", "")))) or "TBD",
             "key_limit": _key_limit(cov),
             "deductibles": _deductibles(cov),
-            "key_exclusions": _key_exclusions(cov),
-            "expiring_carrier": _short_carrier(expiring_carriers.get(key) or ""),
+            "key_exclusions": _key_exclusions(cov, key),
+            "expiring_carrier": _proper_case(_short_carrier(expiring_carriers.get(key) or "")),
             "proposed_premium": fmt_currency_cents(proposed) if proposed else "",
             "expiring_premium": fmt_currency_cents(exp) if exp else "",
             "dollar_change": "",
@@ -433,6 +439,9 @@ def build_email_context(data, answers=None):
         _hotel = re.sub(
             r"[,]?\s+\b(LLC|L\.L\.C\.|LLLP|LLP|LP|INC|INC\.|CORP|CORPORATION|CO|COMPANY|LTD)\b\.?$",
             "", (client.get("named_insured") or "").strip(), flags=re.I).strip()
+    # Never shout at a client: quotes carry names in capitals, the email does not
+    # (Stefan, Oct 6 2026).
+    _hotel = _proper_case(_hotel)
 
     # Excess "sublimits / reduced limits in underlying" exclusion + a sublimited
     # GL coverage (Limited A&B $300K...) = the excess does not sit over that
@@ -456,9 +465,9 @@ def build_email_context(data, answers=None):
         "highlights": (answers.get("highlights") or "").strip(),
         "signoff": (answers.get("signoff") or "").strip(),
         "not_quoted": not_quoted,
-        "hotel_name": _hotel or client.get("named_insured") or "the account",
-        "named_insured": client.get("named_insured") or client.get("dba") or "the insured",
-        "dba": client.get("dba") or "",
+        "hotel_name": _hotel or _proper_case(client.get("named_insured") or "") or "the account",
+        "named_insured": _proper_case(client.get("named_insured") or client.get("dba") or "") or "the insured",
+        "dba": _proper_case(client.get("dba") or ""),
         "effective_date": client.get("effective_date") or "",
         "location_count": _loc_count,
         "total_tiv": fmt_currency_cents(_tiv).replace(".00", "") if _tiv else "",
@@ -508,6 +517,7 @@ Rules:
 - Never invent numbers, carriers, limits, deductibles, or dates. Use only what you are given. Omit rather than guess.
 - Every key exclusion in the facts must appear in the email, using the exclusion names exactly as given. Never summarize them as "standard exclusions" or "certain exclusions".
 - No em dashes. No emoji. No markdown bold or headers. Plain text for Outlook.
+- Never write a name, carrier, coverage or any other word in all capitals. Hotel and carrier names are given in normal case; keep them that way.
 - Warm and direct. No "I hope this email finds you well." No corporate padding. Keep the whole email under about 200 words.
 
 Return exactly two parts:

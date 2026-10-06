@@ -525,21 +525,22 @@ def add_page_break(doc):
 
 
 def fmt_currency(amount):
-    """Format a number as currency, preserving cents if present."""
+    """Format a value (TIV, building, contents, limits) as whole dollars.
+    Values never show cents in a proposal (Stefan, Oct 6 2026); premiums use
+    fmt_currency_cents. A string that is not a plain amount ("$1,000,000 per
+    occurrence") is returned unchanged apart from a trailing ".00"."""
+    if isinstance(amount, bool):
+        return str(amount)
     if isinstance(amount, (int, float)):
-        if amount == int(amount):
-            return f"${int(amount):,}"
-        return f"${amount:,.2f}"
+        return f"${int(round(amount)):,}"
     if isinstance(amount, str):
-        if amount.startswith("$"):
-            return amount
+        s = amount.strip()
+        core = s[1:].strip() if s.startswith("$") else s
         try:
-            val = float(amount.replace(',', ''))
-            if val == int(val):
-                return f"${int(val):,}"
-            return f"${val:,.2f}"
+            val = float(core.replace(',', ''))
+            return f"${int(round(val)):,}"
         except (ValueError, AttributeError):
-            return amount
+            return _PC_CENTS_RE.sub(r"\1", s) if s.startswith("$") else amount
     return str(amount)
 
 
@@ -911,17 +912,38 @@ HIGH_RISK_EXCLUSION_KEYWORDS = [
     "exclusion - liquor",
     "communicable disease exclusion",
     "exclusion - communicable disease",
+    # Oct 6 2026 (Stefan, Inn of the Dove): CG 40 14 / CG 40 16 cannabis exclusions
+    # on hotel GL must be flagged and reach the client email
+    "cannabis",
+    "marijuana",
 ]
 HIGHLIGHT_YELLOW_HEX = "FFFF00"
 
+# Sublimit language is an umbrella/excess concern (the excess does not sit over a
+# sublimited underlying coverage). On a property policy sublimits are ordinary
+# coverage extensions and are not flagged (Stefan, Oct 6 2026, Bloom Ventures).
+_SUBLIMIT_KEYWORDS = ("sublimit", "sub-limit", "reduced limit")
+_PROPERTY_COVERAGE_KEYS = ("property", "property_alt_1", "property_alt_2", "flood", "earthquake",
+                           "equipment_breakdown", "boiler", "inland_marine", "builders_risk")
 
-def _is_high_risk_exclusion(text):
+
+def _skip_keywords_for(coverage_key):
+    key = str(coverage_key or "").lower()
+    if any(key.startswith(p) for p in _PROPERTY_COVERAGE_KEYS):
+        return _SUBLIMIT_KEYWORDS
+    return ()
+
+
+def _is_high_risk_exclusion(text, coverage_key=None):
     """True if the given text mentions a high-risk hotel exclusion that requires
-    visual flagging (trafficking, abuse/molestation, assault & battery)."""
+    visual flagging (trafficking, abuse/molestation, assault & battery, cannabis).
+    `coverage_key` drops the keywords that do not apply to that line (sublimits
+    on property)."""
     if not isinstance(text, str) or not text:
         return False
     t = text.lower()
-    return any(kw in t for kw in HIGH_RISK_EXCLUSION_KEYWORDS)
+    skip = _skip_keywords_for(coverage_key)
+    return any(kw in t for kw in HIGH_RISK_EXCLUSION_KEYWORDS if kw not in skip)
 
 
 # Roof-related forms (limitation endorsements, ACV/cosmetic schedules) must
@@ -935,15 +957,16 @@ def _is_roof_form(text):
     return any(k in t for k in _ROOF_FORM_TERMS)
 
 
-def _is_high_risk_exclusion(text):  # extended: roof forms always highlighted
-    return _is_roof_form(text) or _BASE_HIGH_RISK_CHECK(text)
+def _is_high_risk_exclusion(text, coverage_key=None):  # extended: roof forms always highlighted
+    return _is_roof_form(text) or _BASE_HIGH_RISK_CHECK(text, coverage_key)
 
 
-def _apply_high_risk_highlight(table, row_text_indices=(0, 1), start_row=1):
+def _apply_high_risk_highlight(table, row_text_indices=(0, 1), start_row=1, coverage_key=None):
     """Scan a table for high-risk exclusion language in the specified columns
     (default: form number + description) and apply yellow highlight + bold red
     text to any matching row. `start_row` skips the header. Safe to call even
-    when the table has no matching rows."""
+    when the table has no matching rows. `coverage_key` makes the check
+    line-aware (property sublimits are never flagged)."""
     _RED = RGBColor(0xCC, 0x00, 0x00)
     for r_idx in range(start_row, len(table.rows)):
         row = table.rows[r_idx]
@@ -952,7 +975,7 @@ def _apply_high_risk_highlight(table, row_text_indices=(0, 1), start_row=1):
             row.cells[c_idx].text for c_idx in row_text_indices
             if c_idx < len(row.cells)
         )
-        if not _is_high_risk_exclusion(row_text):
+        if not _is_high_risk_exclusion(row_text, coverage_key):
             continue
         # Apply yellow background + bold red text to every cell in the row
         for cell in row.cells:
@@ -1364,7 +1387,7 @@ def generate_premium_summary(doc, data):
         # Track total row's change sign for color formatting (same logic as data rows)
         _total_change_sign = 1 if total_dollar > 0 else (-1 if total_dollar < 0 else 0)
         rows.append([
-            "TOTAL",
+            "Total",
             "",
             fmt_currency_cents(total_expiring) if total_expiring else "—",
             fmt_currency_cents(total_proposed) if total_proposed else "—",
@@ -1379,7 +1402,7 @@ def generate_premium_summary(doc, data):
                           WD_ALIGN_PARAGRAPH.RIGHT]
     else:
         rows.append([
-            "TOTAL",
+            "Total",
             "",
             fmt_currency_cents(total_proposed) if total_proposed else "—",
         ])
@@ -3145,7 +3168,8 @@ def generate_locations(doc, data):
                 else:
                     name = "Pending"
             try:
-                _tiv_val = float(loc.get("tiv") or 0)
+                # the model sometimes returns TIV as "$10,177,974.00"
+                _tiv_val = float(_parse_currency(loc.get("tiv") or 0) or 0)
             except (TypeError, ValueError):
                 _tiv_val = 0
             master_locations.append({
@@ -3459,7 +3483,7 @@ def generate_locations(doc, data):
         
         # Add totals row
         rows.append([
-            "", "TOTAL", "", "", "",
+            "", "Total", "", "", "",
             fmt_currency(total_tiv) if total_tiv else "",
             "", ""
         ])
@@ -3577,7 +3601,7 @@ def _render_hotelbound_property_blocks(doc, cov, hb):
             rows.append([it.get("label", ""), fmt_currency_cents(amt) if amt else "$0.00"])
         if hb.get("terrorism_included"):
             rows.append(["Terrorism", "Included in premium"])
-        rows.append(["TOTAL POLICY COST", fmt_currency_cents(total) if total else "—"])
+        rows.append(["Total Policy Cost", fmt_currency_cents(total) if total else "—"])
         tbl = create_styled_table(doc, ["Item", "Amount"], rows, col_widths=[5.0, 2.5],
                                   header_size=10, body_size=10,
                                   header_alignments={0: L, 1: R}, col_alignments={1: R})
@@ -3644,7 +3668,7 @@ def _render_hotelbound_property_blocks(doc, cov, hb):
                 " · ".join(attrs),
                 fmt_currency(b), fmt_currency(cv), fmt_currency(bi), fmt_currency(tv),
             ])
-        rows.append(["", "TOTAL", "", fmt_currency(t_b), fmt_currency(t_c), fmt_currency(t_bi), fmt_currency(t_t)])
+        rows.append(["", "Total", "", fmt_currency(t_b), fmt_currency(t_c), fmt_currency(t_bi), fmt_currency(t_t)])
         tbl = create_styled_table(doc, headers, rows,
                                   col_widths=[0.4, 2.3, 1.5, 0.85, 0.8, 0.85, 0.8],
                                   header_size=8, body_size=8,
@@ -4029,7 +4053,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         # Add totals row
         if has_other:
             rows.append([
-                "", "TOTAL",
+                "", "Total",
                 fmt_currency(totals.get("building_value", 0)),
                 fmt_currency(totals.get("contents_value", 0)),
                 fmt_currency(total_other) if total_other else "",
@@ -4044,7 +4068,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                                              6: WD_ALIGN_PARAGRAPH.CENTER})
         else:
             rows.append([
-                "", "TOTAL",
+                "", "Total",
                 fmt_currency(totals.get("building_value", 0)),
                 fmt_currency(totals.get("contents_value", 0)),
                 fmt_currency(totals.get("bi_value", 0)),
@@ -4266,7 +4290,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                               + (l.get("pool_value") or 0)) for l in _sov_rows)
             _tot_tiv = sum((l.get("tiv") or 0) for l in _sov_rows)
             cbl.append({
-                "address": "TOTAL",
+                "address": "Total",
                 "building_value": fmt_currency(_tot_bv) if _tot_bv else "",
                 "bpp_value": fmt_currency(_tot_cv) if _tot_cv else "",
                 "business_income": fmt_currency(_tot_bi) if _tot_bi else "",
@@ -4567,8 +4591,11 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
             rows = [[ac.get("description", "") or ac.get("coverage", "") or ac.get("name", ""), ac.get("limit", "")] if isinstance(ac, dict) else [str(ac), ""] for ac in addl]
             _addl_table = create_styled_table(doc, headers, rows, col_widths=[4.5, 3.0],
                               header_alignments={0: L, 1: L})
-        # Highlight high-risk exclusions (trafficking, abuse/molestation, assault & battery)
-        _apply_high_risk_highlight(_addl_table)
+        # Highlight high-risk exclusions (trafficking, abuse/molestation, assault & battery).
+        # A property sublimits schedule is a list of coverage extensions, not
+        # exclusions, so it is never flagged (Stefan, Oct 6 2026).
+        if addl_title != "Sublimits of Liability / Extensions":
+            _apply_high_risk_highlight(_addl_table, coverage_key=coverage_key)
     elif coverage_key == "property":
         # No Additional Coverages / Sublimits extracted - render Review Required placeholder so broker verifies against quote
         add_subsection_header(doc, "Sublimits of Liability / Extensions")
@@ -4662,7 +4689,8 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                     if len(_a) >= 8 and len(_d) >= 8 and (_a in _d or _d in _a):
                         return True
                 return False
-            _kept_atts = [att for att in _attachments if not _dup_of_form(att)]
+            _kept_atts = [att for att in _attachments
+                          if not _dup_of_form(att.get("description", "") if isinstance(att, dict) else att)]
             if len(_kept_atts) != len(_attachments):
                 logger.info(f"Policy Attachments ({coverage_key}): dropped "
                             f"{len(_attachments) - len(_kept_atts)} of {len(_attachments)} "
@@ -4671,7 +4699,12 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         if _attachments:
             add_subsection_header(doc, "Policy Attachments")
             _a_headers = ["#", "Attachment"]
-            _a_rows = [[str(idx + 1), att] for idx, att in enumerate(_attachments) if att]
+            def _att_text(att):
+                if isinstance(att, dict):
+                    return str(att.get("description") or att.get("name") or att.get("title") or "").strip()
+                return str(att or "").strip()
+            _att_texts = [_att_text(att) for att in _attachments]
+            _a_rows = [[str(idx + 1), txt] for idx, txt in enumerate(t for t in _att_texts if t)]
             if _a_rows:
                 create_styled_table(doc, _a_headers, _a_rows,
                                     col_widths=[0.5, 7.0],
@@ -4700,7 +4733,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                            header_alignments={0: L, 1: L})
         # Flag high-risk exclusions (trafficking, abuse/molestation, assault & battery)
         # with yellow highlight + bold red text so they stand out for the broker/client
-        _apply_high_risk_highlight(_forms_table)
+        _apply_high_risk_highlight(_forms_table, coverage_key=coverage_key)
         # Call out the flagged rows in words so the client cannot miss them, and
         # surface any schedule rows the audit could not place.
         try:
@@ -4708,15 +4741,17 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
             for _f in forms:
                 _fd = _f.get("description", "") if isinstance(_f, dict) else str(_f)
                 _fn = _f.get("form_number", "") if isinstance(_f, dict) else ""
-                if _is_high_risk_exclusion(f"{_fn} {_fd}") and _is_exclusion_form(_f if isinstance(_f, dict) else {"description": _fd}):
+                if _is_high_risk_exclusion(f"{_fn} {_fd}", coverage_key) and _is_exclusion_form(_f if isinstance(_f, dict) else {"description": _fd}):
                     _flagged.append(" ".join(str(_fd).split()))
             if _flagged:
-                add_formatted_paragraph(doc,
-                    "Key exclusions and limitations (highlighted above): " + "; ".join(_flagged) + ". "
-                    "These forms remove or restrict coverage for exposures common to hotel operations. "
-                    "Where the excess policy excludes coverage that is sublimited in the underlying policy, "
-                    "the excess limit does not respond above that sublimit. Please review with your HUB service team before binding.",
-                    size=8.5, italic=True, color=CHARCOAL, space_after=6)
+                _is_excess = str(coverage_key or "").lower().startswith(("umbrella", "excess"))
+                _note = ("Key exclusions and limitations (highlighted above): " + "; ".join(_flagged) + ". "
+                         "These forms remove or restrict coverage for exposures common to hotel operations. ")
+                if _is_excess:
+                    _note += ("Where the excess policy excludes coverage that is sublimited in the underlying policy, "
+                              "the excess limit does not respond above that sublimit. ")
+                _note += "Please review with your HUB service team before binding."
+                add_formatted_paragraph(doc, _note, size=8.5, italic=True, color=CHARCOAL, space_after=6)
             _audit = cov.get("forms_audit") if isinstance(cov, dict) else None
             if isinstance(_audit, dict) and _audit.get("vetoed"):
                 add_formatted_paragraph(doc,
@@ -5056,7 +5091,7 @@ def generate_confirmation_to_bind(doc, data):
         "I understand that subjectivities, if any, must be satisfied within the timeframes specified or coverage may be subject to cancellation.",
         "I acknowledge that surplus lines placements, if any, are not covered by state guaranty funds.",
         "I have been offered Terrorism Risk Insurance Act (TRIA) coverage and have made my election as indicated in this proposal.",
-        "I understand that additional policies are available and recommended which include Equipment Breakdown (power surges, electrical arcing, mechanical failure), Employment Practices Liability (excluded by the liability carrier), Pollution (claims such as mold and legionella), Cyber, Flood, Earthquake, Deductible Buy Downs, Sexual Abuse & Molestation. If you would like to get these options quoted please request in writing to the producer or account executive."
+        "I understand that additional policies are available and recommended which include Equipment Breakdown (power surges, electrical arcing, mechanical failure), Employment Practices Liability (excluded by the liability carrier), Pollution (claims such as mold and legionella), Cyber, Flood, Earthquake, and Deductible Buy Downs. If you would like to get these options quoted please request in writing to the producer or account executive."
     ]
     
     for i, stmt in enumerate(statements, 1):
@@ -5639,6 +5674,178 @@ _SAN_STR_KEYS = frozenset({
 # keys that are strings inside rows but a list at coverage level
 _SAN_LIST_AT_COVERAGE_ONLY = frozenset({"limits"})
 
+# ── No all-caps text in a proposal (Stefan, Oct 6 2026) ──────────────────────
+# Carrier quotes shout (SOUTHLAKE SPECIALTY INSURANCE COMPANY, 2445 NORTH AIRPORT
+# PLAZA ROAD, THE COMPANY MAY WITHDRAW THIS QUOTATION ...) and the extractor copies
+# them verbatim. Every data string is re-cased once here before rendering: short
+# strings in title case, long ones in sentence case, acronyms and brand spellings
+# preserved. Keys that carry codes are never touched.
+_SAN_RAW_KEYS = frozenset({
+    "form_number", "am_best_rating", "class_code", "code", "vin", "zip", "policy_number",
+    "edition", "year", "rate", "state", "effective_date", "expiration_date", "policy_term",
+    "percentage", "status",
+})
+_PC_SMALL_WORDS = frozenset({
+    "a", "an", "the", "and", "or", "nor", "but", "of", "on", "in", "at", "to", "by", "for",
+    "from", "with", "as", "per", "vs", "via", "into", "onto", "upon", "over", "under",
+})
+# all-caps tokens that stay exactly as written (acronyms, abbreviations)
+_PC_ACRONYMS = frozenset({
+    "LLC", "LLP", "LLLP", "LP", "PLC", "PLLC", "DBA", "USA", "US", "UK", "TIV", "TRIA", "OFAC",
+    "EPLI", "EPL", "GL", "CGL", "BOP", "CPP", "ACV", "RCV", "BI", "BIPD", "PD", "EB", "ISO",
+    "NFIP", "FEMA", "EIFS", "HVAC", "UM", "UIM", "PIP", "CSL", "AOP", "WC", "SIR", "MEP",
+    "TPA", "ATM", "IT", "VIN", "ID", "TBD", "HNOA", "HNO", "XS", "RMS", "AIR", "ESP", "SRL",
+    "AIG", "CNA", "QBE", "AXA", "XL", "RSUI", "USLI", "CRC", "RT", "HDI", "MSIG", "AWAC",
+    "IPFS", "ACE", "RLI", "AXIS", "ICW", "USAA", "SCOR", "HIIG", "HSIC", "IAT", "ISMIE",
+    "AFCO", "BRIT", "CFC", "CUE", "DUAL", "GAIC", "IFG", "JLT", "KBIC", "LIU", "MSI", "NAS",
+    "NIP", "NSM", "PMA", "RPS", "SES", "TDC", "UCPC", "WKFC", "XLS", "ARC", "NW", "NE", "SW",
+    "SE", "N", "S", "E", "W", "II", "III", "IV", "VI", "VII", "VIII", "IX", "XI", "XII", "XIII",
+    "XIV", "XV", "A&B", "A&M", "D&O", "E&O", "E&S", "P&C", "B&M", "M&E", "O&L", "T&C", "H&N",
+    "N/A", "PA", "DE", "FL", "GA", "AL", "AZ", "AR", "CA", "CO", "CT", "HI", "IL", "IN", "IA",
+    "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NV", "NH", "NJ", "NM",
+    "NY", "NC", "ND", "OH", "OK", "OR", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA",
+    "WV", "WI", "WY", "DC", "PR", "AK", "ID", "NE",
+})
+# brand spellings the title-case rule would get wrong
+_PC_SPECIAL = {
+    "AMWINS": "AmWINS", "AMTRUST": "AmTrust", "AMGUARD": "AmGUARD", "PARTNERRE": "PartnerRe",
+    "SWISSRE": "SwissRe", "GUIDEONE": "GuideOne", "STARSTONE": "StarStone", "MCGOWAN": "McGowan",
+    "MCLARENS": "McLarens", "LLOYD'S": "Lloyd's", "LLOYDS": "Lloyd's", "INC": "Inc", "INC.": "Inc.",
+    "CORP": "Corp", "CORP.": "Corp.", "CO.": "Co.", "LTD": "Ltd", "LTD.": "Ltd.", "D/B/A": "d/b/a",
+    "LAQUINTA": "LaQuinta", "WYNDHAM": "Wyndham", "IHG": "IHG", "MGM": "MGM", "JW": "JW",
+    "AC": "AC", "DOUBLETREE": "DoubleTree", "TOWNEPLACE": "TownePlace", "SPRINGHILL": "SpringHill",
+    "HOMEWOOD": "Homewood", "HOME2": "Home2", "TRU": "Tru", "MOXY": "Moxy", "AVID": "avid",
+    "EVEN": "EVEN", "VOCO": "voco", "QUINTA": "Quinta", "MCDONALD'S": "McDonald's",
+}
+_PC_STATE_CODES = frozenset({
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS",
+    "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY",
+    "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
+    "WI", "WY", "DC", "PR",
+})
+_PC_TWO_LETTER_WORDS = frozenset({
+    "is", "if", "be", "do", "so", "up", "we", "it", "no", "go", "he", "me", "my", "am", "us",
+})
+_PC_NAME_PARTICLES = frozenset({"LA", "DE", "DU", "LE", "EL", "ST", "MT", "FT", "PT"})
+_PC_ZIP_RE = re.compile(r"^\d{5}(?:-\d{4})?,?$")
+_PC_CENTS_RE = re.compile(r"(\$\s?\d{1,3}(?:,\d{3})+|\$\s?\d+)\.00(?!\d)")
+_PC_CAPS_RUN_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Z][A-Z&'./-]*[A-Z](?:\s+[A-Z][A-Z&'./-]*[A-Z])+|[A-Z][A-Z&'./-]{2,}[A-Z])(?![A-Za-z0-9])"
+)
+
+
+def _pc_cap(part):
+    """Capitalise one word part: Mc-names and O'Names included."""
+    if not part:
+        return part
+    if part.upper().startswith("MC") and len(part) > 4:
+        return "Mc" + part[2:3].upper() + part[3:].lower()
+    if len(part) > 3 and part[1] == "'":
+        return part[0].upper() + "'" + part[2:3].upper() + part[3:].lower()
+    return part[:1].upper() + part[1:].lower()
+
+
+def _pc_word(word, first, prev, nxt, sentence):
+    """Re-case one all-caps token. `first` = first word of a sentence,
+    `prev`/`nxt` = neighbouring raw tokens (for state-code context),
+    `sentence` = sentence case (only the first word capitalised)."""
+    lead = word[:len(word) - len(word.lstrip("([{\"'"))]
+    body = word[len(lead):]
+    trail_n = len(body) - len(body.rstrip(")]}:;,.\"'"))
+    trail = body[len(body) - trail_n:] if trail_n else ""
+    body = body[:len(body) - trail_n] if trail_n else body
+    if not body:
+        return word
+    if "(" in body[1:]:                       # A-(VIII), WIND(PD) -> re-case each part
+        head, _, rest = body.partition("(")
+        return lead + _pc_word(head, first, prev, nxt, sentence) + "(" + _pc_word(rest, False, "", nxt, sentence) + trail
+    letters = [c for c in body if c.isalpha()]
+    if not letters or any(c.isdigit() for c in body):
+        return word
+    up = body.upper()
+    low = body.lower()
+    if up in _PC_SPECIAL:
+        return lead + _PC_SPECIAL[up] + trail
+    if len(letters) <= 2:
+        state_ctx = (prev or "").endswith(",") or _PC_ZIP_RE.match(nxt or "") is not None
+        if state_ctx and up in _PC_STATE_CODES:
+            return word
+        if low in _PC_SMALL_WORDS:
+            return lead + (low.capitalize() if first else low) + trail
+        if low in _PC_TWO_LETTER_WORDS and (sentence or up not in _PC_ACRONYMS):
+            return lead + (low.capitalize() if (first or not sentence) else low) + trail
+        if up in _PC_NAME_PARTICLES:
+            return lead + low.capitalize() + trail
+        return word
+    if low in _PC_SMALL_WORDS:
+        return lead + (low.capitalize() if first else low) + trail
+    if up in _PC_ACRONYMS:
+        return word
+    if "&" in body or ("/" in body and len(body) <= 5):
+        return word
+    if sentence and not first:
+        return lead + low + trail
+    return lead + "-".join(_pc_cap(p) for p in body.split("-")) + trail
+
+
+def _proper_case(text):
+    """Re-case shouting text. Whole-string caps -> title case (≤ 8 words) or
+    sentence case (longer); runs of two or more caps words inside mixed-case text
+    -> title case. Mixed-case text is otherwise returned unchanged."""
+    if not isinstance(text, str) or len(text) < 3:
+        return text
+    letters = [c for c in text if c.isalpha()]
+    if len(letters) < 3:
+        return text
+    if not any(c.islower() for c in letters):
+        tokens = text.split(" ")
+        words = [t for t in tokens if any(ch.isalpha() for ch in t)]
+        sentence = len(words) > 8
+        out, seen_first, seen_alnum = [], False, False
+        for i, tok in enumerate(tokens):
+            if not any(ch.isalpha() for ch in tok):
+                out.append(tok)
+                seen_alnum = seen_alnum or any(ch.isalnum() for ch in tok)
+                continue
+            prev = tokens[i - 1] if i else ""
+            nxt = tokens[i + 1] if i + 1 < len(tokens) else ""
+            if sentence:
+                # sentence case: the first word, and the word after . ! ?
+                first = (not seen_first) or bool(prev.rstrip() and prev.rstrip()[-1] in ".!?")
+            else:
+                # title case: the first word unless a number/amount precedes it
+                # ("$10,000 per Occurrence")
+                first = not seen_alnum
+            out.append(_pc_word(tok, first, prev, nxt, sentence))
+            seen_first = True
+            seen_alnum = True
+        return " ".join(out)
+
+    def _run(m):
+        run = m.group(0)
+        toks = run.split()
+        at_start = m.start() == 0
+        if len(toks) == 1:
+            t = toks[0].strip("()[]:;,.")
+            if len([c for c in t if c.isalpha()]) < 4 or t in _PC_ACRONYMS:
+                return run
+            return _pc_word(toks[0], at_start, "", "", False)
+        if any(len([c for c in t if c.isalpha()]) < 3 for t in toks):
+            return run                      # CG DS / SSIC OFAC style codes
+        if all(t.strip("()[]:;,.") in _PC_ACRONYMS for t in toks):
+            return run
+        return " ".join(_pc_word(t, at_start and i == 0, "", "", False) for i, t in enumerate(toks))
+    return _PC_CAPS_RUN_RE.sub(_run, text)
+
+
+def _tidy_text(value, key=""):
+    """Rendering-ready text: drop ".00" cents from dollar amounts and re-case
+    shouting strings. Code-like keys are returned untouched."""
+    if not isinstance(value, str) or key in _SAN_RAW_KEYS:
+        return value
+    v = _PC_CENTS_RE.sub(r"\1", value)
+    return _proper_case(v)
+
 
 def _sanitize_rows(rows, promote_key):
     """Normalise a list-of-rows value: drop nulls, promote bare strings to a row dict,
@@ -5659,7 +5866,7 @@ def _sanitize_rows(rows, promote_key):
             _sanitize_dict(r, coverage_root=False)
             out.append(r)
         elif isinstance(r, str):
-            s = r.strip()
+            s = _tidy_text(r.strip(), promote_key or "")
             if not s:
                 continue
             out.append({promote_key: s} if promote_key else s)
@@ -5675,6 +5882,8 @@ def _sanitize_dict(d, coverage_root=False):
         if k in _SAN_LIST_AT_COVERAGE_ONLY and not coverage_root:
             if v is None:
                 d[k] = ""
+            elif isinstance(v, str):
+                d[k] = _tidy_text(v, k)
             elif isinstance(v, dict):
                 _sanitize_dict(v)
             elif isinstance(v, list):
@@ -5690,10 +5899,12 @@ def _sanitize_dict(d, coverage_root=False):
         elif v is None:
             if k in _SAN_STR_KEYS:
                 d[k] = ""
+        elif isinstance(v, str):
+            d[k] = _tidy_text(v, k)
         elif isinstance(v, dict):
             _sanitize_dict(v)
         elif isinstance(v, list):
-            d[k] = [x for x in v if x is not None]
+            d[k] = [(_tidy_text(x, k) if isinstance(x, str) else x) for x in v if x is not None]
             for x in d[k]:
                 if isinstance(x, dict):
                     _sanitize_dict(x)
@@ -5736,6 +5947,8 @@ def _sanitize_for_render(data):
                 _sanitize_dict(v)
         elif v is None and k in _SAN_STR_KEYS:
             data[k] = ""
+        elif isinstance(v, str):
+            data[k] = _tidy_text(v, k)
     return data
 
 
