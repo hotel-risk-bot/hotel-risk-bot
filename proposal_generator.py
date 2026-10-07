@@ -1624,23 +1624,9 @@ def generate_subjectivities(doc, data):
         add_formatted_paragraph(doc, "No subjectivities noted. Please confirm with carrier.", size=11)
 
 
-def _proper_case(name):
-    """Convert a name to proper title case, handling special cases.
-    ALL CAPS and all lowercase get converted; mixed case is preserved."""
-    if not name or not name.strip():
-        return name
-    s = name.strip()
-    # If ALL CAPS or all lowercase, convert to title case
-    if s.isupper() or s.islower():
-        s = s.title()
-    # Fix common abbreviations that should stay uppercase
-    for abbr in ["LLC", "LP", "LLP", "INC", "DBA", "II", "III", "IV",
-                 "NW", "NE", "SW", "SE", "US", "CT", "NJ", "PA", "NY",
-                 "FL", "TX", "CA", "VA", "MD", "GA", "NC", "SC", "OH"]:
-        # Use word boundary replacement to avoid partial matches
-        import re
-        s = re.sub(r'\b' + abbr.title() + r'\b', abbr, s)
-    return s
+# _proper_case(text) — the name/text re-caser used by the named insureds, information
+# summary and schedule of locations renderers — is defined with the other text
+# normalisers just above _sanitize_for_render (search "def _proper_case").
 
 
 def generate_named_insureds(doc, data):
@@ -5797,7 +5783,12 @@ def _proper_case(text):
     letters = [c for c in text if c.isalpha()]
     if len(letters) < 3:
         return text
-    if not any(c.islower() for c in letters):
+    all_upper = not any(c.islower() for c in letters)
+    all_lower = not any(c.isupper() for c in letters)
+    if all_upper or all_lower:
+        # shouting or whispering: re-case the whole string
+        if all_lower:
+            text = text.upper()
         tokens = text.split(" ")
         words = [t for t in tokens if any(ch.isalpha() for ch in t)]
         sentence = len(words) > 8
