@@ -1222,10 +1222,41 @@ function addCoverage() {
 }
 
 function removeCoverage(key) {
-    if (!confirm('Remove ' + (COV_DISPLAY[key] || key) + '?')) return;
-    delete extractedData.coverages[key];
+    const covs = extractedData.coverages || {};
+    const cov = covs[key] || {};
+    const name = COV_DISPLAY[key] || key;
+    // A line carved out of another quote (premium_reconcile.py, e.g. Berkley's EPL coverage
+    // part inside the GL premium) hands its premium back to that line when removed, so the
+    // program total still matches the printed quote.
+    const host = cov.carved_from && covs[cov.carved_from] ? covs[cov.carved_from] : null;
+    let msg = 'Remove ' + name + '?';
+    if (host) {
+        const hostName = COV_DISPLAY[cov.carved_from] || cov.carved_from;
+        const amt = parseFloat(cov.total_premium) || parseFloat(cov.premium) || 0;
+        msg += '\n\n' + name + ' is part of the ' + hostName + ' quote. Its $' + formatAmt(amt) +
+               ' goes back into ' + hostName + ' so the total still matches the quote.';
+    }
+    if (!confirm(msg)) return;
+    if (host) {
+        const addP = parseFloat(cov.premium) || 0;
+        const addT = parseFloat(cov.total_premium) || addP;
+        host.premium = Math.round(((parseFloat(host.premium) || 0) + addP) * 100) / 100;
+        host.total_premium = Math.round(((parseFloat(host.total_premium) || 0) + addT) * 100) / 100;
+        host.taxes_fees = Math.round((host.total_premium - host.premium) * 100) / 100;
+        if (host.premium_check && Array.isArray(host.premium_check.carved)) {
+            host.premium_check.carved = host.premium_check.carved.filter(r => r.key !== key);
+        }
+    }
+    delete covs[key];
     renderCoverages();
     renderExpiringPremiums();
+}
+
+function carvedHostName(cov) {
+    if (!cov || !cov.carved_from) return '';
+    const covs = extractedData.coverages || {};
+    if (!covs[cov.carved_from]) return '';
+    return COV_DISPLAY[cov.carved_from] || cov.carved_from;
 }
 
 function renderCoverages() {
@@ -1244,6 +1275,7 @@ function renderCoverages() {
                 <h4>
                     ${displayName}
                     <span class="carrier-badge">${escHtml(cov.carrier || 'TBD')}</span>
+                    ${carvedHostName(cov) ? `<span title="${escHtml(cov.carved_note || '')}" style="margin-left:0.4rem; font-size:0.7rem; font-weight:500; background:#eef0e2; color:#385263; border:1px solid #d9dccb; border-radius:10px; padding:0.1rem 0.5rem;">inside ${escHtml(carvedHostName(cov))} quote</span>` : ''}
                     <button onclick="event.stopPropagation(); removeCoverage('${key}')" 
                         style="margin-left:0.5rem; background:var(--danger); color:white; border:none; border-radius:4px; padding:0.15rem 0.5rem; font-size:0.7rem; cursor:pointer;" 
                         title="Remove this coverage">&times;</button>
@@ -1253,7 +1285,7 @@ function renderCoverages() {
                     </label>
                 </h4>
                 <span style="font-size:0.8rem; color:var(--gray-500);">
-                    Premium: $${formatNum(cov.premium || 0)} | 
+                    Premium: $${formatAmt(cov.premium || 0)} | 
                     Forms: ${(cov.forms_endorsements || []).length} |
                     Limits: ${(cov.coverage_limits || []).length}
                     \u25be
@@ -1566,9 +1598,9 @@ function renderExpiringPremiums() {
         
 
         html += `<tr>`;
-        html += `<td><strong>${displayName}</strong></td>`;
+        html += `<td><strong>${displayName}</strong>${carvedHostName(cov) ? `<div style="font-size:0.72rem; font-weight:400; color:var(--gray-500);">inside ${escHtml(carvedHostName(cov))} quote total</div>` : ''}</td>`;
         html += `<td style="font-size:0.85rem; color:var(--gray-700);">${escHtml(cov.carrier || '')}</td>`;
-        html += `<td><input type="text" value="${formatNum(proposed)}"
+        html += `<td><input type="text" value="${formatAmt(proposed)}"
                     style="width:100%; padding:0.4rem; border:1px solid var(--gray-300); border-radius:4px; text-align:right; font-size:0.85rem;"
                     onchange="updateProposedPremium('${key}', this.value)"
                     onkeyup="previewProposedChange('${key}', this)"></td>`;
@@ -1596,7 +1628,7 @@ function renderExpiringPremiums() {
     
     html += `<tr style="background:var(--gray-100); font-weight:700; border-top:2px solid var(--gray-300);">`;
     html += `<td>TOTAL</td><td></td>`;
-    html += `<td style="text-align:right;">$${formatNum(totalProposed)}</td>`;
+    html += `<td style="text-align:right;">$${formatAmt(totalProposed)}</td>`;
     html += `<td style="text-align:right;">$${totalExpiring > 0 ? formatNum(totalExpiring) : '\u2014'}</td>`;
     html += `<td style="text-align:right; color:${totalColor};" id="ep-dollar-total">${totalExpiring > 0 ? totalSign + '$' + formatNum(Math.abs(totalDollarChange)) : '\u2014'}</td>`;
     html += `<td style="text-align:right; color:${totalColor};" id="ep-pct-total">${totalExpiring > 0 ? totalSign + totalPctChange.toFixed(1) + '%' : '\u2014'}</td>`;
@@ -1991,6 +2023,14 @@ function escHtml(str) {
 function formatNum(n) {
     if (typeof n === 'string') n = parseFloat(n.replace(/[,$]/g, '')) || 0;
     return n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+
+// Premium amounts keep their cents when the quote has them ($120,099.32), whole dollars otherwise.
+function formatAmt(n) {
+    if (typeof n === 'string') n = parseFloat(n.replace(/[,$]/g, '')) || 0;
+    n = Math.round((Number(n) || 0) * 100) / 100;
+    const cents = Math.abs(n - Math.trunc(n)) > 0.0001;
+    return n.toLocaleString('en-US', { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: 2 });
 }
 </script>
 
