@@ -2681,6 +2681,30 @@ def generate_locations(doc, data):
                            state.strip().upper())
                 property_addr_keys.add(addr_key)
 
+    # Property-side keys (Oct 12 2026): the HUB Hospitality SOV lists liability-only hotels
+    # with $0 TIV next to the property hotels (Jasmin: Courtyard Orlando on the Starr property
+    # quote, the two Fairfield Inns liability/umbrella only). When the SOV mixes TIV and $0
+    # rows, only the rows with TIV get the property checkmark. property_addr_keys stays the
+    # full location universe for the liability rules below.
+    property_cov_keys = set(property_addr_keys)
+    if sov_data and sov_data.get("locations"):
+        _tiv_keys, _zero_keys = set(), set()
+        for _sl in sov_data["locations"]:
+            if not isinstance(_sl, dict):
+                continue
+            _sk = (_normalize_addr(_sl.get("address", "")) + "|" +
+                   _normalize_city(_sl.get("city", "")) + "|" +
+                   _normalize_state(_sl.get("state", "")))
+            try:
+                _st = float(_parse_currency(_sl.get("tiv") or 0) or 0)
+            except (TypeError, ValueError):
+                _st = 0
+            (_tiv_keys if _st > 0 else _zero_keys).add(_sk)
+        if _tiv_keys and _zero_keys:
+            property_cov_keys = _tiv_keys
+            logger.info(f"Schedule of Locations - SOV mixes TIV and $0 rows: {len(_tiv_keys)} "
+                        f"property location(s), {len(_zero_keys - _tiv_keys)} liability-only")
+
     # FALLBACK: If property coverage exists but we still have NO property addresses
     # (no SOV uploaded, no schedule_of_values, no parseable address fields),
     # then all locations should get the property checkmark. A property quote
@@ -3012,7 +3036,7 @@ def generate_locations(doc, data):
         # still needed as the location universe for the liability blanket rules).
         if not _has_property_cov:
             return False
-        if addr_key in property_addr_keys:
+        if addr_key in property_cov_keys:
             return True
         # Also try matching just the street portion (ignoring city differences)
         parts = addr_key.split("|")
@@ -3020,7 +3044,7 @@ def generate_locations(doc, data):
             return False
         addr_norm = parts[0]
         state_norm = parts[2]
-        for pk in property_addr_keys:
+        for pk in property_cov_keys:
             pk_parts = pk.split("|")
             if len(pk_parts) != 3:
                 continue

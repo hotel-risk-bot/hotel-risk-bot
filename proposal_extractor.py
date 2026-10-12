@@ -1407,7 +1407,8 @@ CRITICAL RULES:
 4. Extract additional coverages ONLY if they literally appear in the quote. If a peril or coverage is not mentioned, OMIT it from additional_coverages - do NOT invent a row. Only use "Excluded" or "NOT COVERED" when the document literally contains those exact words, a $0 limit, or an explicit exclusion.
 5. For Property Flood and Earthquake: include ONLY if the quote explicitly lists them with a limit, "Excluded", "Not Covered", or a $0 value. If the quote is silent on them, OMIT (do not assume excluded and do not emit a row).
 6. Include ALL taxes, fees, surcharges in premium calculations
-7. Exclude TRIA premiums from totals
+7. TRIA / terrorism: put the terrorism charge in tria_premium. Do NOT subtract it from premium or total_premium when the quote's printed premium or total already includes it (Berkley lists "Terrorism Coverage $125" inside its Total Advance Premium, so premium = the printed Total Premium and total_premium = the printed "Total including Premium, Surcharges, Taxes and Fees"). Leave it out only when the quote shows it as an optional charge that is NOT part of its printed total.
+7a. A line printed INSIDE another quote's premium (an EPL / Employment-Related Practices coverage part, liquor, hired and non-owned auto or workplace violence inside a GL quote; equipment breakdown inside a property quote) may be extracted as its own coverage for its limits and terms, but then subtract its premium from the host coverage's premium and total_premium, so the lines from that one quote add up to the quote's printed total. Never count the same premium in two coverages.
 8. Extract ALL deductibles
 8a. Do NOT include deductibles for perils that are "NOT COVERED" in the sublimits section (e.g., if Named Windstorm sublimit is "NOT COVERED", do NOT extract a Named Windstorm/Named Storm deductible)
 9. Extract ALL limits
@@ -1892,10 +1893,12 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
     """
     # Step 1: Extract text from all documents using smart extraction
     all_text = []
+    _per_file_texts = []  # for the printed-premium reconciliation (premium_reconcile.py)
     for fp in file_paths:
         fname = Path(fp).name
         text = extract_document_smart(fp)
         if text:
+            _per_file_texts.append({"filename": fname, "text": text})
             all_text.append(f"\n{'='*60}\nFILE: {fname}\n{'='*60}\n{text}")
             logger.info(f"Smart extraction from {fname}: {len(text)} chars")
         else:
@@ -2165,6 +2168,13 @@ async def extract_and_structure_data(file_paths: list[str]) -> dict:
                     logger.warning(f"  PREMIUM OVERRIDE for {key}: GPT total_premium ${old_total:,.2f} "
                                   f"-> raw text '{best_match[1]}' ${best_match[0]:,.2f} "
                                   f"(diff: ${abs(best_match[0] - old_total):,.2f})")
+
+        # Printed-figure reconciliation per quote file (Oct 12 2026) - see premium_reconcile.py
+        try:
+            from premium_reconcile import run_premium_pass
+            run_premium_pass(data, _per_file_texts)
+        except Exception as _pr_err:
+            logger.warning(f"Premium reconciliation failed (non-fatal): {_pr_err}")
 
         return data
 
@@ -3131,6 +3141,22 @@ TEXT:
                     logger.warning(f"Forms schedule audit raised {len(_aw)} warning(s)")
             except Exception as _fa_err:
                 logger.warning(f"Forms schedule audit failed (non-fatal): {_fa_err}")
+
+            # PREMIUM RECONCILIATION (Oct 12 2026): each coverage's premium / taxes / total
+            # must agree with the figures printed on its own quote, and a line printed inside
+            # another quote (Berkley's EPL coverage part inside the GL premium) is carved out
+            # of the host so the lines still add up to the printed total. Jasmin Hospitality:
+            # GL came back $119,974.32 instead of $120,099.32 and EPLI $2,255 was counted
+            # twice. Runs LAST so nothing re-touches the premiums. See premium_reconcile.py.
+            try:
+                from premium_reconcile import run_premium_pass
+                _pr_items = [{"filename": it.get("filename", ""), "text": it.get("text", "")}
+                             for it in all_items]
+                _pn = run_premium_pass(data, _pr_items)
+                if _pn:
+                    logger.info(f"Premium reconciliation adjusted {len(_pn)} coverage(s)")
+            except Exception as _pr_err:
+                logger.warning(f"Premium reconciliation failed (non-fatal): {_pr_err}")
 
             return data
 

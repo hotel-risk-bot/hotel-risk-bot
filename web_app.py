@@ -424,6 +424,72 @@ def _is_duplicate_named_insured(new_name, existing_names_list):
     return False
 
 
+def _is_hospitality_sov(sv):
+    """HUB Hospitality SOV (pipeline export): "<Client> Hospitality SOV.xlsx" with Client Name /
+    Corporate Name (LLC) / DBA / sales columns. Carrier and wholesaler property SOVs (Amwins,
+    AmRisc, Starr) carry building values but no Client Name column."""
+    fn = str(sv.get("_source_filename") or "").lower()
+    locs = [l for l in (sv.get("locations", []) or []) if isinstance(l, dict)]
+    hits = sum(1 for l in locs if str(l.get("client_name") or "").strip())
+    if locs and hits >= max(1, (len(locs) + 1) // 2):
+        return True
+    wholesaler = any(w in fn for w in ("amwins", "amrisc", "starr", "crc", "rt specialty", "rtspecialty",
+                                       "burns", "ryan", "hotelbound", "carrier"))
+    return ("hospitality sov" in fn or "hospitality_sov" in fn) and not wholesaler
+
+
+def _select_sov_roles(all_sov_results):
+    """Pick (location_master, property_sov) from every SOV parsed for this session (Oct 12 2026).
+
+    Before: an SOV with TIV over $10K was "the property SOV" and one without TIV "the pipeline
+    SOV". The HUB Hospitality SOV carries TIV for the property-covered hotels and $0 for the
+    liability-only ones, so uploaded next to an Amwins property SOV both looked like property
+    SOVs; the tie went to the first upload and the Hospitality SOV - three hotels with corporate
+    names and DBAs - was dropped (Jasmin Hospitality: Courtyard Orlando plus the Fairfield Inns
+    in West Palm Beach and Vero Beach).
+
+    Stefan's rule (Oct 12 2026): the property quote uses the property SOV (Amwins, strictly
+    property); everything else for liability - locations, corporate names, DBAs, named
+    insureds - comes from the Hospitality SOV.
+      * location master = the Hospitality-format SOV (most locations if several); without one,
+        the SOV listing the most locations (ties: more corporate names, then not the TIV SOV);
+      * property SOV = the highest-TIV SOV other than the master, else the master itself.
+    The two are merged by address in _merge_sov_data (TIVs and building values from the
+    property SOV); the generator's property Schedule of Values reads the property SOV."""
+    if not all_sov_results:
+        return None, None
+
+    def _tiv(sv):
+        return (sv.get("totals", {}) or {}).get("tiv", 0) or 0
+
+    def _nlocs(sv):
+        return len(sv.get("locations", []) or [])
+
+    def _corp(sv):
+        return sum(1 for l in (sv.get("locations", []) or [])
+                   if isinstance(l, dict) and str(l.get("corporate_name") or "").strip())
+
+    hosp = [sv for sv in all_sov_results if _is_hospitality_sov(sv)]
+    if hosp:
+        master = max(hosp, key=lambda sv: (_nlocs(sv), _corp(sv)))
+    else:
+        top_tiv = None
+        for sv in all_sov_results:
+            if _tiv(sv) > 10000 and (top_tiv is None or _tiv(sv) > _tiv(top_tiv)):
+                top_tiv = sv
+        master = max(all_sov_results,
+                     key=lambda sv: (_nlocs(sv), _corp(sv), 0 if sv is top_tiv else 1))
+    property_sov = None
+    for sv in all_sov_results:
+        if sv is master or _tiv(sv) <= 10000:
+            continue
+        if property_sov is None or _tiv(sv) > _tiv(property_sov):
+            property_sov = sv
+    if property_sov is None and _tiv(master) > 10000:
+        property_sov = master
+    return master, property_sov
+
+
 def _merge_sov_data(pipeline_sov, property_sov):
     """Merge pipeline SOV (complete location list, corporate names) with property SOV (TIV values).
 
@@ -472,6 +538,7 @@ def _merge_sov_data(pipeline_sov, property_sov):
     result = dict(pipeline_sov)
     result["locations"] = []
     result["_property_sov"] = property_sov
+    _matched_prop_keys = set()
 
     for p_loc in pipeline_sov.get("locations", []):
         merged_loc = dict(p_loc)
@@ -484,7 +551,7 @@ def _merge_sov_data(pipeline_sov, property_sov):
 
         best_match = None
         # Try exact normalized address match first
-        if p_addr_norm in prop_addr_lookup:
+        if p_addr_norm and p_addr_norm in prop_addr_lookup:
             best_match = (p_addr_norm, prop_addr_lookup[p_addr_norm])
         else:
             # Fuzzy match: same house number + at least one common street word
@@ -504,6 +571,7 @@ def _merge_sov_data(pipeline_sov, property_sov):
                         break
 
         if best_match:
+            _matched_prop_keys.add(best_match[0])
             _, prop_loc = best_match
             for vf in ("building_value", "contents_value", "bi_value", "other_value",
                         "pool_value", "sign_value", "tiv", "num_rooms", "square_footage",
@@ -528,6 +596,21 @@ def _merge_sov_data(pipeline_sov, property_sov):
 
         result["locations"].append(merged_loc)
 
+    # Union (Oct 12 2026): a property-SOV location that matched no location on the master
+    # SOV is still a covered hotel - keep it instead of silently dropping it.
+    result["_tiv_only_added"] = []
+    for prop_addr_norm, prop_loc in prop_addr_lookup.items():
+        if prop_addr_norm in _matched_prop_keys or (prop_loc.get("tiv", 0) or 0) <= 0:
+            continue
+        _extra = dict(prop_loc)
+        _extra["_from_tiv_sov"] = True
+        result["locations"].append(_extra)
+        _lbl = ", ".join(x for x in (str(prop_loc.get("address", "") or "").strip(),
+                                     str(prop_loc.get("city", "") or "").strip()) if x)
+        result["_tiv_only_added"].append(_lbl or "unnamed location")
+        logger.info(f"  Property SOV location not on the location SOV, added: {_lbl} "
+                    f"(TIV={prop_loc.get('tiv', 0):,})")
+
     # Filter out erroneous TIV values (e.g., $1 placeholders) — no hotel has TIV < $1,000
     MIN_TIV_THRESHOLD = 1000
     for loc in result["locations"]:
@@ -546,6 +629,105 @@ def _merge_sov_data(pipeline_sov, property_sov):
     logger.info(f"_merge_sov_data result: {len(result['locations'])} locations, TIV=${total_tiv:,.0f}")
     return result
 
+
+
+_STREET_SUFFIX = {"road": "rd", "street": "st", "avenue": "ave", "drive": "dr", "boulevard": "blvd",
+                  "highway": "hwy", "lane": "ln", "parkway": "pkwy", "court": "ct", "place": "pl",
+                  "circle": "cir", "plaza": "plz", "terrace": "ter", "trail": "trl", "pike": "pk",
+                  "north": "n", "south": "s", "east": "e", "west": "w"}
+
+
+def _street_tokens(addr):
+    """Tokens of the street part of an address (text before the first comma)."""
+    import re as _re
+    first = str(addr or "").split(",")[0].lower()
+    return [_STREET_SUFFIX.get(t, t) for t in _re.findall(r"[a-z0-9]+", first)]
+
+
+def _same_street_address(a, b):
+    """Same building: identical street tokens, or same house number + a shared street word."""
+    ta, tb = _street_tokens(a), _street_tokens(b)
+    if not ta or not tb:
+        return False
+    if ta == tb:
+        return True
+    if not (ta[0].isdigit() and tb[0].isdigit() and ta[0] == tb[0]):
+        return False
+    generic = set(_STREET_SUFFIX.values())
+    wa = {t for t in ta[1:] if len(t) > 2 and not t.isdigit() and t not in generic}
+    wb = {t for t in tb[1:] if len(t) > 2 and not t.isdigit() and t not in generic}
+    return bool(wa & wb)
+
+
+def _schedule_addresses(extracted_data):
+    """Every premises address a coverage schedule names (GL designated premises / class schedule,
+    property schedule of values / coverage by location)."""
+    out = []
+    covs = extracted_data.get("coverages", {}) if isinstance(extracted_data, dict) else {}
+    for cov in (covs.values() if isinstance(covs, dict) else []):
+        if not isinstance(cov, dict):
+            continue
+        for dp in cov.get("designated_premises") or []:
+            if isinstance(dp, str):
+                out.append(dp)
+            elif isinstance(dp, dict):
+                out.append(str(dp.get("address") or dp.get("location") or ""))
+        for key in ("schedule_of_classes", "coverage_by_location", "schedule_of_values", "locations"):
+            rows = cov.get(key) or []
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if isinstance(row, str):
+                    out.append(row)
+                elif isinstance(row, dict):
+                    out.append(str(row.get("address") or row.get("location") or ""))
+    return [a for a in out if a and any(ch.isdigit() for ch in a)]
+
+
+def _quote_only_locations(extracted_data, sov_locations):
+    """Locations the quotes list that no SOV has (Oct 12 2026).
+
+    _enrich_with_sov replaces the extracted locations with the SOV's. When the SOV covers only
+    the property hotels (an Amwins property SOV) the liability-only hotels on the GL schedule
+    used to vanish from the review screen. A quote location is kept when a coverage schedule
+    (GL designated premises / class schedule, property schedule) names the same address, so a
+    mailing or management-office address the model picked up is never added."""
+    gpt_locs = extracted_data.get("locations", []) or []
+    sched = _schedule_addresses(extracted_data)
+    placeholders = {"hotel/motel", "hotel", "motel", "hotel or motel", "pending", "insured property"}
+    kept = []
+    for gl in gpt_locs:
+        if not isinstance(gl, dict):
+            continue
+        addr = str(gl.get("address") or "").strip()
+        if not addr or not _street_tokens(addr) or not _street_tokens(addr)[0].isdigit():
+            continue
+        if any(_same_street_address(addr, sl.get("address", "")) for sl in sov_locations):
+            continue
+        if any(_same_street_address(addr, k.get("address", "")) for k in kept):
+            continue
+        if not any(_same_street_address(addr, sa) for sa in sched):
+            continue
+        name = str(gl.get("name") or "").strip()
+        if name.lower() in placeholders:
+            name = ""
+        name = (name or str(gl.get("dba") or "").strip()
+                or str(gl.get("corporate_entity") or "").strip() or "Pending")
+        try:
+            tiv = float(str(gl.get("tiv") or 0).replace("$", "").replace(",", "") or 0)
+        except ValueError:
+            tiv = 0
+        kept.append({
+            "name": name,
+            "address": addr,
+            "city": str(gl.get("city") or "").strip(),
+            "state": str(gl.get("state") or "").strip(),
+            "zip": str(gl.get("zip") or "").strip(),
+            "rooms": 0,
+            "tiv": tiv,
+            "source": "quote",
+        })
+    return kept
 
 
 def _enrich_with_sov(extracted_data, sov_data):
@@ -590,7 +772,22 @@ def _enrich_with_sov(extracted_data, sov_data):
                 f"with {len(sov_locations)} SOV locations")
     for i, sl in enumerate(sov_locations[:3]):
         logger.info(f"  SOV loc {i+1}: name='{sl.get('name', '')}', tiv={sl.get('tiv', 0)}, addr='{sl.get('address', '')}'")
-    extracted_data["locations"] = sov_locations
+    # ...but keep quote-scheduled hotels the SOV does not list (see _quote_only_locations)
+    try:
+        _quote_only = _quote_only_locations(extracted_data, sov_locations)
+    except Exception as _qo_err:
+        logger.warning(f"_quote_only_locations failed (non-fatal): {_qo_err}")
+        _quote_only = []
+    extracted_data["locations"] = sov_locations + _quote_only
+    if _quote_only:
+        _lbls = "; ".join(", ".join(x for x in (q["address"], q["city"], q["state"]) if x) for q in _quote_only)
+        logger.info(f"_enrich_with_sov: kept {len(_quote_only)} quote-only location(s): {_lbls}")
+        _ws = extracted_data.get("warnings")
+        if not isinstance(_ws, list):
+            _ws = [_ws] if isinstance(_ws, str) and _ws.strip() else []
+        _ws.append(f"Locations: on the quote schedule but not on the SOV, kept from the quote "
+                   f"(add corporate name / TIV if needed): {_lbls}")
+        extracted_data["warnings"] = _ws
     extracted_data["sov_totals"] = sov_data.get("totals", {})
 
     # Enrich DBA from SOV named_insured (e.g., "LV Hotels LLC - Latitude Apartment")
@@ -1215,32 +1412,34 @@ def _run_extraction(session_id):
                     logger.info(f"SOV parsed: {len(sov_data.get('locations', []))} locations, "
                                 f"TIV={sov_data.get('totals', {}).get('tiv', 0)}")
 
-        # Select the property SOV (has real TIV values) as primary
-        property_sov = None
-        pipeline_sov = None
-        for sov in all_sov_results:
-            total_tiv = sov.get("totals", {}).get("tiv", 0) or 0
-            num_locs = len(sov.get("locations", []))
-            if total_tiv > 10000:
-                if property_sov is None or total_tiv > (property_sov.get("totals", {}).get("tiv", 0) or 0):
-                    property_sov = sov
-                    logger.info(f"Property SOV identified: {sov.get('_source_filename', '?')}, TIV=${total_tiv:,.0f}")
-            else:
-                if pipeline_sov is None or num_locs > len(pipeline_sov.get("locations", [])):
-                    pipeline_sov = sov
-                    logger.info(f"Pipeline SOV identified: {sov.get('_source_filename', '?')}, {num_locs} locations")
-
-        # Merge: use pipeline SOV for locations with TIVs from property SOV
-        if property_sov and pipeline_sov:
-            logger.info("Merging pipeline SOV locations with property SOV TIVs")
+        # Location master = the HUB Hospitality SOV (every hotel, corporate names, DBAs - all
+        # the liability-side information); property SOV = the Amwins / carrier SOV with the
+        # highest TIV (property section, TIVs). Merged by address. See _select_sov_roles.
+        pipeline_sov, property_sov = _select_sov_roles(all_sov_results)
+        session["sov_notes"] = []
+        if pipeline_sov is not None and property_sov is not None and pipeline_sov is not property_sov:
+            logger.info(f"SOV roles: locations from {pipeline_sov.get('_source_filename', '?')} "
+                        f"({len(pipeline_sov.get('locations', []))} locs), TIV from "
+                        f"{property_sov.get('_source_filename', '?')} "
+                        f"(${(property_sov.get('totals', {}) or {}).get('tiv', 0) or 0:,.0f})")
             session["sov_data"] = _merge_sov_data(pipeline_sov, property_sov)
             session["pipeline_sov"] = pipeline_sov
-        elif property_sov:
-            session["sov_data"] = property_sov
-        elif pipeline_sov:
+            session["sov_notes"].append(
+                f"SOV: locations, corporate names and DBAs from '{pipeline_sov.get('_source_filename', '?')}' "
+                f"({len(pipeline_sov.get('locations', []))} locations); TIV from "
+                f"'{property_sov.get('_source_filename', '?')}'.")
+            _unmatched = session["sov_data"].get("_tiv_only_added") or []
+            if _unmatched:
+                session["sov_notes"].append(
+                    "SOV: on the TIV SOV but not on the location SOV, added from the TIV SOV: "
+                    + "; ".join(_unmatched))
+        elif pipeline_sov is not None:
             session["sov_data"] = pipeline_sov
-        elif all_sov_results:
-            session["sov_data"] = all_sov_results[0]
+            if len(all_sov_results) > 1:
+                session["sov_notes"].append(
+                    f"SOV: {len(all_sov_results)} SOVs uploaded; locations and TIV from "
+                    f"'{pipeline_sov.get('_source_filename', '?')}' "
+                    f"({len(pipeline_sov.get('locations', []))} locations).")
 
         if session.get("sov_data"):
             logger.info(f"Final SOV: {len(session['sov_data'].get('locations', []))} locations, "
@@ -1337,6 +1536,11 @@ def _run_extraction(session_id):
                     f"gpt_locations={len(merged_data.get('locations', []))}")
         if session.get("sov_data"):
             _enrich_with_sov(merged_data, session["sov_data"])
+            if session.get("sov_notes"):
+                _ws = merged_data.get("warnings")
+                if not isinstance(_ws, list):
+                    _ws = [_ws] if isinstance(_ws, str) and _ws.strip() else []
+                merged_data["warnings"] = _ws + list(session["sov_notes"])
             logger.info(f"After enrichment: {len(merged_data.get('locations', []))} locations, "
                         f"first loc name='{merged_data.get('locations', [{}])[0].get('name', '')}', "
                         f"first loc tiv={merged_data.get('locations', [{}])[0].get('tiv', 0)}")

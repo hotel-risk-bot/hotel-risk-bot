@@ -530,6 +530,21 @@ def parse_sov(file_path: str) -> dict:
             else:
                 location[field_name] = _safe_str(cell_val)
 
+        # HUB Hospitality SOV "Full Address" = "8600 Austrian Court, Orlando, Florida, 32819,
+        # United States" next to its own City / State columns: keep the street in address
+        # and pick up the ZIP (Oct 12 2026), so tables don't repeat city/state/country.
+        _addr = location.get("address") or ""
+        _city = (location.get("city") or "").strip()
+        if _addr and _city and "," in _addr:
+            _m = re.search(r",\s*" + re.escape(_city) + r"\s*(,|$)", _addr, re.IGNORECASE)
+            if _m and _m.start() > 0:
+                _rest = _addr[_m.start():]
+                location["address"] = _addr[:_m.start()].strip().rstrip(",").strip()
+                if not (location.get("zip_code") or "").strip():
+                    _zm = re.search(r"\b(\d{5})(?:-\d{4})?\b", _rest)
+                    if _zm:
+                        location["zip_code"] = _zm.group(1)
+
         # Calculate TIV if not provided
         if location.get("tiv", 0) == 0:
             location["tiv"] = (
