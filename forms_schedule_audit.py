@@ -30,21 +30,43 @@ tagged for another line is never offered to this coverage, Interline rows go to 
 coverage on the policy, a row the carrier tags for this line is accepted even when a
 prefix rule would have vetoed it, and a leading edition date ("01/25") moves from the
 title into the form number.
+
+Berkley Aspire layout (Oct 13 2026, Triumph Investments Group GL quote 2642731876): the
+audit reported "26 numbered forms" on a 50-form schedule and ADDED two page footers as
+forms ("ENP9014 1024 Page 3 of 4", "ENP5101 1124 Page 1 of 1"), rows the generator then
+prints because schedule_verified rows are never dropped. Four gaps, all fixed here:
+  * letter-suffixed numbers ("BR5269G 1024", "BR902I 0816", 24 of the 50) and an edition
+    glued onto the number ("EMO30011023") did not read as form numbers;
+  * a title that wraps onto two lines puts the number alone on the middle line
+    ("CG2107 0514" between "Exclusion - Access Or ... - Limited" and "Bodily Injury ...");
+    those rows are now rebuilt from the indented title halves above and below;
+  * a form number beside a page counter or a copyright line is page furniture, never a
+    row ("Page 3 of 4", "Includes copyrighted material ...", "(c) ISO Properties");
+  * the schedule block now ends at a page break unless the next page carries on with it
+    (a "(Cont'd)" header or numbered rows near the top), so the parser no longer reads
+    on into the TRIA disclosure notice that follows the schedule.
+Matching against the extracted list also treats O/0 and I/L/1 as the same character, so
+"BR902I" read by GPT as "BR9021" is not appended a second time.
 """
 import logging
 import re
 
 logger = logging.getLogger(__name__)
 
-# A complete form number, matched against the LAST column of a schedule row.
+# A complete form number, matched against the LAST (or first) column of a schedule row.
 # ISO ("CX 21 13 04 13", "CG 20 29 12 19", "IL 09 85 12 20"), carrier-prefixed
 # ("HSIC CX ES 01 44 04 21", "LBGL 21 53 12 24", "TSIC 004 0424", "FORMS - SCHED 08 12"),
+# letter-suffixed Berkley numbers ("BR5269G 1024", "BR902I 0816"), an edition glued onto
+# the number ("EMO30011023" = EMO3001 10/23; the trailing MMYY must be a real month),
 # dashed ("LIA-19182-0724", "FUT-SS 01 22") and edition-in-parentheses variants
 # ("LB TRIA (12/2022)", "DS PN Annual (02-2022)").
 _FORM_NUMBER_FULL_RE = re.compile(
     r"^(?:"
     r"(?:[A-Z]{1,6}(?:\s*-\s*[A-Z]{1,6})?\s+){0,4}"          # alpha prefix tokens
-    r"(?:[A-Z]{1,3}\s?)?\d{2,5}(?:[\s\-/]\d{2,4}){0,4}"      # numeric groups (+ optional letter)
+    r"(?:(?:[A-Z]{1,3}\s?)?\d{2,5}"                           # numeric group (+ optional letter prefix)
+    r"|[A-Z]{1,4}\d{2,5}[A-Z]{1,2})"                          # letter prefix AND suffix ("BR5269G")
+    r"(?:[\s\-/]\d{2,4}){0,4}"                                # edition / further numeric groups
+    r"|[A-Z]{2,5}\d{3,5}(?:0[1-9]|1[0-2])\d{2}"               # edition glued on ("EMO30011023")
     r"|[A-Z]{2,6}(?:-[A-Z0-9]{2,8}){1,3}"                     # dashed carrier codes
     r"|[A-Z]{2,6}(?:\s+[A-Za-z]{2,8}){0,2}\s*\(\d{2}[-/]\d{2,4}\)"  # edition in parentheses
     r")$"
@@ -58,7 +80,22 @@ _FORM_NUMBER_TAIL_RE = re.compile(
 
 _SCHEDULE_HEADER_RE = re.compile(
     r"^\s*(FORMS?\s*:?|FORMS?\s+(?:AND|&)\s+ENDORSEMENTS?|SCHEDULE\s+OF\s+FORMS?(?:\s+AND\s+ENDORSEMENTS?)?|"
-    r"FORMS?\s+SCHEDULE|ENDORSEMENTS?\s+SCHEDULE|APPLICABLE\s+FORMS?|POLICY\s+FORMS?(?:\s+AND\s+ENDORSEMENTS?)?)\s*:?\s*$",
+    r"FORMS?\s+SCHEDULE|ENDORSEMENTS?\s+SCHEDULE|APPLICABLE\s+FORMS?|POLICY\s+FORMS?(?:\s+AND\s+ENDORSEMENTS?)?)"
+    r"(?:\s*[\(\[]?\s*-?\s*CONT(?:INUED|['’]?D)?\.?\s*[\)\]]?)?\s*:?\s*$",   # "(Cont'd)", "Continued"
+    re.I,
+)
+# Page breaks as the audit receives them: the smart extractor's "--- Page N ---" markers
+# (form feeds from a whole-document pdftotext run are converted to the same marker).
+_PAGE_MARK_RE = re.compile(r"^\s*-{2,}\s*Page(?:\s+\d+)?\s*-{2,}\s*$", re.I)
+# Page furniture that can share a line with a form number but is never a schedule row:
+# the quote's own form number beside its page counter ("ENP9014 1024   Page 3 of 4"),
+# copyright lines printed under ISO / NAIC forms.
+_FOOTER_DESC_RE = re.compile(
+    r"^\s*page\s+\d+\b"
+    r"|\bpage\s+\d+\s*(?:of|/)\s*\d+\b"
+    r"|©|\(c\)\s*(?:19|20)\d{2}"
+    r"|\bcopyrighted\s+material\b"
+    r"|\binsurance\s+services\s+office\b|\biso\s+properties\b",
     re.I,
 )
 _SCHEDULE_END_RE = re.compile(
@@ -99,6 +136,15 @@ _AMBIGUOUS_LOBS = {"property", "auto", "automobile", "crime", "excess", "common"
 
 def _compact(num: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", str(num or "").upper())
+
+
+_FUZZY_MAP = str.maketrans("OIL", "011")
+
+
+def _fuzzy(compact: str) -> str:
+    """A compacted number with the characters PDF text and GPT swap most often folded
+    together (O/0, I/L/1). Used only to decide whether a row is already extracted."""
+    return (compact or "").translate(_FUZZY_MAP)
 
 
 def _is_form_number(tok: str) -> bool:
@@ -149,38 +195,134 @@ def _looks_like_continuation(line: str) -> bool:
     return upper_ratio > 0.85 or t[0].islower() or t.startswith("(") or t.endswith(")")
 
 
+def _row_desc_ok(desc: str) -> bool:
+    """A schedule row's title passes: not empty, not money or a reference number, not
+    page furniture (page counter, copyright line)."""
+    if not desc or "$" in desc or len(desc) > 140 or desc.count(".") > 2:
+        return False
+    if re.search(r"\b(POLICY|QUOTE|REFERENCE|ACCOUNT)\s*(NO|NUMBER|#)", desc, re.I):
+        return False
+    return not _FOOTER_DESC_RE.search(desc)
+
+
+def _schedule_row(line: str):
+    """(description, form_number) for a one-line schedule row whose title passes the row
+    checks, else None."""
+    split = _split_row(line)
+    if not split:
+        return None
+    desc, num = split
+    desc = desc.strip(" \t-–—|")
+    return (desc, num) if _row_desc_ok(desc) else None
+
+
+def _lone_form_number(line: str):
+    """The form number when a line holds nothing else: the middle line of a title the PDF
+    wrapped around its number. Needs a letter, so a bare page or class number never counts."""
+    t = (line or "").strip()
+    if not t or len(t) > 30 or _COLUMN_SPLIT_RE.search(t) or not re.search(r"[A-Z]", t):
+        return None
+    return t if _is_form_number(t) else None
+
+
+def _is_title_fragment(line: str) -> bool:
+    """An indented line of title text with no form number of its own: one half of a title
+    wrapped around a lone number (Berkley prints the number on the middle line)."""
+    if not line or not line.strip():
+        return False
+    t = line.strip()
+    if len(line) - len(line.lstrip(" ")) < 4 or len(t) > 160 or "$" in t or ":" in t:
+        return False
+    if (_PAGE_MARK_RE.match(t) or _SCHEDULE_HEADER_RE.match(t) or _SCHEDULE_END_RE.match(t)
+            or _COLUMN_HEADER_RE.match(t) or _FOOTER_DESC_RE.search(t)):
+        return False
+    if _COLUMN_SPLIT_RE.search(t) or _split_row(t) or _lone_form_number(t):
+        return False
+    return sum(1 for c in t if c.isalpha()) >= 3
+
+
+def _is_prose(text: str) -> bool:
+    """A sentence of running text (a notice or policy wording), not a title or a label:
+    ten or more words, most of the small ones lower-case."""
+    words = (text or "").split()
+    if len(words) < 10:
+        return False
+    low = sum(1 for w in words if w[0].islower())
+    return low >= 6 and low >= 0.4 * len(words)
+
+
+def _schedule_continues(lines: list, start: int, look: int = 15) -> bool:
+    """At a page break inside the schedule: does the next page carry on with it? True on
+    a schedule header (including "(Cont'd)") or a numbered row within the first `look`
+    non-blank lines; False on an end marker, the next page break, or running text that
+    comes first (Berkley's TRIA notice after the forms schedule)."""
+    seen = 0
+    for k in range(start, len(lines)):
+        t = lines[k].rstrip()
+        if not t.strip():
+            continue
+        if _PAGE_MARK_RE.match(t) or _SCHEDULE_END_RE.match(t):
+            return False
+        if _SCHEDULE_HEADER_RE.match(t) or _COLUMN_HEADER_RE.match(t):
+            return True
+        if _schedule_row(t) or _lone_form_number(t):
+            return True
+        if _is_prose(t.strip()):
+            return False
+        seen += 1
+        if seen >= look:
+            return False
+    return False
+
+
 def parse_forms_schedule(text: str) -> list[dict]:
     """Return [{form_number, description}] for every schedule row in `text`.
-    Wrapped titles are joined with the following line. Rows found outside an
-    explicit schedule block are accepted only when they sit in a run of at least
-    3 numbered rows within a few lines of each other (what a schedule table looks
-    like once the PDF is flattened to text)."""
+    Wrapped titles are joined with the following line, or with the indented halves
+    above and below when the number sits alone on the middle line. Page footers are
+    never rows, and an explicit schedule block ends at a page break unless the next
+    page continues it. Rows found outside an explicit schedule block are accepted only
+    when they sit in a run of at least 3 numbered rows within a few lines of each other
+    (what a schedule table looks like once the PDF is flattened to text)."""
     if not text:
         return []
-    lines = text.splitlines()
+    lines = text.replace("\f", "\n--- Page ---\n").splitlines()
     rows = []
     in_block = False
+    used = set()   # lines already joined into a row as part of its title
     for i, raw in enumerate(lines):
         line = raw.rstrip()
+        if _PAGE_MARK_RE.match(line):
+            # The schedule ends at a page break unless the next page carries on with it.
+            if in_block and not _schedule_continues(lines, i + 1):
+                in_block = False
+            continue
         if _SCHEDULE_HEADER_RE.match(line):
             in_block = True
             continue
         if in_block and _SCHEDULE_END_RE.match(line):
             in_block = False
-        if _COLUMN_HEADER_RE.match(line):
+        if _COLUMN_HEADER_RE.match(line) or i in used:
             continue
-        split = _split_row(line)
-        if not split:
-            continue
-        desc, num = split
-        desc = desc.strip(" \t-–—|")
-        if not desc or "$" in desc or len(desc) > 140 or desc.count(".") > 2:
-            continue
-        if re.search(r"\b(POLICY|QUOTE|REFERENCE|ACCOUNT)\s*(NO|NUMBER|#)", desc, re.I):
-            continue
-        j = i + 1
-        if j < len(lines) and _looks_like_continuation(lines[j]):
-            desc = f"{desc} {lines[j].strip()}"
+        row = _schedule_row(line)
+        if row:
+            desc, num = row
+            j = i + 1
+            if j < len(lines) and _looks_like_continuation(lines[j]):
+                desc = f"{desc} {lines[j].strip()}"
+                used.add(j)
+        else:
+            # Berkley layout: a two-line title wraps AROUND its number, which sits alone
+            # on the middle line, with the title halves indented above and below it.
+            num = _lone_form_number(line)
+            if not num:
+                continue
+            take = [k for k in (i - 1, i + 1)
+                    if 0 <= k < len(lines) and k not in used and _is_title_fragment(lines[k])]
+            parts = [lines[k].strip() for k in take]
+            if not parts or not all(_row_desc_ok(p) for p in parts):
+                continue
+            used.update(take)
+            desc = " ".join(parts)
         desc = " ".join(desc.split())
         # "FUT 1025 | 01/25 | Vehicle Schedule | Business Auto": the edition belongs with the number
         m_ed = _EDITION_RE.match(desc)
@@ -332,12 +474,13 @@ def reconcile_coverage_forms(cov: dict, source_text: str, source_name: str, cove
     existing = cov.get("forms_endorsements") or []
     if not isinstance(existing, list):
         existing = []
-    have = set()
+    have, have_fuzzy = set(), set()
     for f in existing:
         if isinstance(f, dict):
             c = _compact(f.get("form_number"))
             if c:
                 have.add(c)
+                have_fuzzy.add(_fuzzy(c))
     added, vetoed, other_line = [], [], 0
     line_rows = 0
     for row in schedule:
@@ -349,8 +492,10 @@ def reconcile_coverage_forms(cov: dict, source_text: str, source_name: str, cove
             other_line += 1
             continue
         line_rows += 1
-        # Edition-date variants: "CX 21 13" vs "CX 21 13 04 13" count as present.
-        if c in have or any(h.startswith(c) or c.startswith(h) for h in have if len(h) >= 6 and len(c) >= 6):
+        # Edition-date variants: "CX 21 13" vs "CX 21 13 04 13" count as present, and so
+        # does a number GPT read with O/0 or I/L/1 swapped ("BR9021 0816" for "BR902I 0816").
+        if c in have or _fuzzy(c) in have_fuzzy or any(
+                h.startswith(c) or c.startswith(h) for h in have if len(h) >= 6 and len(c) >= 6):
             continue
         cand = {"form_number": row["form_number"], "description": row["description"], "schedule_verified": True}
         carrier_says_ours = bool(tagged and lob and lob in lob_allow)
@@ -359,6 +504,7 @@ def reconcile_coverage_forms(cov: dict, source_text: str, source_name: str, cove
             continue
         added.append(cand)
         have.add(c)
+        have_fuzzy.add(_fuzzy(c))
     if added:
         merged = existing + added
         # Put the list back in the quote's own schedule order when the schedule
