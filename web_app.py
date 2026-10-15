@@ -1778,6 +1778,43 @@ def update_data(session_id):
     return jsonify({"status": "updated"})
 
 
+@app.route("/api/template/<session_id>", methods=["POST"])
+def apply_template(session_id):
+    """Build the Starr property and/or PartnerRe umbrella coverages from the program templates
+    (program_templates.py, Oct 15 2026). Body: {"inputs": {...}, "data": <current review data>?}.
+    Deterministic, no AI. Returns the updated data plus the template notes."""
+    session = _get_session(session_id)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
+    body = request.json or {}
+    inputs = body.get("inputs") or {}
+    data = body.get("data") or session.get("extracted_data")
+    if not isinstance(data, dict):
+        return jsonify({"error": "No extracted data available. Run extraction first."}), 400
+    if not ((inputs.get("property") or {}).get("enabled") or (inputs.get("umbrella") or {}).get("enabled")
+            or data.get("program_templates")):
+        return jsonify({"error": "Select Starr Property and/or PartnerRe Umbrella"}), 400
+    _normalize_coverages(data)
+    if session.get("sov_data") and not data.get("sov_data"):
+        existing = session.get("extracted_data") or {}
+        if existing.get("sov_data"):
+            data["sov_data"] = existing.get("sov_data")
+    try:
+        from program_templates import apply_program_templates
+        notes = apply_program_templates(data, inputs, session.get("sov_data"))
+    except Exception as e:
+        logger.exception(f"Program template failed: {e}")
+        return jsonify({"error": f"Program template failed: {str(e)}"}), 500
+    session["extracted_data"] = data
+    session["template_inputs"] = inputs
+    _set_session(session_id, session)
+    logger.info(f"Program templates applied for session {session_id}: "
+                f"property={bool((inputs.get('property') or {}).get('enabled'))} "
+                f"umbrella={bool((inputs.get('umbrella') or {}).get('enabled'))} notes={len(notes)}")
+    return jsonify({"status": "ok", "data": data, "notes": notes,
+                    "summary": _build_review_summary(data)})
+
+
 @app.route("/api/generate/<session_id>", methods=["POST"])
 def generate_doc(session_id):
     """Generate the DOCX proposal from the (possibly edited) extracted data."""

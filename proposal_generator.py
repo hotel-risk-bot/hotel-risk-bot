@@ -840,7 +840,7 @@ def _filter_cross_contaminated_forms(forms, coverage_key):
         # native form numbers in an umbrella section, and ANY exclusion/limitation row
         # are never dropped at render time — this is the last step before the client
         # sees the document and there is no human review after it (Sep 15 2026).
-        if isinstance(f, dict) and f.get("schedule_verified"):
+        if isinstance(f, dict) and (f.get("schedule_verified") or f.get("template_form")):
             kept.append(f)
             continue
         if _is_umb and _is_umbrella_native_form_number(fn):
@@ -3909,6 +3909,11 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     # Add policy period if present
     if cov.get("policy_period"):
         carrier_rows.append(["Policy Period", cov["policy_period"]])
+
+    # Program-template rows (program_templates.py: Starr property / PartnerRe umbrella)
+    for _sr in (cov.get("summary_rows") or []):
+        if isinstance(_sr, dict) and str(_sr.get("label") or "").strip() and str(_sr.get("value") or "").strip():
+            carrier_rows.append([str(_sr["label"]).strip(), str(_sr["value"]).strip()])
     
     # Add layer description for excess property
     layer_desc = cov.get("layer_description", "")
@@ -4358,7 +4363,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     # Deductibles (Property)
     deductibles = cov.get("deductibles", [])
     # Filter out deductibles for perils that are NOT COVERED in additional_coverages/sublimits
-    if deductibles and coverage_key == "property":
+    if deductibles and coverage_key == "property" and not cov.get("program_template"):
         _addl_covs = cov.get("additional_coverages", [])
         _not_covered_perils = set()
         for ac in _addl_covs:
@@ -4654,6 +4659,15 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                           col_widths=[1.0, 3.2, 2.8],
                           header_size=9, body_size=9)
     
+    # ── Terms & Conditions (program templates) ────────────────────────────
+    _terms = [str(t if not isinstance(t, dict) else (t.get("description") or t.get("text") or "")).strip()
+              for t in (cov.get("terms_conditions") or [])]
+    _terms = [t for t in _terms if t]
+    if _terms:
+        add_subsection_header(doc, "Terms & Conditions")
+        create_styled_table(doc, ["#", "Condition"], [[str(i), t] for i, t in enumerate(_terms, 1)],
+                            col_widths=[0.5, 7.0], header_size=9, body_size=9)
+
     # ── Warrants (property-specific) ──────────────────────────────────────
     if coverage_key in ("property", "property_alt_1", "property_alt_2"):
         _warrants = cov.get("warrants", []) or []
@@ -5704,7 +5718,7 @@ _PC_ACRONYMS = frozenset({
     "LLC", "LLP", "LLLP", "LP", "PLC", "PLLC", "DBA", "USA", "US", "UK", "TIV", "TRIA", "OFAC",
     "EPLI", "EPL", "GL", "CGL", "BOP", "CPP", "ACV", "RCV", "BI", "BIPD", "PD", "EB", "ISO",
     "NFIP", "FEMA", "EIFS", "HVAC", "UM", "UIM", "PIP", "CSL", "AOP", "WC", "SIR", "MEP",
-    "TPA", "ATM", "IT", "VIN", "ID", "TBD", "HNOA", "HNO", "XS", "RMS", "AIR", "ESP", "SRL",
+    "TPA", "ATM", "IT", "VIN", "ID", "TBD", "HNOA", "HNO", "XS", "RMS", "AIR", "ESP", "SRL", "ACORD", "ERISA", "PFAS",
     "AIG", "CNA", "QBE", "AXA", "XL", "RSUI", "USLI", "CRC", "RT", "HDI", "MSIG", "AWAC",
     "IPFS", "ACE", "RLI", "AXIS", "ICW", "USAA", "SCOR", "HIIG", "HSIC", "IAT", "ISMIE",
     "AFCO", "BRIT", "CFC", "CUE", "DUAL", "GAIC", "IFG", "JLT", "KBIC", "LIU", "MSI", "NAS",
