@@ -180,6 +180,23 @@
             border-color: var(--hub-electric);
             box-shadow: 0 0 0 3px rgba(0,119,200,0.1);
         }
+        /* Program templates card (Starr property / PartnerRe umbrella) */
+        .tpl-toggles { display:flex; gap:1.5rem; flex-wrap:wrap; margin-bottom:0.5rem; }
+        .tpl-toggles label { display:inline-flex; align-items:center; gap:0.45rem; font-weight:600; color:var(--gray-900); cursor:pointer; font-size:0.92rem; }
+        .tpl-toggles input { width:1.05rem; height:1.05rem; cursor:pointer; }
+        .tpl-section { border:1px solid var(--gray-200); border-radius:var(--radius); padding:0.9rem 1rem 0.4rem; margin-top:0.75rem; background:var(--gray-50); }
+        .tpl-section h3 { margin:0 0 0.6rem; font-size:0.95rem; }
+        .tpl-section .tpl-sub { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--gray-700); font-weight:700; margin:0.6rem 0 0.35rem; }
+        .tpl-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:0 0.9rem; }
+        .tpl-combo { display:flex; gap:0.35rem; }
+        .tpl-combo select { flex:1; min-width:0; }
+        .tpl-combo input { width:6.5rem; }
+        .tpl-note { font-size:0.78rem; color:var(--gray-700); margin:0.25rem 0 0.6rem; }
+        #tpl-card.tpl-collapsed > :not(h2):not(.tpl-summary) { display:none !important; }
+        #tpl-card .tpl-summary { display:none; font-size:0.82rem; color:var(--gray-700); margin:-0.3rem 0 0; }
+        #tpl-card.tpl-collapsed .tpl-summary { display:block; }
+        #tpl-card.tpl-in-review h2 { cursor:pointer; }
+        .tpl-badge { white-space:nowrap; margin-left:0.4rem; font-size:0.7rem; font-weight:500; background:#e8f4fd; color:#0b4f8a; border:1px solid #b9dcf5; border-radius:10px; padding:0.1rem 0.5rem; }
         .form-row {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -602,6 +619,86 @@
             <div class="file-list" id="file-list"></div>
         </div>
 
+        <div id="tpl-home">
+        <div class="card" id="tpl-card">
+            <h2 onclick="tplCollapse()">&#128209; Build from Program Template</h2>
+            <p class="tpl-summary" id="tpl-summary"></p>
+            <p class="tpl-note" style="margin-top:-0.4rem;">Builds the coverage from HUB's exclusive program forms and terms (no carrier quote needed). Client details, locations and TIV come from the Amwins SOV; other quotes you upload (GL, EB, etc.) are extracted as usual.</p>
+            <div class="tpl-toggles">
+                <label><input type="checkbox" id="tpl-prop-on" onchange="tplToggle()"> Starr Property</label>
+                <label><input type="checkbox" id="tpl-umb-on" onchange="tplToggle()"> PartnerRe Umbrella</label>
+            </div>
+
+            <div class="tpl-section hidden" id="tpl-prop">
+                <h3>Starr Surplus Lines &mdash; Property</h3>
+                <div class="tpl-sub">Premium (as received, including taxes and fees)</div>
+                <div class="tpl-grid">
+                    <div class="form-group"><label>Premium</label><input type="number" step="0.01" id="tpl-p-premium" placeholder="e.g. 22000"></div>
+                    <div class="form-group"><label>Taxes &amp; Fees</label><input type="number" step="0.01" id="tpl-p-taxes" placeholder="e.g. 2192.50"></div>
+                    <div class="form-group"><label>Total</label><input type="number" step="0.01" id="tpl-p-total" placeholder="Premium + taxes &amp; fees"></div>
+                    <div class="form-group"><label>TRIA (optional)</label><input type="number" step="0.01" id="tpl-p-tria" placeholder="5% of premium"></div>
+                </div>
+                <div class="tpl-sub">Deductibles</div>
+                <div class="tpl-grid">
+                    <div class="form-group"><label>All Other Perils (AOP)</label><span data-tplsel="tpl-aop"></span></div>
+                    <div class="form-group"><label>Water Damage</label><span data-tplsel="tpl-water"></span></div>
+                    <div class="form-group"><label>Earth Movement</label><span data-tplsel="tpl-em"></span></div>
+                </div>
+                <div class="tpl-grid">
+                    <div class="form-group"><label>Wind / Hail</label>
+                        <select id="tpl-wind-mode" onchange="tplToggle()">
+                            <option value="flat">Flat $ per occurrence</option>
+                            <option value="pct">% of location TIV, with minimum</option>
+                        </select></div>
+                    <div class="form-group" id="tpl-wind-flat"><label>Wind / Hail amount</label><span data-tplsel="tpl-wind-amount"></span></div>
+                    <div class="form-group hidden" id="tpl-wind-pctbox"><label>Wind / Hail %</label><span data-tplsel="tpl-wind-pct"></span></div>
+                    <div class="form-group hidden" id="tpl-wind-minbox"><label>Wind / Hail minimum</label><span data-tplsel="tpl-wind-min"></span></div>
+                </div>
+                <div class="tpl-grid">
+                    <div class="form-group"><label>Named Storm (Tier 1 counties)</label>
+                        <select id="tpl-ns-apply" onchange="tplToggle()">
+                            <option value="auto">Only Tier 1 county locations (auto)</option>
+                            <option value="always">Apply to every location</option>
+                            <option value="never">Do not apply</option>
+                        </select></div>
+                    <div class="form-group" id="tpl-ns-pctbox"><label>Named Storm %</label><span data-tplsel="tpl-ns-pct"></span></div>
+                    <div class="form-group" id="tpl-ns-minbox"><label>Named Storm minimum</label><span data-tplsel="tpl-ns-min"></span></div>
+                </div>
+                <label style="display:inline-flex; align-items:center; gap:0.45rem; font-size:0.85rem; margin:0.2rem 0 0.4rem; cursor:pointer;">
+                    <input type="checkbox" id="tpl-bm" checked onchange="tplBmTouched = true;"> Include Boiler &amp; Machinery in Starr
+                </label>
+                <p class="tpl-note" id="tpl-bm-note">Unticked automatically when an Equipment Breakdown quote is uploaded.</p>
+            </div>
+
+            <div class="tpl-section hidden" id="tpl-umb">
+                <h3>PartnerRe &mdash; Umbrella / Excess</h3>
+                <div class="tpl-grid">
+                    <div class="form-group"><label>Limit (each occurrence / aggregate)</label>
+                        <select id="tpl-u-limit">
+                            <option value="1000000">$1,000,000</option>
+                            <option value="2000000">$2,000,000</option>
+                            <option value="3000000">$3,000,000</option>
+                            <option value="5000000" selected>$5,000,000</option>
+                        </select></div>
+                    <div class="form-group"><label>Underlying GL carrier</label><input type="text" id="tpl-u-ulcarrier" placeholder="From the GL quote"></div>
+                </div>
+                <div class="tpl-sub">Premium (as received, including taxes and fees)</div>
+                <div class="tpl-grid">
+                    <div class="form-group"><label>Premium</label><input type="number" step="0.01" id="tpl-u-premium" placeholder="e.g. 8000"></div>
+                    <div class="form-group"><label>Taxes &amp; Fees</label><input type="number" step="0.01" id="tpl-u-taxes" placeholder="e.g. 500"></div>
+                    <div class="form-group"><label>Total</label><input type="number" step="0.01" id="tpl-u-total" placeholder="Premium + taxes &amp; fees"></div>
+                    <div class="form-group"><label>TRIA (optional)</label><input type="number" step="0.01" id="tpl-u-tria" placeholder="2% of premium"></div>
+                </div>
+                <p class="tpl-note">Underlying schedule comes from the GL quote in this upload (carrier, limits, and HNOA when the GL includes it). Designated premises come from the SOV.</p>
+            </div>
+
+            <div id="tpl-apply-bar" class="hidden" style="margin-top:0.75rem; display:flex; gap:0.75rem; align-items:center;">
+                <button class="btn btn-primary btn-sm" onclick="reapplyTemplates()">Apply template to proposal</button>
+                <span class="tpl-note" style="margin:0;">Rebuilds the template coverages with these inputs. Edits you made to those coverages below are replaced; everything else is kept.</span>
+            </div>
+        </div>
+        </div>
+
         <div class="action-bar">
             <div></div>
             <button class="btn btn-primary" id="btn-extract" disabled>
@@ -684,6 +781,9 @@
                 <div id="named-insureds-list"></div>
                 <button class="btn btn-sm btn-outline" onclick="addNamedInsured()" style="margin-top:0.75rem">+ Add Named Insured</button>
             </div>
+
+            <!-- Program templates (card moves here from step 1) -->
+            <div id="tpl-review-slot"></div>
 
             <!-- Coverages -->
             <div class="card">
@@ -887,6 +987,7 @@ function goToStep(n) {
     connectors.forEach((c, i) => {
         c.classList.toggle('done', i < n - 1);
     });
+    if (typeof tplPlaceCard === 'function') tplPlaceCard(n);
     if (n === 1) panels.upload.classList.remove('hidden');
     if (n === 2) { panels.review.classList.remove('hidden'); populateReview(); }
     if (n === 3) panels.download.classList.remove('hidden');
@@ -935,12 +1036,14 @@ function handleFiles(files) {
     }
     renderFileList();
     btnExtract.disabled = uploadedFiles.length === 0;
+    tplAutoBm(null);
 }
 
 function removeFile(idx) {
     uploadedFiles.splice(idx, 1);
     renderFileList();
     btnExtract.disabled = uploadedFiles.length === 0;
+    tplAutoBm(null);
 }
 
 function renderFileList() {
@@ -972,6 +1075,11 @@ btnExtract.addEventListener('click', async () => {
     }
     if (uploadedFiles.length === 0) {
         showToast('Please upload at least one file', 'error');
+        return;
+    }
+    if (document.getElementById('tpl-prop-on').checked &&
+        !uploadedFiles.some(f => /\.(xlsx|xls|xlsb|csv)$/i.test(f.name))) {
+        showToast('The Starr property template needs the Amwins SOV - add the Excel SOV', 'error');
         return;
     }
 
@@ -1040,6 +1148,15 @@ btnExtract.addEventListener('click', async () => {
             extractedData.client_info.effective_date = effDate;
         }
 
+        // 5. Program templates (Starr property / PartnerRe umbrella), deterministic
+        const tplInputs = collectTemplateInputs();
+        if (tplInputs) {
+            showLoading('Building program template coverages...', '');
+            tplAutoBm(extractedData);
+            tplInputs.property.include_bm = document.getElementById('tpl-bm').checked;
+            extractedData = await applyTemplates(tplInputs, extractedData);
+        }
+
         hideLoading();
         showToast('Extraction complete!');
         goToStep(2);
@@ -1049,6 +1166,171 @@ btnExtract.addEventListener('click', async () => {
         showToast(err.message || 'Extraction failed', 'error');
     }
 });
+
+// ─── Program templates (Starr property / PartnerRe umbrella) ───
+// program_templates.py builds these coverages deterministically from HUB's exclusive program
+// terms; the inputs below are all that changes per client (Stefan, Oct 15 2026).
+let tplBmTouched = false;
+const TPL_SELECTS = {
+    'tpl-aop':         { opts: ['', 2500, 5000, 10000, 25000, 50000, 100000], def: '', blank: 'From SOV (template $10,000)' },
+    'tpl-water':       { opts: [10000, 25000, 50000, 100000], def: 25000 },
+    'tpl-em':          { opts: [25000, 50000, 100000, 250000], def: 25000 },
+    'tpl-wind-amount': { opts: [10000, 25000, 50000, 100000, 250000], def: 25000 },
+    'tpl-wind-pct':    { opts: [1, 2, 3, 5], def: 2, pct: true },
+    'tpl-wind-min':    { opts: [25000, 50000, 100000, 250000], def: 25000 },
+    'tpl-ns-pct':      { opts: [2, 3, 5, 10], def: 5, pct: true },
+    'tpl-ns-min':      { opts: [50000, 100000, 250000, 500000], def: 100000 },
+};
+function tplBuildSelects() {
+    document.querySelectorAll('[data-tplsel]').forEach(span => {
+        const id = span.getAttribute('data-tplsel');
+        const cfg = TPL_SELECTS[id];
+        if (!cfg || document.getElementById(id)) return;
+        const opts = cfg.opts.map(v => {
+            const label = v === '' ? cfg.blank : (cfg.pct ? v + '%' : '$' + Number(v).toLocaleString());
+            return `<option value="${v}"${String(v) === String(cfg.def) ? ' selected' : ''}>${label}</option>`;
+        }).join('') + '<option value="other">Other...</option>';
+        span.outerHTML = `<div class="tpl-combo"><select id="${id}" onchange="tplToggle()">${opts}</select>` +
+            `<input type="text" id="${id}-other" class="hidden" placeholder="${cfg.pct ? 'e.g. 4%' : 'e.g. 15000'}"></div>`;
+    });
+}
+function tplVal(id) {
+    const el = document.getElementById(id);
+    if (!el) return '';
+    if (el.value === 'other') {
+        const o = document.getElementById(id + '-other');
+        return o ? o.value.trim() : '';
+    }
+    return el.value;
+}
+function tplToggle() {
+    const pOn = document.getElementById('tpl-prop-on').checked;
+    const uOn = document.getElementById('tpl-umb-on').checked;
+    document.getElementById('tpl-prop').classList.toggle('hidden', !pOn);
+    document.getElementById('tpl-umb').classList.toggle('hidden', !uOn);
+    const pct = document.getElementById('tpl-wind-mode').value === 'pct';
+    document.getElementById('tpl-wind-flat').classList.toggle('hidden', pct);
+    document.getElementById('tpl-wind-pctbox').classList.toggle('hidden', !pct);
+    document.getElementById('tpl-wind-minbox').classList.toggle('hidden', !pct);
+    const ns = document.getElementById('tpl-ns-apply').value !== 'never';
+    document.getElementById('tpl-ns-pctbox').classList.toggle('hidden', !ns);
+    document.getElementById('tpl-ns-minbox').classList.toggle('hidden', !ns);
+    Object.keys(TPL_SELECTS).forEach(id => {
+        const el = document.getElementById(id), o = document.getElementById(id + '-other');
+        if (el && o) o.classList.toggle('hidden', el.value !== 'other');
+    });
+}
+function tplNum(id) {
+    const el = document.getElementById(id);
+    return el && el.value !== '' ? parseFloat(el.value) : '';
+}
+function tplLooksLikeEB(name) {
+    return /(^|[^a-z])eb([^a-z]|$)|equipment[ _-]?breakdown|boiler/i.test(name || '');
+}
+// Untick B&M when an EB quote is part of the proposal, unless the user set the box themselves.
+function tplAutoBm(data) {
+    if (tplBmTouched) return;
+    let eb = uploadedFiles.some(f => tplLooksLikeEB(f.name));
+    if (data && data.coverages && data.coverages.equipment_breakdown) eb = true;
+    document.getElementById('tpl-bm').checked = !eb;
+    document.getElementById('tpl-bm-note').textContent = eb
+        ? 'Unticked because an Equipment Breakdown quote is part of this proposal. Tick it to keep Starr B&M as well.'
+        : 'Unticked automatically when an Equipment Breakdown quote is uploaded.';
+}
+function collectTemplateInputs() {
+    const pOn = document.getElementById('tpl-prop-on').checked;
+    const uOn = document.getElementById('tpl-umb-on').checked;
+    if (!pOn && !uOn) return null;
+    const eff = (document.getElementById('edit-effective-date') && extractedData
+                 ? document.getElementById('edit-effective-date').value.trim() : '')
+                || document.getElementById('effective-date').value.trim();
+    return {
+        effective_date: eff,
+        property: {
+            enabled: pOn,
+            premium: tplNum('tpl-p-premium'), taxes_fees: tplNum('tpl-p-taxes'),
+            total_premium: tplNum('tpl-p-total'), tria_premium: tplNum('tpl-p-tria'),
+            include_bm: document.getElementById('tpl-bm').checked,
+            deductibles: {
+                aop: tplVal('tpl-aop'), water: tplVal('tpl-water'), earth_movement: tplVal('tpl-em'),
+                wind: { mode: document.getElementById('tpl-wind-mode').value, amount: tplVal('tpl-wind-amount'),
+                        pct: tplVal('tpl-wind-pct'), minimum: tplVal('tpl-wind-min') },
+                named_storm: { apply: document.getElementById('tpl-ns-apply').value,
+                               pct: tplVal('tpl-ns-pct'), minimum: tplVal('tpl-ns-min') },
+            },
+        },
+        umbrella: {
+            enabled: uOn,
+            limit: parseInt(document.getElementById('tpl-u-limit').value, 10),
+            premium: tplNum('tpl-u-premium'), taxes_fees: tplNum('tpl-u-taxes'),
+            total_premium: tplNum('tpl-u-total'), tria_premium: tplNum('tpl-u-tria'),
+            underlying_carrier: document.getElementById('tpl-u-ulcarrier').value.trim(),
+        },
+    };
+}
+async function applyTemplates(inputs, data) {
+    const res = await fetch(`/api/template/${sessionId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inputs, data }),
+    });
+    const out = await res.json();
+    if (!res.ok) throw new Error(out.error || 'Program template failed');
+    return out.data;
+}
+async function reapplyTemplates() {
+    if (!extractedData || !sessionId) return;
+    const pOn = document.getElementById('tpl-prop-on').checked;
+    const uOn = document.getElementById('tpl-umb-on').checked;
+    if (!pOn && !uOn && !extractedData.program_templates) {
+        showToast('Tick Starr Property and/or PartnerRe Umbrella first', 'error');
+        return;
+    }
+    try {
+        syncVisualToData();
+        showLoading('Applying program template...', '');
+        const inputs = collectTemplateInputs() || { property: { enabled: false }, umbrella: { enabled: false } };
+        extractedData = await applyTemplates(inputs, extractedData);
+        hideLoading();
+        populateReview();
+        tplSummary();
+        document.getElementById('tpl-card').classList.add('tpl-collapsed');
+        showToast('Program template applied');
+    } catch (err) {
+        hideLoading();
+        showToast(err.message || 'Program template failed', 'error');
+    }
+}
+// The card lives on step 1 and moves into Review & Edit (above Coverages) so the inputs can be
+// changed and re-applied after extraction.
+function tplPlaceCard(step) {
+    const card = document.getElementById('tpl-card');
+    const slot = step === 2 ? document.getElementById('tpl-review-slot') : document.getElementById('tpl-home');
+    if (card && slot && card.parentElement !== slot) slot.appendChild(card);
+    document.getElementById('tpl-apply-bar').classList.toggle('hidden', step !== 2);
+    card.classList.toggle('tpl-in-review', step === 2);
+    card.classList.toggle('tpl-collapsed', step === 2);   // collapsed in Review; click the title to open
+    tplSummary();
+}
+function tplCollapse() {
+    const card = document.getElementById('tpl-card');
+    if (!card.classList.contains('tpl-in-review')) return;
+    card.classList.toggle('tpl-collapsed');
+}
+function tplSummary() {
+    const el = document.getElementById('tpl-summary');
+    if (!el) return;
+    const on = [];
+    if (document.getElementById('tpl-prop-on').checked) on.push('Starr Property');
+    if (document.getElementById('tpl-umb-on').checked) {
+        const lim = parseInt(document.getElementById('tpl-u-limit').value, 10) / 1000000;
+        on.push('PartnerRe Umbrella $' + lim + 'M');
+    }
+    el.textContent = (on.length ? on.join(' + ') + ' built from the program template.' : 'No program template applied.')
+        + ' Click the title to change deductibles, limits or premium and re-apply.';
+}
+tplBuildSelects();
+tplToggle();
 
 // ─── Review / Edit ───
 function renderExtractWarnings(d) {
@@ -1275,6 +1557,7 @@ function renderCoverages() {
                 <h4>
                     ${displayName}
                     <span class="carrier-badge">${escHtml(cov.carrier || 'TBD')}</span>
+                    ${cov.program_template ? '<span class="tpl-badge" title="Built from the program template - change it with Apply template to proposal above">program template</span>' : ''}
                     ${carvedHostName(cov) ? `<span title="${escHtml(cov.carved_note || '')}" style="margin-left:0.4rem; font-size:0.7rem; font-weight:500; background:#eef0e2; color:#385263; border:1px solid #d9dccb; border-radius:10px; padding:0.1rem 0.5rem;">inside ${escHtml(carvedHostName(cov))} quote</span>` : ''}
                     <button onclick="event.stopPropagation(); removeCoverage('${key}')" 
                         style="margin-left:0.5rem; background:var(--danger); color:white; border:none; border-radius:4px; padding:0.15rem 0.5rem; font-size:0.7rem; cursor:pointer;" 
@@ -1287,7 +1570,7 @@ function renderCoverages() {
                 <span style="font-size:0.8rem; color:var(--gray-500);">
                     Premium: $${formatAmt(cov.premium || 0)} | 
                     Forms: ${(cov.forms_endorsements || []).length} |
-                    Limits: ${(cov.coverage_limits || []).length}
+                    Limits: ${(cov[covLimitsKey(cov)] || []).length}
                     \u25be
                 </span>
             </div>
@@ -1347,8 +1630,8 @@ function renderCoverageFields(key, cov) {
         </div>`;
     }
 
-    // Coverage Limits
-    const limits = cov.coverage_limits || [];
+    // Coverage Limits (the generator renders cov.limits; coverage_limits is the UI's legacy key)
+    const limits = cov[covLimitsKey(cov)] || [];
     if (limits.length > 0) {
         html += `<h3 class="section-toggle open" onclick="toggleSection(this)">Coverage Limits (${limits.length})</h3>`;
         html += `<div class="section-content">`;
@@ -1469,30 +1752,43 @@ function updateCov(key, field, value) {
     }
 }
 
+// Edits go to the list the generator prints: cov.limits (extraction / templates), or the legacy
+// coverage_limits list on coverages added by hand in this screen.
+function covLimitsKey(cov) {
+    if (cov && Array.isArray(cov.coverage_limits) && cov.coverage_limits.length) return 'coverage_limits';
+    if (cov && Array.isArray(cov.limits) && cov.limits.length) return 'limits';
+    return 'coverage_limits';
+}
 function updateCovLimit(key, idx, field, value) {
-    const lim = extractedData.coverages[key].coverage_limits[idx];
+    const cov = extractedData.coverages[key];
+    const lk = covLimitsKey(cov);
+    const lim = cov[lk][idx];
     if (typeof lim === 'string') {
-        extractedData.coverages[key].coverage_limits[idx] = { description: value, limit: '' };
+        cov[lk][idx] = { description: field === 'description' ? value : lim, limit: field === 'limit' ? value : '' };
     } else {
         lim[field] = value;
     }
 }
 function removeCovLimit(key, idx) {
-    extractedData.coverages[key].coverage_limits.splice(idx, 1);
+    const cov = extractedData.coverages[key];
+    cov[covLimitsKey(cov)].splice(idx, 1);
     renderCoverages();
 }
 function addCovLimit(key) {
-    if (!extractedData.coverages[key].coverage_limits) extractedData.coverages[key].coverage_limits = [];
-    extractedData.coverages[key].coverage_limits.push({ description: '', limit: '' });
+    const cov = extractedData.coverages[key];
+    const lk = covLimitsKey(cov);
+    if (!cov[lk]) cov[lk] = [];
+    cov[lk].push({ description: '', limit: '' });
     renderCoverages();
 }
 
 function updateCovDed(key, idx, field, value) {
     const ded = extractedData.coverages[key].deductibles[idx];
     if (typeof ded === 'string') {
-        extractedData.coverages[key].deductibles[idx] = { type: value, amount: '' };
+        extractedData.coverages[key].deductibles[idx] = { type: value, description: value, amount: '' };
     } else {
         ded[field] = value;
+        if (field === 'type') ded.description = value;  // the generator reads description first
     }
 }
 function removeCovDed(key, idx) {
