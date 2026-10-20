@@ -148,7 +148,7 @@ def _read_rows(path):
             if not h:
                 continue
             if isinstance(v, str):
-                v = v.strip()
+                v = v.replace("\u2014", " - ").replace("\u2013", "-").replace("  ", " ").strip()
                 if v == "":
                     v = None
             d[h] = v
@@ -191,19 +191,49 @@ def nval(v, default=0):
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) else default
 
 
+US_STATES = {"alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR", "california": "CA", "colorado": "CO",
+             "connecticut": "CT", "delaware": "DE", "district of columbia": "DC", "florida": "FL", "georgia": "GA", "hawaii": "HI",
+             "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS", "kentucky": "KY", "louisiana": "LA",
+             "maine": "ME", "maryland": "MD", "massachusetts": "MA", "michigan": "MI", "minnesota": "MN", "mississippi": "MS",
+             "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV", "new hampshire": "NH", "new jersey": "NJ",
+             "new mexico": "NM", "new york": "NY", "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK",
+             "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC", "south dakota": "SD",
+             "tennessee": "TN", "texas": "TX", "utah": "UT", "vermont": "VT", "virginia": "VA", "washington": "WA",
+             "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY", "puerto rico": "PR"}
+
+
+def _state_of(part):
+    """'Georgia' / 'GA' / 'GA 31525' -> 'GA' or ''."""
+    s = re.sub(r"\s*\d{5}(-\d{4})?\s*$", "", str(part or "").strip())
+    if s.lower() in US_STATES:
+        return US_STATES[s.lower()]
+    if re.fullmatch(r"[A-Za-z]{2}", s) and s.upper() in US_STATES.values():
+        return s.upper()
+    return ""
+
+
 def parse_addr(full, fallback_city="", fallback_state="", fallback_zip=""):
-    """'street, city, state, zip, country' -> (street, city, zip). Tolerant of
-    fewer parts and of 'City, ST 12345' forms."""
+    """'street[, suite], city, state, zip[, country]' -> (street, city, zip). The city is
+    the part right before the state, so suites and unit numbers stay with the street
+    ('103 South Godley Station Boulevard, 200, Pooler, Georgia, 31322' -> street
+    '103 South Godley Station Boulevard, 200', city 'Pooler'). Tolerant of fewer parts
+    and of 'City, ST 12345' forms."""
     if not full:
         return "", fallback_city, fallback_zip
     p = [x.strip() for x in str(full).split(",") if x.strip()]
-    street = p[0] if p else ""
-    city = p[1] if len(p) > 1 else fallback_city
     zc = fallback_zip
     m = re.search(r"\b(\d{5})(?:-\d{4})?\b", str(full))
     if m:
         zc = m.group(1)
-    # 'City, ST 12345' style -> city may be fine already; 'Tallahassee, Florida, 32303' handled by regex above
+    si = next((i for i, x in enumerate(p) if i > 0 and _state_of(x)), None)
+    if si is not None and si >= 2:
+        return ", ".join(p[:si - 1]), p[si - 1], zc
+    if si == 1:  # 'street, ST 12345'
+        return p[0], fallback_city, zc
+    street = p[0] if p else ""
+    city = p[1] if len(p) > 1 else fallback_city
+    if city and re.fullmatch(r"\d{5}(-\d{4})?", city):
+        city = fallback_city
     return street, city, zc
 
 
@@ -303,6 +333,20 @@ def generate(sov_path, out_path, first_named_insured=None, blank_path=None, toda
         corp_raw = str(first_named_insured).strip()
     corp_entities = [x.strip() for x in str(corp_raw or "").replace("\n", ";").split(";") if x.strip()]
     ni2 = str(g(first, "Named Insured", "") or "").replace("\n", " ").strip()
+    # Multi-entity programs (one LLC per hotel): the SOV "Client Name" is the First Named
+    # Insured and every location entity is listed in the page 4 remarks.
+    all_corps = []
+    for d in locs:
+        for x in str(g(d, "Corporate Name (LLC)", "") or "").replace("\n", ";").split(";"):
+            if x.strip() and x.strip() not in all_corps:
+                all_corps.append(x.strip())
+    client = str(g(first, "Client Name", "") or "").strip()
+    entity_locs = []
+    if (not (first_named_insured and str(first_named_insured).strip()) and len(all_corps) > 1 and client
+            and re.search(r"\b(LLC|L\.L\.C|INC|CORP|LP|LLP|LLLP|LTD|COMPANY|CO\.|PARTNERS|TRUST|HOLDINGS|MANAGEMENT|GROUP)\b", client.upper())
+            and client not in all_corps):
+        corp_entities = [client]
+        entity_locs = all_corps
     if corp_entities:
         ni1 = next((e for e in corp_entities if e != ni2), corp_entities[0])
         named = [ni1] + ([ni2] if ni2 and ni2 != ni1 else [])
@@ -589,6 +633,9 @@ def generate(sov_path, out_path, first_named_insured=None, blank_path=None, toda
         "ACORD 126 (GL), ACORD 131 (Umbrella)." % (eff_s, expiring, len(locs),
                                                    ", Restaurant/Tavern Supplement (Locs %s)" % ", ".join(rest_locs) if rest_locs else "",
                                                    ", Vacant Building Supplement (%s)" % locs_str(vacant_locs) if vacant_locs else "")
+        + (" Named insureds (location entities): %s." % "; ".join(
+            "%s (Loc %s)" % (c, ", ".join(sorted({str(d["Loc #"]) for d in locs if c in str(g(d, "Corporate Name (LLC)", "") or "")}, key=int)))
+            for c in entity_locs) if entity_locs else "")
     )
 
     # ─── fill ───────────────────────────────────────────────────────────
@@ -705,7 +752,7 @@ def generate(sov_path, out_path, first_named_insured=None, blank_path=None, toda
     page.insert_text((22, yy + 6), "TOTALS: %d locations | %s rooms | Annual revenues $%s | TIV $%s" % (
         len(locs), num(total_rooms), money(tot("Total Sales")), money(tot("TIV"))), fontsize=7.5, fontname="helv")
 
-    doc.save(out_path, garbage=3, deflate=True)
+    doc.save(out_path, garbage=4, deflate=True, deflate_images=True, deflate_fonts=True, use_objstms=1)
     n_pages = len(doc)
     doc.close()
 

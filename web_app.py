@@ -2177,12 +2177,12 @@ _ACORD125_FORM_HTML = """<!doctype html>
 <body>
   <div class="card">
     <div class="brand">HUB International</div>
-    <h1>ACORD 125 Builder</h1>
-    <p class="sub">Drop a hospitality SOV (.xlsx or .csv) and get a completed, still-editable ACORD 125 FL commercial application, with a premises continuation schedule for every location.</p>
+    <h1>ACORD Forms Builder</h1>
+    <p class="sub">Drop a hospitality SOV (.xlsx or .csv) and get completed, still-editable ACORD applications: the 125 commercial application plus the 126 (general liability), 140 (property) and 130 (workers compensation) sections, each with continuation schedules for every location.</p>
     <ul class="pts">
-      <li>First Named Insured = the corporate/parent entity; the SOV Named Insured goes in the second slot</li>
-      <li>More than 4 locations: the premises page is repeated so every location appears in the ACORD layout</li>
-      <li>Producer block, lines of business, attachments, prior carriers and remarks are filled from the SOV</li>
+      <li>First Named Insured = the corporate/parent entity (the SOV Client Name when the hotels sit in separate LLCs); every location entity is listed on the forms</li>
+      <li>125: the premises page repeats so every location appears; 140: one premises page per building; 126 and 130: hazards, locations and class codes on continuation schedules</li>
+      <li>Producer block, lines of business, limits, attachments, prior carriers and remarks are filled from the SOV; what the SOV cannot answer is reported below and left blank on the form</li>
     </ul>
     <div class="drop" id="drop">
       <input type="file" id="sov" accept=".xlsx,.xlsm,.csv">
@@ -2190,9 +2190,16 @@ _ACORD125_FORM_HTML = """<!doctype html>
       <div class="hint">Excel (.xlsx) or CSV — HUB pipeline layout, one row per location</div>
       <div class="file" id="fname"></div>
     </div>
-    <label class="lbl" for="ni1">First Named Insured (corporate / parent entity) — optional, used when the SOV "Corporate Name (LLC)" column is blank</label>
+    <label class="lbl">Forms to generate</label>
+    <div class="forms">
+      <label><input type="checkbox" class="frm" value="125" checked> ACORD 125 <span>Commercial application</span></label>
+      <label><input type="checkbox" class="frm" value="126" checked> ACORD 126 <span>General liability</span></label>
+      <label><input type="checkbox" class="frm" value="140" checked> ACORD 140 <span>Property</span></label>
+      <label><input type="checkbox" class="frm" value="130" checked> ACORD 130 <span>Workers compensation</span></label>
+    </div>
+    <label class="lbl" for="ni1">First Named Insured (corporate / parent entity) — optional, overrides what the SOV says</label>
     <input class="txt" id="ni1" type="text" placeholder="e.g. Murphco of Florida Inc" autocomplete="off">
-    <button id="go" disabled>Generate ACORD 125</button>
+    <button id="go" disabled>Generate ACORD forms</button>
     <div class="err" id="err"></div>
     <div id="out">
       <div class="stat">
@@ -2202,18 +2209,30 @@ _ACORD125_FORM_HTML = """<!doctype html>
         <div><b id="s-pages">-</b><span>Pages</span></div>
       </div>
       <h3>Named insureds</h3><p class="ni" id="r-ni"></p>
-      <div id="fixwrap"><h3>Data corrections</h3><ul class="rep fix" id="r-fix"></ul></div>
-      <div id="warnwrap"><h3>Warnings</h3><ul class="rep warn" id="r-warn"></ul></div>
-      <h3>Left blank — for the client to complete</h3><ul class="rep" id="r-blank"></ul>
-      <a class="dl" id="dl" href="#">Download ACORD 125 PDF</a>
+      <div id="files"></div>
+      <a class="dl" id="dlzip" href="#" style="display:none">Download all (zip)</a>
     </div>
     <div class="note">Nothing is stored — generated files are discarded after one hour.</div>
   </div>
+<style>
+  .forms{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 4px}
+  .forms label{display:flex;align-items:center;gap:8px;background:#0f1a28;border:1px solid #2b3a4f;border-radius:9px;padding:10px 12px;font-size:13.5px;color:#e8eef5;cursor:pointer}
+  .forms label span{color:#7f8ea1;font-size:12px}
+  .forms input{accent-color:#0678d5;width:15px;height:15px}
+  .frow{border:1px solid #2b3a4f;border-radius:12px;padding:14px 16px;margin:12px 0;background:#0f1a28}
+  .frow h4{margin:0 0 4px;font-size:14px;color:#fff}
+  .frow .meta{color:#9fb0c3;font-size:12.5px;margin-bottom:6px}
+  .frow details{margin-top:6px}
+  .frow summary{cursor:pointer;color:#9fb0c3;font-size:12.5px}
+  .frow a.dl{margin-top:10px;padding:10px 16px;font-size:14px}
+  .frow .fail{color:#fca5a5;font-size:13px;white-space:pre-wrap}
+</style>
 <script>
 (function(){
   var drop=document.getElementById('drop'), inp=document.getElementById('sov'), go=document.getElementById('go'),
       fname=document.getElementById('fname'), err=document.getElementById('err'), out=document.getElementById('out');
   var file=null;
+  var LABEL={'125':'ACORD 125 - Commercial Insurance Application','126':'ACORD 126 - Commercial General Liability Section','140':'ACORD 140 - Property Section','130':'ACORD 130 - Workers Compensation Application'};
   function setFile(f){
     if(!f) return;
     if(!/\\.(xlsx|xlsm|csv)$/i.test(f.name)){ err.style.display='block'; err.textContent='Please choose an .xlsx or .csv SOV.'; return; }
@@ -2224,28 +2243,55 @@ _ACORD125_FORM_HTML = """<!doctype html>
   ['dragenter','dragover'].forEach(function(ev){ drop.addEventListener(ev,function(e){ e.preventDefault(); drop.classList.add('over'); }); });
   ['dragleave','drop'].forEach(function(ev){ drop.addEventListener(ev,function(e){ e.preventDefault(); drop.classList.remove('over'); }); });
   drop.addEventListener('drop',function(e){ if(e.dataTransfer.files&&e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); });
-  function fill(id, items){ var ul=document.getElementById(id); ul.innerHTML=''; (items||[]).forEach(function(t){ var li=document.createElement('li'); li.textContent=t; ul.appendChild(li); }); }
   function money(n){ return '$'+Number(n||0).toLocaleString('en-US'); }
+  function selectedForms(){ return Array.prototype.slice.call(document.querySelectorAll('.frm')).filter(function(c){ return c.checked; }).map(function(c){ return c.value; }); }
+  function list(title, items, cls){
+    if(!items||!items.length) return '';
+    var h=(title?'<h3>'+title+'</h3>':'')+'<ul class="rep'+(cls?' '+cls:'')+'">';
+    items.forEach(function(t){ h+='<li>'+String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</li>'; });
+    return h+'</ul>';
+  }
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
   go.addEventListener('click',function(){
     if(!file) return;
+    var forms=selectedForms();
+    if(!forms.length){ err.style.display='block'; err.textContent='Tick at least one form.'; return; }
     go.disabled=true; go.textContent='Generating…'; err.style.display='none'; out.style.display='none';
-    var fd=new FormData(); fd.append('sov',file); fd.append('first_named_insured',document.getElementById('ni1').value||'');
+    var fd=new FormData(); fd.append('sov',file); fd.append('first_named_insured',document.getElementById('ni1').value||''); fd.append('forms',forms.join(','));
     fetch('/acord125/generate',{method:'POST',body:fd}).then(function(r){ return r.text().then(function(t){ return {ok:r.ok,text:t}; }); })
     .then(function(res){
-      go.disabled=false; go.textContent='Generate ACORD 125';
+      go.disabled=false; go.textContent='Generate ACORD forms';
       if(!res.ok){ err.style.display='block'; err.textContent=res.text; return; }
-      var j=JSON.parse(res.text), r=j.report;
-      document.getElementById('s-loc').textContent=r.locations;
-      document.getElementById('s-rooms').textContent=Number(r.rooms).toLocaleString('en-US');
-      document.getElementById('s-tiv').textContent=money(r.tiv);
-      document.getElementById('s-pages').textContent=r.pages;
-      document.getElementById('r-ni').textContent=(r.named_insureds||[]).join('  |  ')+'   —   effective '+r.effective+' to '+r.expiration+'   —   '+r.lines;
-      fill('r-fix',r.corrections); document.getElementById('fixwrap').style.display=(r.corrections&&r.corrections.length)?'block':'none';
-      fill('r-warn',r.warnings); document.getElementById('warnwrap').style.display=(r.warnings&&r.warnings.length)?'block':'none';
-      fill('r-blank',r.blanks);
-      var dl=document.getElementById('dl'); dl.href='/acord125/download/'+j.token; dl.textContent='Download '+j.out_name;
+      var j=JSON.parse(res.text), files=j.files||[], first=null, pages=0;
+      files.forEach(function(f){ if(f.report){ pages+=f.report.pages||0; if(!first) first=f.report; } });
+      var r=first||j.report||{};
+      document.getElementById('s-loc').textContent=r.locations!=null?r.locations:'-';
+      document.getElementById('s-rooms').textContent=r.rooms!=null?Number(r.rooms).toLocaleString('en-US'):'-';
+      document.getElementById('s-tiv').textContent=r.tiv!=null?money(r.tiv):'-';
+      document.getElementById('s-pages').textContent=pages||'-';
+      document.getElementById('r-ni').textContent=(r.named_insureds||[]).join('  |  ')+(r.fni_source?'   ('+r.fni_source+')':'')+'   —   effective '+(r.effective||'')+' to '+(r.expiration||'')+'   —   '+(r.lines||'');
+      var host=document.getElementById('files'); host.innerHTML='';
+      files.forEach(function(f){
+        var div=document.createElement('div'); div.className='frow';
+        var h='<h4>'+esc(LABEL[f.form]||('ACORD '+f.form))+'</h4>';
+        if(f.error){ h+='<div class="fail">'+esc(f.error)+'</div>'; div.innerHTML=h; host.appendChild(div); return; }
+        var rp=f.report||{}, meta=[];
+        if(rp.pages) meta.push(rp.pages+' pages');
+        if(rp.locations!=null) meta.push(rp.locations+' locations');
+        if(rp.premises!=null) meta.push(rp.premises+' premises pages');
+        if(rp.hazards!=null) meta.push(rp.hazards+' hazard rows');
+        if(rp.class_rows!=null) meta.push(rp.class_rows+' class rows');
+        if(rp.edition==='FL') meta.push('FL edition');
+        h+='<div class="meta">'+esc(meta.join('  ·  '))+'</div>';
+        h+=list('Data corrections',rp.corrections,'fix')+list('Warnings',rp.warnings,'warn');
+        h+='<details><summary>Left blank — for the client to complete ('+((rp.blanks||[]).length)+')</summary>'+list('',rp.blanks)+'</details>';
+        h+='<a class="dl" href="/acord125/download/'+j.token+'/'+f.form+'">Download '+esc(f.out_name)+'</a>';
+        div.innerHTML=h; host.appendChild(div);
+      });
+      var z=document.getElementById('dlzip');
+      if(j.zip_name){ z.href='/acord125/download/'+j.token+'/zip'; z.textContent='Download all - '+j.zip_name; z.style.display='block'; } else { z.style.display='none'; }
       out.style.display='block'; out.scrollIntoView({behavior:'smooth',block:'start'});
-    }).catch(function(e){ go.disabled=false; go.textContent='Generate ACORD 125'; err.style.display='block'; err.textContent='Request failed: '+e; });
+    }).catch(function(e){ go.disabled=false; go.textContent='Generate ACORD forms'; err.style.display='block'; err.textContent='Request failed: '+e; });
   });
 })();
 </script>
@@ -2270,50 +2316,95 @@ def acord125_form():
     return _ACORD125_FORM_HTML
 
 
+_ACORD_FORMS = ("125", "126", "140", "130")
+
+
 @app.route("/acord125/generate", methods=["POST"])
 def acord125_generate():
-    from acord125_from_sov import generate as _gen_acord125
+    """Generate the ticked ACORD forms (125 by default) from one SOV. Returns
+    {token, files: [{form, out_name, report | error}], zip_name, out_name, report}
+    where out_name / report describe the first form (kept for older callers)."""
+    import json as _json
+    import zipfile
+    from acord_forms_from_sov import generate_form as _gen_form, load as _load_ctx
     f = request.files.get("sov")
     if not f or not f.filename:
         return ("Please choose an SOV .xlsx or .csv file.", 400)
     ext = os.path.splitext(f.filename)[1].lower()
     if ext not in (".xlsx", ".xlsm", ".csv"):
         return ("Please upload an Excel .xlsx workbook or a .csv export of the SOV.", 400)
+    forms = [x.strip() for x in (request.form.get("forms") or "125").split(",") if x.strip() in _ACORD_FORMS]
+    if not forms:
+        return ("Tick at least one ACORD form (125, 126, 130, 140).", 400)
+    forms = [x for x in _ACORD_FORMS if x in forms]
     os.makedirs(_ACORD125_DIR, exist_ok=True)
     _acord125_sweep()
     token = uuid.uuid4().hex
     in_path = os.path.join(_ACORD125_DIR, token + "_in" + ext)
-    out_path = os.path.join(_ACORD125_DIR, token + ".pdf")
     f.save(in_path)
+    fni = request.form.get("first_named_insured", "")
+    files, ctx = [], None
     try:
-        info = _gen_acord125(in_path, out_path, first_named_insured=request.form.get("first_named_insured", ""))
-    except Exception as e:
-        import traceback
-        logger.error("ACORD 125 generation failed: %s\n%s", e, traceback.format_exc())
-        return ("Could not generate the ACORD 125: %s" % e, 500)
+        for form in forms:
+            out_path = os.path.join(_ACORD125_DIR, "%s_%s.pdf" % (token, form))
+            try:
+                if form != "125" and ctx is None:
+                    ctx = _load_ctx(in_path, first_named_insured=fni)
+                info = _gen_form(form, in_path, out_path, first_named_insured=fni, ctx=ctx)
+                files.append({"form": form, "out_name": info["out_name"], "report": info})
+            except Exception as e:
+                import traceback
+                logger.error("ACORD %s generation failed: %s\n%s", form, e, traceback.format_exc())
+                files.append({"form": form, "error": "Could not generate the ACORD %s: %s" % (form, e)})
     finally:
         try:
             os.remove(in_path)
         except Exception:
             pass
-    with open(os.path.join(_ACORD125_DIR, token + ".name"), "w") as fh:
-        fh.write(info["out_name"])
-    return jsonify({"token": token, "out_name": info["out_name"], "report": info})
+    ok = [x for x in files if "out_name" in x]
+    if not ok:
+        return (files[0].get("error") or "Could not generate the ACORD forms.", 500)
+    zip_name = ""
+    if len(ok) > 1:
+        base = ok[0]["out_name"].split(" - ", 1)[1].rsplit(".pdf", 1)[0] if " - " in ok[0]["out_name"] else "forms"
+        zip_name = "ACORD forms - %s.zip" % base
+        with zipfile.ZipFile(os.path.join(_ACORD125_DIR, token + ".zip"), "w", zipfile.ZIP_DEFLATED) as z:
+            for x in ok:
+                z.write(os.path.join(_ACORD125_DIR, "%s_%s.pdf" % (token, x["form"])), x["out_name"])
+    meta = {"zip_name": zip_name, "files": {x["form"]: x["out_name"] for x in ok}}
+    with open(os.path.join(_ACORD125_DIR, token + ".json"), "w") as fh:
+        _json.dump(meta, fh)
+    first = ok[0]
+    return jsonify({"token": token, "files": files, "zip_name": zip_name, "forms": [x["form"] for x in ok],
+                    "out_name": first["out_name"], "report": first["report"]})
+
+
+def _acord_meta(token):
+    import json as _json
+    try:
+        with open(os.path.join(_ACORD125_DIR, token + ".json")) as fh:
+            return _json.load(fh)
+    except Exception:
+        return {"zip_name": "", "files": {}}
 
 
 @app.route("/acord125/download/<token>", methods=["GET"])
-def acord125_download(token):
-    if not token.isalnum():
+@app.route("/acord125/download/<token>/<form>", methods=["GET"])
+def acord125_download(token, form=None):
+    if not token.isalnum() or (form and form not in _ACORD_FORMS + ("zip",)):
         return ("Not found", 404)
-    pdf = os.path.join(_ACORD125_DIR, token + ".pdf")
+    meta = _acord_meta(token)
+    if form == "zip":
+        path = os.path.join(_ACORD125_DIR, token + ".zip")
+        if not os.path.exists(path):
+            return ("That download has expired - generate the forms again.", 404)
+        return send_file(path, as_attachment=True, download_name=meta.get("zip_name") or "ACORD forms.zip", mimetype="application/zip")
+    if not form:  # older single-form links
+        form = next((x for x in _ACORD_FORMS if x in meta.get("files", {})), "125")
+    pdf = os.path.join(_ACORD125_DIR, "%s_%s.pdf" % (token, form))
     if not os.path.exists(pdf):
-        return ("That download has expired - generate the ACORD 125 again.", 404)
-    name = "ACORD 125.pdf"
-    try:
-        with open(os.path.join(_ACORD125_DIR, token + ".name")) as fh:
-            name = fh.read().strip() or name
-    except Exception:
-        pass
+        return ("That download has expired - generate the ACORD %s again." % form, 404)
+    name = meta.get("files", {}).get(form) or ("ACORD %s.pdf" % form)
     return send_file(pdf, as_attachment=True, download_name=name, mimetype="application/pdf")
 
 
