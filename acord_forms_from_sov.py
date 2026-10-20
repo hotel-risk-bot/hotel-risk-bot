@@ -398,14 +398,17 @@ def wipe_text(doc, w):
     doc.xref_set_key(w.xref, "AP", "null")
 
 
-def fill(blank, values, font_rules=None, rename=None, shrink=True):
+def fill(blank, values, font_rules=None, rename=None, shrink=True, pages=None):
     """Fill a copy of `blank`. values: field name -> str / bool. font_rules: list of
     (regex, size). Text that does not fit its widget is shrunk down to 5.5 pt.
-    rename: suffix appended to every field name (unique names for duplicated pages)."""
+    rename: suffix appended to every field name (unique names for duplicated pages).
+    pages: page indices to process (default all; a duplicated page only needs its own)."""
     doc = pymupdf.open(blank)
     seen = set()
     font_rules = font_rules or []
-    for page in doc:
+    for pno, page in enumerate(doc):
+        if pages is not None and pno not in pages:
+            continue
         for a in list(page.annots(types=[pymupdf.PDF_ANNOT_HIGHLIGHT])):
             page.delete_annot(a)
         for w in page.widgets():
@@ -700,7 +703,7 @@ def generate_140(ctx, out_path, blank):
         pv = _premises_values(d, ctx, "B", "GHIJK", blanks, "CommercialProperty_Premises_RemarkText_C")
         pv["Producer_FullName_A"] = PRODUCER_NAME
         pv["CommercialPropertyLineOfBusiness_RemarkText_A"] = "Additional premises %d of %d. Portfolio summary and named insureds on page 2." % (i, len(prem))
-        doc2, _ = fill(blank, pv, rules, rename="_L%sB%s" % (d["Loc #"], d["Building #"]))
+        doc2, _ = fill(blank, pv, rules, rename="_L%sB%s" % (d["Loc #"], d["Building #"]), pages=[1])
         doc.insert_pdf(doc2, from_page=1, to_page=1, start_at=insert_at)
         insert_at += 1
         doc2.close()
