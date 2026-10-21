@@ -1545,6 +1545,16 @@ def _run_extraction(session_id):
                         f"first loc name='{merged_data.get('locations', [{}])[0].get('name', '')}', "
                         f"first loc tiv={merged_data.get('locations', [{}])[0].get('tiv', 0)}")
 
+        # An umbrella program's sponsor (Paramount Real Estate Group, Inc. on Great Point member
+        # quotes) is never one of the client's named insureds - filter again after enrichment.
+        try:
+            from program_sponsor import scrub_program_sponsors
+            _sp_removed = scrub_program_sponsors(merged_data)
+            if _sp_removed:
+                logger.info(f"Program sponsor filter after enrichment: removed {_sp_removed}")
+        except Exception as _sp_err:
+            logger.warning(f"Program sponsor filter failed (non-fatal): {_sp_err}")
+
         # Fallback: populate location name/tiv from GPT extraction when no SOV
         if not session.get("sov_data"):
             locations = merged_data.get("locations", [])

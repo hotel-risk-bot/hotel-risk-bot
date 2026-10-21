@@ -1458,7 +1458,7 @@ def generate_premium_summary(doc, data):
             "The following coverages are presented for consideration and are not included in the total premium above.",
             size=9, color=CHARCOAL, space_after=6)
         
-        # Optional coverages always show only 3 columns: Coverage, Carrier, Proposed Premium
+        # Optional coverages always show only 3 columns: Coverage, Carrier, Premium Indication
         # No expiring, $ change, or % change since these are new coverage recommendations
         opt_simple_rows = []
         for orow in optional_rows:
@@ -1471,7 +1471,9 @@ def generate_premium_summary(doc, data):
                 proposed_val = orow[2] if len(orow) > 2 else "N/A"
             opt_simple_rows.append([cov_name, carrier_name, proposed_val])
         
-        opt_headers = ["Coverage", "Carrier", "Proposed Premium"]
+        # "Premium Indication" (Stefan, Oct 20 2026): these lines are not quoted or bound,
+        # so the column must not read like a proposed premium.
+        opt_headers = ["Coverage", "Carrier", "Premium Indication"]
         opt_table = create_styled_table(doc, opt_headers, opt_simple_rows,
                                       col_widths=[2.0, 2.5, 1.5],
                                       header_size=10, body_size=10,
@@ -1525,6 +1527,27 @@ def generate_payment_options(doc, data):
             if terms or po.get("mep"):
                 filtered_opts.append({"carrier": carrier, "coverage_type": po.get("coverage_type", ""), "terms": terms, "mep": po.get("mep", "")})
         
+        # One row per carrier and policy type: the model sometimes returns each plan of a
+        # payment table as its own row (Markel WC: six rows, Oct 20 2026).
+        _grouped, _order = {}, []
+        for po in filtered_opts:
+            _gk = (str(po.get("carrier") or "").strip().lower(), str(po.get("coverage_type") or "").strip().lower())
+            if _gk not in _grouped:
+                _grouped[_gk] = dict(po)
+                _grouped[_gk]["_terms"] = [po.get("terms", "")] if po.get("terms") else []
+                _grouped[_gk]["_mep"] = [str(po.get("mep"))] if po.get("mep") not in (None, "") else []
+                _order.append(_gk)
+            else:
+                if po.get("terms") and po["terms"] not in _grouped[_gk]["_terms"]:
+                    _grouped[_gk]["_terms"].append(po["terms"])
+                if po.get("mep") not in (None, "") and str(po["mep"]) not in _grouped[_gk]["_mep"]:
+                    _grouped[_gk]["_mep"].append(str(po["mep"]))
+        filtered_opts = []
+        for _gk in _order:
+            _g = _grouped[_gk]
+            _g["terms"] = "\n".join(_g.pop("_terms"))
+            _g["mep"] = "; ".join(_g.pop("_mep"))
+            filtered_opts.append(_g)
         if filtered_opts:
             headers = ["Carrier — Policy Type", "Payment Terms", "Min. Earned Premium"]
             rows = []
@@ -1629,6 +1652,18 @@ def generate_subjectivities(doc, data):
 # normalisers just above _sanitize_for_render (search "def _proper_case").
 
 
+def _is_sponsor_name(name, data):
+    """True for an umbrella program's sponsor (Paramount Real Estate Group, Inc. on Great Point
+    member quotes) - the master-policy holder, never one of the client's named insureds
+    (Stefan, Oct 20 2026). See program_sponsor.py."""
+    try:
+        from program_sponsor import is_program_sponsor
+    except Exception:
+        return False
+    nm = name.get("name", "") if isinstance(name, dict) else name
+    return bool(nm) and is_program_sponsor(nm, (data or {}).get("program_sponsors") or [])
+
+
 def generate_named_insureds(doc, data):
     """Section 6: Named Insureds"""
     add_page_break(doc)
@@ -1672,6 +1707,8 @@ def generate_named_insureds(doc, data):
         else:
             ni_name = str(ni)
             ni_dba = ""
+        if _is_sponsor_name(ni_name, data):
+            continue
         # Sanitize: remove hallucinated brand concatenations
         ni_name = _sanitize_named_insured(ni_name)
         if ni_dba:
@@ -1729,6 +1766,8 @@ def generate_named_insureds(doc, data):
         """Add entity to `named` if it has a corp suffix and isn't already present."""
         entity_name = _sanitize_named_insured((entity_name or "").strip())
         if not entity_name or not _has_corp_suffix(entity_name):
+            return
+        if _is_sponsor_name(entity_name, data):
             return
         key = _ni_norm(entity_name)
         if not key:
@@ -1805,6 +1844,8 @@ def generate_named_insureds(doc, data):
                 display = f"{name} DBA {dba}" if dba else name
             else:
                 display = str(ani)
+            if _is_sponsor_name(ani, data):
+                continue
             # Check if this entity is already in the named insureds table
             display_upper = display.strip().upper()
             # Also check partial matches (name without DBA)
@@ -1827,12 +1868,14 @@ def generate_named_insureds(doc, data):
                                header_size=10, body_size=10)
     
     # Additional Insureds
-    addl_insureds = data.get("additional_insureds", [])
+    addl_insureds = [a for a in (data.get("additional_insureds", []) or [])
+                     if not _is_sponsor_name(a, data)]
     if addl_insureds:
         add_subsection_header(doc, "Additional Insureds")
         headers = ["#", "Additional Insured", "Relationship"]
         rows = []
-        for i, ai in enumerate(addl_insureds, 1):
+        for ai in addl_insureds:
+            i = len(rows) + 1
             if isinstance(ai, dict):
                 rows.append([str(i), ai.get("name", ""), ai.get("relationship", "")])
             else:
@@ -1887,6 +1930,8 @@ def generate_named_insureds(doc, data):
                 ani_name = str(ani)
                 ani_loc = ""
             if not ani_name.strip():
+                continue
+            if _is_sponsor_name(ani_name, data):
                 continue
             if ani_name.strip().upper() in _all_shown_names:
                 continue
@@ -4451,6 +4496,37 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     if _hb and _hb.get("detected") and cov.get("earned_premium_disclosure"):
         _render_hotelbound_earned_premium(doc, cov, _hb)
 
+    # Terrorism Liability Extension (terrorism_liability.py, Oct 20 2026): the liability part of a
+    # standalone terrorism policy (AEGIS Terror Shield "General Liability Extension (Act of
+    # Terrorism, Act of Sabotage) (Claims Made and Reported)" - $2M each claim / aggregate,
+    # claims made and reported, retroactive date, defense within limits). Vista Lodging missed it.
+    _tle = cov.get("liability_extension") if str(coverage_key).startswith("terrorism") else None
+    if isinstance(_tle, dict) and (_tle.get("limit_each") or str(_tle.get("limit") or "").strip()):
+        try:
+            from terrorism_liability import describe_terms
+            _si = ""
+            for _lim in (cov.get("limits") or []):
+                if not isinstance(_lim, dict):
+                    continue
+                _ld = str(_lim.get("description") or "").lower()
+                if "liability" in _ld:
+                    continue
+                _lv = str(_lim.get("limit") or "")
+                _m_si = re.search(r"\$\s?\d{1,3}(?:,\d{3})+", _lv)
+                if _m_si and ("occurrence" in _ld or "sum insured" in _ld or "terrorism" in _ld or "policy limit" in _ld):
+                    _si = _m_si.group(0)
+                    break
+            _tle_rows = describe_terms(_tle, _si)
+        except Exception as _tle_err:
+            logger.warning(f"Terrorism liability extension rows failed (non-fatal): {_tle_err}")
+            _tle_rows = [[str(k).replace("_", " ").title(), str(v)] for k, v in _tle.items()
+                         if isinstance(v, str) and v.strip()]
+        if _tle_rows:
+            add_subsection_header(doc, "Terrorism Liability Extension")
+            _Lx = WD_ALIGN_PARAGRAPH.LEFT
+            create_styled_table(doc, ["Item", "Details"], _tle_rows, col_widths=[2.0, 5.5],
+                                header_size=10, body_size=9, header_alignments={0: _Lx, 1: _Lx})
+
     # Layer Description (Excess Property)
     layer_desc = cov.get("layer_description", "")
     if layer_desc and coverage_key in ("excess_property", "excess_property_2"):
@@ -4558,19 +4634,54 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         rating = [rating]          # a single row or a one-line basis ("Sales") — never crash on it
     if isinstance(rating, list) and rating:
         add_subsection_header(doc, "Rating Basis")
-        headers = ["State", "Location", "Class Code", "Classification", "Payroll", "Rate"]
         rows = []
         for r in rating:
             if isinstance(r, dict):
                 rows.append([str(r.get("state", "") or ""), str(r.get("location", "") or ""), str(r.get("class_code", "") or ""),
                              str(r.get("classification", "") or r.get("description", "") or ""),
-                             str(r.get("payroll", "") or r.get("exposure", "") or ""), str(r.get("rate", "") or "")])
+                             str(r.get("payroll", "") or r.get("exposure", "") or ""), str(r.get("rate", "") or ""),
+                             str(r.get("premium", "") or "")])
             elif r not in (None, ""):
-                rows.append(["", "", "", str(r), "", ""])
+                rows.append(["", "", "", str(r), "", "", ""])
         if rows:
-            create_styled_table(doc, headers, rows,
-                              col_widths=[0.6, 1.5, 0.8, 2.0, 1.2, 0.9],
-                              header_size=9, body_size=9)
+            # Columns with nothing in them are left out (Markel prints no location; most
+            # quotes print a premium per class row) - Oct 20 2026.
+            _rb_cols = [("State", 0.6), ("Location", 1.4), ("Class Code", 0.8), ("Classification", 2.2),
+                        ("Payroll", 1.1), ("Rate", 0.7), ("Premium", 0.9)]
+            _keep = [i for i, _c in enumerate(_rb_cols) if i in (0, 2, 3) or any(str(r[i]).strip() for r in rows)]
+            _w = [_rb_cols[i][1] for i in _keep]
+            _scale = 7.5 / sum(_w) if sum(_w) else 1
+            _R = WD_ALIGN_PARAGRAPH.RIGHT
+            _hdr = [_rb_cols[i][0] for i in _keep]
+            _al = {j: _R for j, i in enumerate(_keep) if _rb_cols[i][0] in ("Payroll", "Rate", "Premium")}
+            create_styled_table(doc, _hdr, [[r[i] for i in _keep] for r in rows],
+                              col_widths=[x * _scale for x in _w],
+                              header_size=9, body_size=9, col_alignments=_al)
+
+    # Premium Development (WC rating worksheet: manual premium -> final premium; Oct 20 2026)
+    _pdev = cov.get("premium_development") or []
+    if isinstance(_pdev, (str, dict)):
+        _pdev = [_pdev]
+    _pdev_rows = []
+    for _pr in (_pdev if isinstance(_pdev, list) else []):
+        if isinstance(_pr, dict):
+            _it = str(_pr.get("item") or _pr.get("description") or _pr.get("label") or "").strip()
+            if _it:
+                _pdev_rows.append([_it, str(_pr.get("factor") or "").strip(), str(_pr.get("amount") or "").strip()])
+        elif isinstance(_pr, str) and _pr.strip():
+            _pdev_rows.append([_pr.strip(), "", ""])
+    if _pdev_rows:
+        add_subsection_header(doc, "Premium Development")
+        _Lp, _Cp, _Rp = WD_ALIGN_PARAGRAPH.LEFT, WD_ALIGN_PARAGRAPH.CENTER, WD_ALIGN_PARAGRAPH.RIGHT
+        _pdev_tbl = create_styled_table(doc, ["Rating Step", "Factor", "Amount"], _pdev_rows,
+                                        col_widths=[4.6, 1.6, 1.3], header_size=9, body_size=9,
+                                        header_alignments={0: _Lp, 1: _Cp, 2: _Rp},
+                                        col_alignments={1: _Cp, 2: _Rp})
+        if _pdev_rows[-1][0].lower().startswith(("final", "total", "estimated annual")):
+            for _cell in _pdev_tbl.rows[-1].cells:
+                for _pp in _cell.paragraphs:
+                    for _rr in _pp.runs:
+                        _rr.font.bold = True
     
     # Vehicle Schedule (Auto)
     vehicles = cov.get("vehicle_schedule", [])
@@ -4786,6 +4897,22 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                     size=8.5, italic=True, color=CHARCOAL, space_after=6)
         except Exception as _note_err:
             logger.warning(f"Forms note failed (non-fatal): {_note_err}")
+    elif coverage_key in _critical_form_coverages and str(coverage_key).startswith("workers_comp"):
+        # A WC quote rarely prints a forms schedule; the policy is written on the carrier's filed
+        # workers compensation and employers liability forms for the rating state(s).
+        try:
+            from workers_comp_quote import _STATES as _WC_STATE_NAMES
+        except Exception:
+            _WC_STATE_NAMES = {}
+        _wc_states = ", ".join(_WC_STATE_NAMES.get(str(x).upper(), str(x))
+                               for x in (cov.get("rating_states") or []) if x)
+        add_subsection_header(doc, "Forms & Endorsements")
+        add_formatted_paragraph(doc,
+            "The carrier quote does not include a forms schedule. Coverage is written on the carrier's filed "
+            "workers compensation and employers liability policy forms"
+            + (f" for {_wc_states}" if _wc_states else "")
+            + "; the forms and state endorsements will be confirmed on the issued policy.",
+            size=9, italic=True, color=CHARCOAL, space_after=6)
     elif coverage_key in _critical_form_coverages:
         add_subsection_header(doc, "Forms & Endorsements")
         add_formatted_paragraph(doc,
@@ -4799,6 +4926,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     # Also check additional_insureds (some extractors use this key)
     if not ani_list:
         ani_list = cov.get("additional_insureds", []) or []
+    ani_list = [a for a in ani_list if not _is_sponsor_name(a, data)]
     if ani_list:
         add_subsection_header(doc, "Additional Named Insureds")
         # Cross-reference with SOV data to match insureds to hotels
@@ -5677,7 +5805,7 @@ _SAN_ROW_LISTS = {
     "tower_structure": "layer_description", "policy_attachments": "description",
     "vehicle_schedule": "description", "vehicles": "description", "drivers": "name",
     "insuring_clauses": "description", "insuring_agreements": "description",
-    "payment_options": "terms", "warnings": None,
+    "payment_options": "terms", "warnings": None, "premium_development": "item",
 }
 # keys that are always dicts
 _SAN_DICT_KEYS = frozenset({"client_info", "coverages", "expiring_premiums", "expiring_details",
@@ -5715,7 +5843,7 @@ _PC_SMALL_WORDS = frozenset({
 })
 # all-caps tokens that stay exactly as written (acronyms, abbreviations)
 _PC_ACRONYMS = frozenset({
-    "LLC", "LLP", "LLLP", "LP", "PLC", "PLLC", "DBA", "USA", "US", "UK", "TIV", "TRIA", "OFAC",
+    "USD", "LLC", "LLP", "LLLP", "LP", "PLC", "PLLC", "DBA", "USA", "US", "UK", "TIV", "TRIA", "OFAC",
     "EPLI", "EPL", "GL", "CGL", "BOP", "CPP", "ACV", "RCV", "BI", "BIPD", "PD", "EB", "ISO",
     "NFIP", "FEMA", "EIFS", "HVAC", "UM", "UIM", "PIP", "CSL", "AOP", "WC", "SIR", "MEP",
     "TPA", "ATM", "IT", "VIN", "ID", "TBD", "HNOA", "HNO", "XS", "RMS", "AIR", "ESP", "SRL", "ACORD", "ERISA", "PFAS",
@@ -5867,12 +5995,19 @@ def _proper_case(text):
     return _PC_CAPS_RUN_RE.sub(_run, text)
 
 
+_USD_AMOUNT_RE = re.compile(r"\b(?:USD|US\$)\s?(?=\d)", re.I)
+_USD_WORD_RE = re.compile(r"\bUSD\s+(?=(?:Included|Not Covered|Not Insured|Excluded|Nil)\b)", re.I)
+
+
 def _tidy_text(value, key=""):
-    """Rendering-ready text: drop ".00" cents from dollar amounts and re-case
-    shouting strings. Code-like keys are returned untouched."""
+    """Rendering-ready text: "USD 11,400,000.00" reads "$11,400,000" (Lloyd's schedules,
+    Oct 20 2026), drop ".00" cents from dollar amounts and re-case shouting strings.
+    Code-like keys are returned untouched."""
     if not isinstance(value, str) or key in _SAN_RAW_KEYS:
         return value
-    v = _PC_CENTS_RE.sub(r"\1", value)
+    v = _USD_AMOUNT_RE.sub("$", value)
+    v = _USD_WORD_RE.sub("", v)
+    v = _PC_CENTS_RE.sub(r"\1", v)
     return _proper_case(v)
 
 

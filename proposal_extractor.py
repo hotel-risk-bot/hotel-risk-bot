@@ -135,6 +135,12 @@ BOILERPLATE_KEYWORDS = [
 ]
 
 
+_CRITICAL_PAGE_PATTERNS = (
+    re.compile(r"LIMITS?\s+OF\s+LIABILITY\s*:\s*(?:USD|US\$|\$)\s*\d"),
+    re.compile(r"RETROACTIVE\s+DATE\s*:\s*(?:\d{1,2}[/ ]|[A-Z]+\s+\d{1,2},?\s+\d{4})"),
+)
+
+
 def _score_page(page_text: str) -> float:
     """
     Score a PDF page based on how likely it contains important quote data.
@@ -191,6 +197,16 @@ def _score_page(page_text: str) -> float:
             score += 50.0  # Massive boost - these pages are NEVER dropped
             is_critical = True
             break
+    # Schedule lines with an amount or a date (Oct 20 2026): a declarations / endorsement
+    # schedule such as the AEGIS Terror Shield "General Liability Extension" page
+    # ("3. Limit of Liability:  USD 2,000,000 each and every Claim", "6. Retroactive Date:
+    # 30 October 2026") scored 6 and fell outside the text the model saw (Vista Lodging).
+    if not is_critical:
+        for _rx in _CRITICAL_PAGE_PATTERNS:
+            if _rx.search(text_upper):
+                score += 50.0
+                is_critical = True
+                break
 
     # Positive signals: quote/summary content
     for keyword in QUOTE_PAGE_KEYWORDS:
@@ -1648,8 +1664,12 @@ The JSON structure should be:
       ],
       "deductible": {{"amount": "$X", "type": "Per Claim or Per Accident"}},
       "rating_basis": [
-        {{"state": "XX", "location": "1", "class_code": "XXXX", "classification": "Hotels", "payroll": "$X", "rate": "X.XX"}}
+        {{"state": "XX", "location": "1", "class_code": "XXXX", "classification": "Hotels", "payroll": "$X", "rate": "X.XX (manual rate per $100 of payroll)", "premium": "$X"}}
       ],
+      "premium_development": [
+        {{"item": "Each rating step between the manual premium and the final premium, in order (increased limits, small employer credit, schedule rating, experience mod, premium discount, expense constant, terrorism, catastrophe)", "factor": "printed factor (e.g. -0.300)", "amount": "$X"}}
+      ],
+      "policy_period": "MM/DD/YYYY - MM/DD/YYYY",
       "forms_endorsements": [],
       "subjectivities": []
     }},
@@ -1716,6 +1736,15 @@ The JSON structure should be:
         {{"description": "Certified Acts of Terrorism", "limit": "$X or Policy Limit"}},
         {{"description": "Non-Certified Acts / Active Assailant", "limit": "$X or N/A"}}
       ],
+      "liability_extension": {{
+        "title": "Title of the policy's liability extension endorsement, e.g. General Liability Extension (Act of Terrorism, Act of Sabotage) (Claims Made and Reported)",
+        "limit": "$X each and every claim / $X aggregate",
+        "deductible": "$X each and every claim",
+        "trigger": "Claims made and reported / Claims made / Occurrence",
+        "retroactive_date": "MM/DD/YYYY",
+        "defense_within_limits": true,
+        "part_of_sum_insured": true
+      }},
       "additional_coverages": [
         {{"description": "Coverage name", "limit": "$X"}}
       ],
@@ -1824,6 +1853,9 @@ The JSON structure should be:
 
 IMPORTANT:
 - COVERAGE CLASSIFICATION: A standalone terrorism/TRIA policy is NOT general liability. If a document is from Lloyd's of London, AEGIS, or similar and covers ONLY terrorism/TRIA/certified acts of terrorism/active assailant, classify it as "terrorism" NOT "general_liability". General Liability covers bodily injury, property damage, personal & advertising injury with occurrence/aggregate limits. Terrorism covers certified/non-certified acts of terrorism. If a single policy bundles both, put the terrorism portion in "terrorism" and the GL portion in "general_liability".
+- TERRORISM LIABILITY EXTENSION: Terrorism policies (AEGIS Terror Shield, Lloyd's terrorism and sabotage) often attach a liability endorsement with its OWN schedule, e.g. "General Liability Extension (Act of Terrorism, Act of Sabotage) (Claims Made and Reported)" with "Limit of Liability: USD 2,000,000 each and every Claim and in the aggregate", "Deductible: USD 5,000 each and every Claim", "Retroactive Date: 30 October 2026". It belongs to the terrorism coverage: fill terrorism.liability_extension and add a terrorism limits row "Terrorism Liability (General Liability Extension)". It is NEVER the general_liability coverage, even though its title says General Liability.
+- WORKERS COMPENSATION: workers compensation is written by admitted (licensed) carriers - set carrier_admitted true unless the quote explicitly says surplus lines or non-admitted. limits = "Workers Compensation" Statutory plus the three Employers Liability limits ("Liability Limit: 1000/1000/1000" = $1,000,000 each accident / disease policy limit / disease each employee). rating_basis.rate is the manual rate per $100 of payroll: the number that reproduces the row premium (payroll / 100 x rate). Markel / mPortal quotes print Payroll, Net Rate, PR Net Rate, Rate, Premium - the net rates (marked *) are for comparison only. premium and total_premium = the Final Premium. State fraud warnings and policyholder notices are not forms; list forms only from a forms schedule.
+- PROGRAM / MEMBER UMBRELLA QUOTES: Great Point Insurance and similar member programs print the program sponsor that holds the master policy as "Named Insured" (e.g. "Named Insured: Paramount Real Estate Group, Inc." ... "Insured: <client>", "offered through the Paramount Real Estate Group, Inc.", "Member Coverage Period"). The sponsor is NOT an insured of this client: never put it in named_insureds, additional_named_insureds or client_info; the umbrella's named_insured is the client entity shown as "Insured".
 - EQUIPMENT BREAKDOWN / BOILER & MACHINERY CLASSIFICATION: A standalone Equipment Breakdown or Boiler & Machinery policy is NOT workers compensation, NOT property, and NOT inland marine — it goes in the "equipment_breakdown" slot. Telltale signs of an EB / B&M quote: the Coverage Part declaration is titled "EQUIPMENT BREAKDOWN PROTECTION DECLARATIONS", "EnergyMax 21", "BOILER AND MACHINERY", or "EQUIPMENT BREAKDOWN COVERAGE FORM"; form numbers begin with "EB ", "BM ", "MB ", or "EBP "; the insuring company is "The Phoenix Insurance Company" (Travelers' B&M company, PHX abbreviation), "Hartford Steam Boiler" (HSB), "FM Global", "Mutual Boiler Re", or similar. Typical limits include "Total Limit per Breakdown", "Property Damage" (often shown as INCLUDED), "Business Income Coverage Extension" with a coinsurance/months indicator ("1/6" = 2-month BI), "Spoilage", "Hazardous Substances", "Data Restoration", "Service Interruption". CRITICAL: do not let a low premium (e.g., $666), a "Provisional Premium / Due at Inception / Due at Each Anniversary" payment schedule, or an admitted-market-sounding carrier name push you into the workers_comp bucket — EB policies routinely have small premiums and use audit-style anniversary billing, but they are NEVER workers comp. If the policy mentions Workers Compensation Statutory limits or Employers Liability (EL — Each Accident / Disease Policy Limit / Disease Each Employee), it is workers_comp; otherwise if the dec page says Equipment Breakdown / Boiler & Machinery / EnergyMax, it is equipment_breakdown.
 - Only include coverage sections that appear in the documents
 - Extract EVERY form number and endorsement exactly as written
@@ -3157,6 +3189,26 @@ TEXT:
                     logger.info(f"Premium reconciliation adjusted {len(_pn)} coverage(s)")
             except Exception as _pr_err:
                 logger.warning(f"Premium reconciliation failed (non-fatal): {_pr_err}")
+
+            # QUOTE DETAIL PASSES (Oct 20 2026, Vista Lodging): deterministic reads of what the
+            # model missed or misread on three kinds of quote. Each one is non-fatal.
+            #  - terrorism_liability: the liability extension schedule of a terrorism policy
+            #    (AEGIS Terror Shield printed page 40: $2M each claim / aggregate, claims made)
+            #  - workers_comp_quote: admitted status, rating basis, premium build-up and payment
+            #    plans from the printed WC quote (Markel mPortal)
+            #  - program_sponsor: the umbrella program's sponsor (Paramount Real Estate Group,
+            #    Inc.) never appears as one of the client's named insureds
+            _qd_items = [{"filename": it.get("filename", ""), "text": it.get("text", "")} for it in all_items]
+            for _mod, _fn in (("terrorism_liability", "run_terrorism_liability_pass"),
+                              ("workers_comp_quote", "run_workers_comp_pass"),
+                              ("program_sponsor", "run_program_sponsor_pass")):
+                try:
+                    _pass = getattr(__import__(_mod), _fn)
+                    _qn = _pass(data, _qd_items)
+                    if _qn:
+                        logger.info(f"{_mod}: {len(_qn)} note(s)")
+                except Exception as _qd_err:
+                    logger.warning(f"{_mod} pass failed (non-fatal): {_qd_err}")
 
             return data
 
