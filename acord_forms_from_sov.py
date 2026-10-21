@@ -45,6 +45,7 @@ import collections
 import pymupdf
 
 import acord125_from_sov as A
+from acord_appearance import write_text_appearance, write_check_appearance, fit_single, fit_multi, wrap as bold_wrap
 from acord125_from_sov import g, money, num, nval, parse_addr, yes, entity_type, is_vacant, is_office, is_hotel, parse_eff, fmt_flag
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -344,32 +345,14 @@ def wrap(text, size, width=510, font="helv"):
     return lines or [""]
 
 
-def fit_size(text, width, base=8.0, floor=5.5, font="helv"):
-    """Largest font size (<= base) at which `text` fits in `width` points."""
-    size = base
-    while size > floor and pymupdf.get_text_length(str(text), fontname=font, fontsize=size) > width - 3:
-        size -= 0.5
-    return size
+def fit_size(text, width, base=8.0, floor=5.5):
+    """Largest font size (<= base) at which `text` fits in `width` points (bold metrics)."""
+    return fit_single(text, width, base, floor)
 
 
 def fit_box(text, width, height, base=8.0, floor=5.5):
-    """(size, text) so that the wrapped text fits a multi-line widget; the text is
-    cut with ' ...' when it does not fit even at the smallest size."""
-    size = base
-    while size >= floor:
-        lines = wrap(text, size, width - 6)
-        if len(lines) * size * 1.16 <= height - 1:
-            return size, text
-        size -= 0.5
-    size = floor
-    max_lines = max(1, int((height - 1) / (size * 1.16)))
-    words = str(text).split(" ")
-    while words:
-        words = words[:-1]
-        cand = " ".join(words) + " ..."
-        if len(wrap(cand, size, width - 6)) <= max_lines:
-            return size, cand
-    return size, ""
+    """(size, text) so that the wrapped text fits a multi-line widget (bold metrics)."""
+    return fit_multi(text, width, height, base, floor)
 
 
 def field_head(doc, xref):
@@ -414,6 +397,7 @@ def fill(blank, values, font_rules=None, rename=None, shrink=True, pages=None):
         for w in page.widgets():
             n = w.field_name
             seen.add(n)
+            val = ""
             if w.field_type == pymupdf.PDF_WIDGET_TYPE_CHECKBOX:
                 w.field_value = bool(values.get(n, False))
             elif w.field_type == pymupdf.PDF_WIDGET_TYPE_TEXT:
@@ -425,20 +409,25 @@ def fill(blank, values, font_rules=None, rename=None, shrink=True, pages=None):
                     if re.search(rx, n):
                         w.text_fontsize = size
                         break
+                base = w.text_fontsize or 8.0
+                if base == 0:
+                    base = 8.0
                 if val and shrink:
-                    base = w.text_fontsize or 8.0
-                    if base == 0:
-                        base = 8.0
                     if w.rect.height < 20:  # single-line widget
-                        sz = fit_size(val, w.rect.width, base=base)
+                        sz = fit_single(val, w.rect.width, base)
                     else:                   # multi-line box: wrap, shrink, then cut
-                        sz, val = fit_box(val, w.rect.width, w.rect.height, base=base)
+                        sz, val = fit_multi(val, w.rect.width, w.rect.height, base)
                     if sz < base:
                         w.text_fontsize = sz
                 w.field_value = val
             else:
                 continue
             w.update()
+            # MuPDF draws widget text in regular Helvetica only; redraw in bold (darker)
+            if w.field_type == pymupdf.PDF_WIDGET_TYPE_TEXT and val:
+                write_text_appearance(doc, w, val, w.text_fontsize or base)
+            elif w.field_type == pymupdf.PDF_WIDGET_TYPE_CHECKBOX and w.field_value:
+                write_check_appearance(doc, w)
             if rename:
                 head = field_head(doc, w.xref)
                 doc.xref_set_key(head, "T", "(%s%s)" % (n, rename))
@@ -1036,7 +1025,7 @@ def generate_130(ctx, out_path, blank):
         V["WorkersCompensation_RateClass_EstimatedRemuneration_%s" % s] = pay
     V["WorkersCompensation_AdditionalClassCodesIndicator_A"] = len(rating) > 5
     # nature of business
-    flags = sorted({flag_short(d) for d in hotels if flag_short(d)})
+    flags = sorted({x.strip() for d in hotels for x in str(flag_short(d) or "").split("|") if x.strip()})
     rooms = int(sum(nval(g(d, "# of Rooms")) for d in hotels))
     non_hotel = [d for d in rows if loc_type(d) != "Hotel"]
     rest_locs = [str(d["Loc #"]) for d in rows if yes(g(d, "Restaurant"))]

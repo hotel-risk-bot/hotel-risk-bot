@@ -31,6 +31,11 @@ import collections
 
 import pymupdf
 
+try:
+    from acord_appearance import write_text_appearance, write_check_appearance, fit_single, fit_multi
+except Exception:  # pragma: no cover - module missing on an old deploy
+    write_text_appearance = write_check_appearance = fit_single = fit_multi = None
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_BLANK = os.path.join(HERE, "assets", "acord125_blank.pdf")
 
@@ -511,7 +516,7 @@ def generate(sov_path, out_path, first_named_insured=None, blank_path=None, toda
     V["BusinessInformation_BusinessType_OtherIndicator_A"] = True
     V["BusinessInformation_BusinessType_OtherDescription_A"] = "Hotels / Hospitality"
 
-    flags = sorted({fmt_flag(d) for d in hotels if fmt_flag(d)})
+    flags = sorted({x.strip() for d in hotels for x in str(fmt_flag(d) or "").split("|") if x.strip()})
     others = []
     office_locs = [str(d["Loc #"]) for d in locs if is_office(d) and not is_vacant(d)]
     vacant_locs = [str(d["Loc #"]) for d in locs if is_vacant(d)]
@@ -659,10 +664,23 @@ def generate(sov_path, out_path, first_named_insured=None, blank_path=None, toda
                         doc.xref_set_key(w.xref, "AP", "null")
                     if n.startswith("BuildingOccupancy_OperationsDescription_"):
                         w.text_fontsize = 7
+                    base = w.text_fontsize or 8.0
+                    if val and fit_single:
+                        if w.rect.height < 20:
+                            sz = fit_single(val, w.rect.width, base)
+                        else:
+                            sz, val = fit_multi(val, w.rect.width, w.rect.height, base)
+                        if sz < base:
+                            w.text_fontsize = sz
                     w.field_value = val
                 else:
                     continue
                 w.update()
+                # MuPDF draws widget text in regular Helvetica only; redraw in bold (darker)
+                if write_text_appearance and w.field_type == pymupdf.PDF_WIDGET_TYPE_TEXT and w.field_value:
+                    write_text_appearance(doc, w, str(w.field_value), w.text_fontsize or 8.0)
+                elif write_check_appearance and w.field_type == pymupdf.PDF_WIDGET_TYPE_CHECKBOX and w.field_value:
+                    write_check_appearance(doc, w)
                 if rename:
                     doc.xref_set_key(w.xref, "T", "(%s%s)" % (n, rename))
         return doc, seen
