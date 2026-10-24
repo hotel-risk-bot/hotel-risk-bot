@@ -132,6 +132,8 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+import log_redact  # noqa: E402
+log_redact.install()  # keeps the Telegram bot token and API keys out of the logs
 logger = logging.getLogger(__name__)
 
 

@@ -1073,5 +1073,7 @@ def run_organize_sync():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    import log_redact
+    log_redact.install()
     results = run_organize_sync()
     print(json.dumps(results, indent=2))
