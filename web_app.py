@@ -23,6 +23,8 @@ from extraction_validator import validate_extraction
 from sov_parser import parse_sov, is_sov_file, aggregate_locations
 
 logging.basicConfig(level=logging.INFO)
+import log_redact  # noqa: E402
+log_redact.install()  # keeps API keys and the Telegram bot token out of the logs
 logger = logging.getLogger(__name__)
 
 # ─── Launch Telegram bot as a subprocess alongside the web app ───
