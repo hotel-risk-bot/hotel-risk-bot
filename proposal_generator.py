@@ -1631,17 +1631,36 @@ def generate_subjectivities(doc, data):
     if "general_liability_alt_2" in coverages:
         coverage_names["general_liability_alt_2"] = _gl_alt_label(coverages, "general_liability_alt_2", 3)
 
+    # Carrier-specific clean-up (subjectivity_rules.py, Stefan Oct 28 2026): PartnerRe umbrella
+    # and Starr property broker-only items never print; PartnerRe paperwork is due in 5 days.
+    try:
+        from subjectivity_rules import clean_items as _clean_subj, _text as _subj_text
+    except Exception:
+        _clean_subj, _subj_text = None, None
     has_subjectivities = False
     for key, display_name in coverage_names.items():
         cov = coverages.get(key)
-        if cov and cov.get("subjectivities"):
+        subs = cov.get("subjectivities") if isinstance(cov, dict) else None
+        if subs and _clean_subj:
+            try:
+                subs, _rm, _ch = _clean_subj(key, cov, list(subs))
+            except Exception as _subj_err:
+                logger.warning(f"Subjectivity rules failed for {key} (non-fatal): {_subj_err}")
+        if isinstance(subs, (str, dict)):
+            subs = [subs]
+        lines = []
+        for subj in (subs or []):
+            txt = (_subj_text(subj) if (_subj_text and isinstance(subj, dict)) else str(subj or "")).strip()
+            if txt:
+                lines.append(txt)
+        if lines:
             has_subjectivities = True
             # Add carrier info with the coverage name
             carrier = _clean_carrier_name(cov.get("carrier", ""))
             header_text = f"{display_name} — {carrier}" if carrier else display_name
             add_subsection_header(doc, header_text)
-            for subj in cov["subjectivities"]:
-                add_formatted_paragraph(doc, f"☐  {subj}", size=10, space_after=3)
+            for txt in lines:
+                add_formatted_paragraph(doc, f"☐  {txt}", size=10, space_after=3)
     
     if not has_subjectivities:
         add_formatted_paragraph(doc, "No subjectivities noted. Please confirm with carrier.", size=11)
@@ -4771,8 +4790,15 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
                           header_size=9, body_size=9)
     
     # ── Terms & Conditions (program templates) ────────────────────────────
+    _tc_src = cov.get("terms_conditions") or []
+    if isinstance(_tc_src, list) and _tc_src:
+        try:
+            from subjectivity_rules import clean_items as _clean_tc
+            _tc_src, _tc_rm, _tc_ch = _clean_tc(coverage_key, cov, list(_tc_src), rewrite=False)
+        except Exception as _tc_err:
+            logger.warning(f"Terms clean-up failed for {coverage_key} (non-fatal): {_tc_err}")
     _terms = [str(t if not isinstance(t, dict) else (t.get("description") or t.get("text") or "")).strip()
-              for t in (cov.get("terms_conditions") or [])]
+              for t in (_tc_src if isinstance(_tc_src, list) else [_tc_src])]
     _terms = [t for t in _terms if t]
     if _terms:
         add_subsection_header(doc, "Terms & Conditions")

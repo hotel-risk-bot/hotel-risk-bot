@@ -3198,10 +3198,13 @@ TEXT:
             #    plans from the printed WC quote (Markel mPortal)
             #  - program_sponsor: the umbrella program's sponsor (Paramount Real Estate Group,
             #    Inc.) never appears as one of the client's named insureds
+            #  - subjectivity_rules (Oct 28 2026): PartnerRe umbrella / Starr property broker-only
+            #    subjectivities left off, PartnerRe paperwork deadlines 30 -> 5 days
             _qd_items = [{"filename": it.get("filename", ""), "text": it.get("text", "")} for it in all_items]
             for _mod, _fn in (("terrorism_liability", "run_terrorism_liability_pass"),
                               ("workers_comp_quote", "run_workers_comp_pass"),
-                              ("program_sponsor", "run_program_sponsor_pass")):
+                              ("program_sponsor", "run_program_sponsor_pass"),
+                              ("subjectivity_rules", "run_subjectivity_rules")):
                 try:
                     _pass = getattr(__import__(_mod), _fn)
                     _qn = _pass(data, _qd_items)

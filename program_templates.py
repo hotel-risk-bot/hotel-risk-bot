@@ -272,19 +272,18 @@ _PARTNERRE_TERMS = [
     "Minimum primary limits (when applicable): General Liability $1,000,000 / $2,000,000 / $1,000,000; "
     "Auto Liability $1,000,000 CSL; Employers Liability $500,000 / $500,000 / $500,000.",
     "Uninsured / Underinsured Motorists coverage, when applicable, is excluded unless otherwise noted.",
-    "The company does not review or approve certificates of insurance; any request to amend coverage "
-    "must be made in writing and approved by the company.",
-    "Completed copies of the underlying policies, including the primary, are required within 60 days; "
-    "failure to provide them by the date specified in the binder will result in policy cancellation.",
-    "25% Minimum Earned Premium. Premium is flat and non-auditable and is due 20 days from the effective date.",
+    # Certificates, underlying-policy copies and the 20-day net premium are the broker's terms with
+    # the program manager, not the client's (Stefan, Oct 28 2026 - see subjectivity_rules.py).
+    "25% Minimum Earned Premium. Premium is flat and non-auditable.",
     "Quotation is valid for 30 days from the quote date.",
 ]
 
+# The client gets 5 days, not the program's 30; underlying-policy copies are the broker's item
+# (Stefan, Oct 28 2026 - see subjectivity_rules.py).
 _PARTNERRE_SUBJECTIVITIES = [
-    "Signed and selected TRIA election (within 30 days of binding)",
-    "Completed surplus lines filing confirmation (within 30 days of binding)",
-    "ACORD 125 and 131 completed and signed by the insured (within 30 days of binding)",
-    "Complete copies of all underlying policies (within 60 days of binding)",
+    "Signed and selected TRIA election (within 5 days of binding)",
+    "Completed surplus lines filing confirmation (within 5 days of binding)",
+    "ACORD 125 and 131 completed and signed by the insured (within 5 days of binding)",
 ]
 
 
