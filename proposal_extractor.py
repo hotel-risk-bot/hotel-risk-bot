@@ -522,11 +522,10 @@ def _ocr_page_verified(pdf_path: str, page: int) -> tuple:
         return b, f"page {page} was read only once (the main read failed), so its figures are unconfirmed", "review"
     if b is None:
         return a, "", ""
-    fig_a, fig_b = _ocr_figures(a), _ocr_figures(b)
-    if fig_a == fig_b:
+    set_a, set_b = set(_ocr_figures(a)), set(_ocr_figures(b))
+    if set_a == set_b:          # same figures (one read listing a repeated figure once more is not a misread)
         return a, "", ""
-    only_a = sorted(set(fig_a) - set(fig_b))
-    only_b = sorted(set(fig_b) - set(fig_a))
+    only_a, only_b = sorted(set_a - set_b), sorted(set_b - set_a)
     logger.warning(f"OCR page {page}: reads disagree ({only_a[:4]} vs {only_b[:4]}); re-reading at 300 DPI")
     try:
         c = _ocr_image(_render_page_b64(pdf_path, page, 300), OCR_MODEL)
@@ -536,17 +535,31 @@ def _ocr_page_verified(pdf_path: str, page: int) -> tuple:
 
     def _show(vals):
         return ", ".join(_ocr_show(v) for v in vals[:6])
+    new_c = []
     if c is not None:
-        fig_c = _ocr_figures(c)
-        if fig_c == fig_a:
+        # The third read settles the figures the two reads disagree on, provided it brings no new
+        # figure of its own (a third version of a number means the page is not reliable).
+        set_c = set(_ocr_figures(c))
+        new_c = sorted(set_c - set_a - set_b)
+        a_ok = not new_c and set(only_a) <= set_c and not (set(only_b) & set_c)
+        b_ok = not new_c and set(only_b) <= set_c and not (set(only_a) & set_c)
+        if not (only_a and only_b):
+            # One read only left figures out (a skipped row): nothing was misread, nothing to report.
+            if only_a and a_ok:
+                return a, "", ""
+            if only_b and b_ok:
+                return c, "", ""
+        elif a_ok:
             return a, (f"page {page}: two reads differed ({_show(only_a)} vs {_show(only_b)}); a third read "
-                       f"confirmed {_show(only_a) or 'the first'}"), "info"
-        if fig_c == fig_b:
+                       f"confirmed {_show(only_a)}"), "info"
+        elif b_ok:
             return c, (f"page {page}: two reads differed ({_show(only_a)} vs {_show(only_b)}); a third read "
-                       f"confirmed {_show(only_b) or 'the second'}"), "info"
+                       f"confirmed {_show(only_b)}"), "info"
     detail = "; ".join(x for x in (("one read: " + _show(only_a)) if only_a else "",
-                                   ("other read: " + _show(only_b)) if only_b else "") if x)
-    return (c if c is not None else a), f"page {page}: the figures could not be confirmed by two reads ({detail})", "review"
+                                   ("other read: " + _show(only_b)) if only_b else "",
+                                   ("third read: " + _show(new_c)) if new_c else "") if x)
+    # Text used: the sharper 300 DPI read when it gave its own version of a figure, else the main read.
+    return (c if new_c else a), f"page {page}: the figures could not be confirmed by two reads ({detail})", "review"
 
 
 def _ocr_pages(pdf_path: str, pages: list) -> dict:

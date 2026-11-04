@@ -103,6 +103,25 @@ pe._ocr_image = plan({"main": [BAD, BAD.replace("$300,000", "$350,000")], "check
 t, n, lvl = pe._ocr_page_verified(pdf, 2)
 check(lvl == "review" and "could not be confirmed" in n and "$1,250,000" in n and "$7,250,000" in n, n)
 
+# 5b. the check read only skipped a row -> re-read has it -> main read, no note
+SKIP = TRUE.replace("Building Personal Property $300,000\n", "")
+calls.clear()
+pe._ocr_image = plan({"main": [TRUE, TRUE], "check": [SKIP]})
+t, n, lvl = pe._ocr_page_verified(pdf, 2)
+check("$300,000" in t and n == "" and lvl == "" and calls.count("main") == 2, (n, calls))
+
+# 5c. a repeated figure listed once more is not a disagreement -> no re-read
+calls.clear()
+pe._ocr_image = plan({"main": [TRUE], "check": [TRUE + "\nNamed Storm: 5%"]})
+t, n, lvl = pe._ocr_page_verified(pdf, 2)
+check(n == "" and calls == ["main", "check"], (n, calls))
+
+# 5d. main misread + check skipped that row -> the re-read's own figure is shown, page flagged
+calls.clear()
+pe._ocr_image = plan({"main": [BAD, TRUE], "check": [TRUE.replace("$7,250,000", "")]})
+t, n, lvl = pe._ocr_page_verified(pdf, 2)
+check(lvl == "review" and "one read: $1,250,000" in n and "third read: $7,250,000" in n and "$7,250,000" in t, n)
+
 # 6. main read fails -> check read used and flagged
 def _fail_main(img_b64, model):
     if model == "main":
