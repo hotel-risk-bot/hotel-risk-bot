@@ -1951,6 +1951,7 @@ def client_email_draft(session_id):
         return jsonify({
             "subject": result.get("subject", ""),
             "body": result.get("body", ""),
+            "missing_exclusions": result.get("missing_exclusions") or [],
             "context": ctx,
         })
     except Exception as e:

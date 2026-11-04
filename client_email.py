@@ -145,8 +145,32 @@ _EXCL_STRIP_RES = (
     re.compile(r"^\s*exclusion\s+of\s+", re.I),
     re.compile(r"\s*[-\u2013\u2014:]*\s*exclusion(\s+endorsement)?\s*(\(broad form\))?\s*$", re.I),
     re.compile(r"^\s*exclusion\s*[-\u2013\u2014:]\s*", re.I),
+    # "excludes No Coverage for Sublimits..." is a double negative in a client email
+    re.compile(r"^\s*no\s+coverage\s+for\s+", re.I),
 )
 _SMALL_WORDS = {"a", "an", "and", "or", "of", "in", "to", "the", "for", "with", "by", "on", "at"}
+# Exclusion titles arrive in capitals, so acronyms cannot be told from words; these stay capitals.
+_TOPIC_ACRONYMS = frozenset({
+    "TRIA", "EPLI", "EPL", "PFAS", "PFOA", "PFOS", "EIFS", "ERISA", "HNOA", "HNO", "TIV", "ADA", "TCPA",
+    "BIPA", "FCRA", "COVID", "COVID-19", "HIV", "NBCR", "CBRN", "CGL", "GL", "ACV", "RCV", "EMF", "UV",
+})
+_ENDORSEMENT_TAIL_RE = re.compile(r"\s*[-\u2013\u2014:]*\s*\bendorsement\s*$", re.I)
+_EXCEPTION_TAIL_RE = re.compile(r"^(.*?)\s+exclusion\s+with\s+(.+?\s+exceptions?)\s*$", re.I)
+
+
+def _title_topic(t, lead_small=False):
+    out = []
+    for i, w in enumerate(t.split()):
+        lw = w.lower()
+        if w.strip("()[]:;,.\"'").upper() in _TOPIC_ACRONYMS:
+            out.append(w.upper())
+        elif (i > 0 or lead_small) and lw in _SMALL_WORDS:
+            out.append(lw)
+        elif w.isupper() or w.islower():
+            out.append("-".join(part[:1].upper() + part[1:].lower() for part in w.split("-")))
+        else:
+            out.append(w)
+    return " ".join(out)
 
 
 def _exclusion_topic(desc):
@@ -154,28 +178,27 @@ def _exclusion_topic(desc):
     'TOTAL FIREARMS EXCLUSION' -> 'Total Firearms';
     'EXCLUSION OF COVERAGE SUBJECT TO SUBLIMITS OR OTHER REDUCED LIMITS IN
     UNDERLYING INSURANCE' -> 'Coverage Subject to Sublimits or Other Reduced
-    Limits in Underlying Insurance'."""
+    Limits in Underlying Insurance';
+    'Cannabis Exclusion With Hemp and Lessor Risk Exceptions' ->
+    'Cannabis (with Hemp and Lessor Risk exceptions)';
+    'No Coverage for Sublimits of Insurance Endorsement' -> 'No Coverage for Sublimits of Insurance'."""
     t = " ".join(str(desc or "").split())
-    # "Cannabis Exclusion With Hemp and Lessor Risk Exceptions" ->
-    # "Cannabis (with Hemp and Lessor Risk exceptions)"
-    t = re.sub(r"^(.*?)\s+exclusion\s+with\s+(.+?)\s+exceptions?\s*$",
-               lambda m: f"{m.group(1)} (with {m.group(2)} exceptions)", t, flags=re.I)
+    t = _ENDORSEMENT_TAIL_RE.sub("", t)
+    tail = ""
+    m = _EXCEPTION_TAIL_RE.match(t)
+    if m:
+        t, tail = m.group(1), m.group(2)
     for rx in _EXCL_STRIP_RES:
         t = rx.sub("", t)
     t = t.strip(" -:\u2013\u2014")
     if not t:
         return ""
-    words = t.split()
-    out = []
-    for i, w in enumerate(words):
-        lw = w.lower()
-        if i > 0 and lw in _SMALL_WORDS:
-            out.append(lw)
-        elif w.isupper() or w.islower():
-            out.append("-".join(part[:1].upper() + part[1:].lower() for part in w.split("-")))
-        else:
-            out.append(w)
-    return " ".join(out)
+    t = _title_topic(t)
+    if tail:
+        tail = re.sub(r"\bexceptions?\b", lambda x: x.group(0).lower(), _title_topic(tail, lead_small=True),
+                      flags=re.I)
+        t = f"{t} (with {tail})"
+    return t
 
 
 def _key_exclusions(cov, coverage_key=None):
@@ -362,6 +385,129 @@ def _location_summary(data):
     return count, tiv_total
 
 
+_ENTITY_SUFFIX_RE = re.compile(
+    r"[,]?\s+\b(LLC|L\.L\.C|LLLP|LLP|LP|INC|INCORPORATED|CORP|CORPORATION|CO|COMPANY|LTD|LIMITED|PLLC)\b\.?$",
+    re.I)
+
+
+def _corporate_short(name):
+    """'Harp Hotels Inc' -> 'Harp Hotels'; 'Vista Lodging LLC DBA Courtyard' -> 'Vista Lodging'."""
+    n = " ".join(str(name or "").split())
+    n = re.split(r"\s+(?:d/?b/?a|dba)\s+", n, flags=re.I)[0]
+    prev = None
+    while n and prev != n:
+        prev = n
+        n = _ENTITY_SUFFIX_RE.sub("", n).strip(" ,")
+    return n
+
+
+def _dba_of(client):
+    dba = " ".join(str(client.get("dba") or "").split())
+    if not dba:
+        parts = re.split(r"\s+(?:d/?b/?a|dba)\s+", " ".join(str(client.get("named_insured") or "").split()),
+                         maxsplit=1, flags=re.I)
+        if len(parts) == 2:
+            dba = parts[1]
+    return dba
+
+
+def email_subject(corporate, dba, has_expiring):
+    """Subject Stefan wants (Nov 4 2026): corporate name first, then the hotel -
+    'Harp Hotels - Holiday Inn Express Renewal Proposal'."""
+    corporate, dba = (corporate or "").strip(), (dba or "").strip()
+    if corporate and dba and corporate.lower() != dba.lower():
+        head = f"{corporate} - {dba}"
+    else:
+        head = corporate or dba or "Hotel"
+    return f"{head} {'Renewal Proposal' if has_expiring else 'Insurance Proposal'}"
+
+
+def _join_items(items):
+    items = [i for i in items if i]
+    if len(items) <= 1:
+        return "".join(items)
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return ", ".join(items[:-1]) + ", and " + items[-1]
+
+
+def exclusion_bullets(ctx):
+    """One 'Please note' bullet per line of coverage (Nov 4 2026, Stefan: keep the umbrella
+    exclusions separate from the liability ones). The sublimit sentence goes with the first
+    umbrella / excess bullet. Deterministic, so nothing is dropped or merged."""
+    out, note_used = [], False
+    for c in ctx.get("coverages") or []:
+        ex = c.get("key_exclusions") or []
+        if not ex:
+            continue
+        line = c.get("coverage") or "this"
+        low = line.lower()
+        excess = low.startswith(("umbrella", "excess", "2nd excess", "3rd excess", "4th excess")) and "property" not in low
+        subject = f"the {line}" if excess else f"the {line} policy"
+        b = f"Please note {subject} excludes {_join_items(ex)}."
+        if excess and ctx.get("sublimit_note") and not note_used:
+            b += " " + ctx["sublimit_note"]
+            note_used = True
+        out.append(b)
+    return out
+
+
+_EXCL_BULLET_RE = re.compile(r"\bexcludes?\b|\bexclusions?\b", re.I)
+# Never taken out: the optional-coverages bullet and anything stating a deductible (a merged
+# bullet is left in place rather than lose a figure; the exclusions then appear twice, not never).
+_KEEP_BULLET_RE = re.compile(r"recommended but not included|supplemental applications|deductible", re.I)
+
+
+def _is_exclusion_line(st):
+    """True for a line the model wrote to state exclusions: a bullet that says excludes /
+    exclusions, or any line that opens 'Please note ... exclud...'."""
+    is_bullet = st[:1] in ("-", "\u2022", "*")
+    t = st.lstrip("-\u2022* ").strip()
+    if not t or _KEEP_BULLET_RE.search(t):
+        return False
+    if t.lower().startswith("please note") and "exclud" in t.lower():
+        return True
+    return is_bullet and bool(_EXCL_BULLET_RE.search(t))
+
+
+def apply_exclusion_bullets(body, bullets):
+    """Put the deterministic exclusion bullets in the body: replace whatever exclusion
+    bullet(s) the model wrote, else add them before the optional-coverages bullet."""
+    if not bullets:
+        return body
+    lines = (body or "").split("\n")
+    kept, pos = [], None
+    for ln in lines:
+        if _is_exclusion_line(ln.strip()):
+            if pos is None:
+                pos = len(kept)
+            continue
+        kept.append(ln)
+    new = ["- " + b for b in bullets]
+    if pos is None:
+        pos = next((i for i, ln in enumerate(kept) if "recommended but not included" in ln.lower()), None)
+    if pos is None:
+        bullet_idx = [i for i, ln in enumerate(kept) if ln.strip()[:1] in ("-", "\u2022", "*")]
+        if bullet_idx:
+            pos = bullet_idx[-1] + 1
+    if pos is None:
+        close = next((i for i, ln in enumerate(kept) if ln.strip().lower().startswith("let me know")), len(kept))
+        new = ["The key points are:"] + new + [""]
+        pos = close
+    return "\n".join(kept[:pos] + new + kept[pos:])
+
+
+# Title-case spellings the model (or a quote) produces for acronyms; none is an English word or a name.
+_ACRONYM_FIXES = ("TRIA", "EPLI", "TIV", "HNOA", "PFAS", "EIFS", "ERISA", "TCPA", "BIPA")
+
+
+def _fix_acronyms(text):
+    text = text or ""
+    for right in _ACRONYM_FIXES:
+        text = re.sub(rf"\b{right[0] + right[1:].lower()}\b", right, text)
+    return text
+
+
 def build_email_context(data, answers=None):
     """Deterministic facts for the email. No AI, no rounding surprises."""
     data = data or {}
@@ -458,8 +604,11 @@ def build_email_context(data, answers=None):
                               "policy, the excess limit does not apply above the " + "; ".join(_subs) +
                               " in the General Liability policy.")
 
+    _corp = _proper_case(_corporate_short(client.get("named_insured") or ""))
+    _dba = _proper_case(_dba_of(client))
+
     team = data.get("service_team") or {}
-    return {
+    ctx = {
         "sublimit_note": _sublimit_note,
         "contact_first_name": (answers.get("contact_first_name") or "").strip(),
         "highlights": (answers.get("highlights") or "").strip(),
@@ -476,7 +625,11 @@ def build_email_context(data, answers=None):
         "optional_coverages": optional_lines,
         "totals": totals,
         "service_team": team,
+        "corporate_name": _corp,
+        "subject": email_subject(_corp, _dba or (_hotel if _hotel.lower() != _corp.lower() else ""), has_expiring),
     }
+    ctx["exclusion_bullets"] = exclusion_bullets(ctx)
+    return ctx
 
 
 _SYSTEM_PROMPT = """You write short renewal emails for Stefan Burkey, Hotel Franchise Practice Leader at HUB International, to the hotel owner or operator.
@@ -492,7 +645,8 @@ Proposed carriers are Starr Surplus Lines Insurance Company for Property, Berkle
 The key points are:
 - Property includes a $10,000 property damage deductible, $10,000 time element deductible, $25,000 water damage deductible, $50,000 wind deductible, and 3% named windstorm subject to a $100,000 minimum per occurrence.
 - Equipment Breakdown carries a $25,000 combined deductible with $4,000 property damage and 24 hours business income.
-- Please note the General Liability policy excludes Human Trafficking and Total Pollution, and the Umbrella/Excess excludes Assault or Battery, Total Firearms, Sexual Misconduct, and Coverage Subject to Sublimits or Other Reduced Limits in Underlying Insurance. Because the excess excludes coverage that is sublimited underneath, the excess limit does not apply above the $300,000 Limited Assault and Battery limit in the General Liability policy.
+- Please note the General Liability policy excludes Human Trafficking and Total Pollution.
+- Please note the Umbrella/Excess excludes Assault or Battery, Total Firearms, Sexual Misconduct, and Coverage Subject to Sublimits or Other Reduced Limits in Underlying Insurance. Because the excess excludes coverage that is sublimited underneath, the excess limit does not apply above the $300,000 Limited Assault and Battery limit in the General Liability policy.
 - Crime and Cyber are recommended but not included in the total premium; Cyber was quoted separately at $3,476.42. Supplemental applications may be needed to finalize quotes for the optional coverages.
 
 Let me know if you would like to walk through the proposal next week or if you have any questions.
@@ -505,7 +659,7 @@ Structure, in this order:
 1. Greeting by contact first name. If no name is given, skip the greeting line entirely.
 2. One sentence: "Attached, is the finalized proposal for <hotel name>" plus the dollar and percent change and the total insured value. Use the HOTEL NAME you are given, never the legal entity. Mention the number of locations only when it is more than one.
 3. One sentence listing proposed carriers: "Proposed carriers are <carrier> for <line>, <carrier> for <line>, and <carrier> for <line>." Keep the lines in EXACTLY the order the facts give them - they are already sorted Property, General Liability, Umbrella, Auto, Workers Compensation, EPLI, Cyber, then ancillary. Do not alphabetize and do not regroup.
-4. "The key points are:" followed by short bullets. One bullet per line of coverage that actually has deductibles or terms worth stating, in the same line order. Then ONE bullet that starts "Please note" and names EVERY key exclusion you are given, line by line ("the General Liability policy excludes X and Y, and the Umbrella/Excess excludes A, B, and C"), followed by the sublimit sentence when one is given. This bullet is mandatory whenever key exclusions are listed in the facts; it is the client's notice of what the program does not cover and it may never be shortened, softened, or left out. A final bullet listing the coverages that are recommended but not included in the total premium (name each one; include a separately quoted premium where one exists), closing with the sentence "Supplemental applications may be needed to finalize quotes for the optional coverages." Skip the whole section if there is nothing substantive.
+4. "The key points are:" followed by short bullets. One bullet per line of coverage that actually has deductibles or terms worth stating, in the same line order. Then the KEY EXCLUSION BULLETS from the facts, copied exactly as written, one bullet per line of coverage (the General Liability exclusions and the Umbrella/Excess exclusions are separate bullets, never merged into one). These bullets are mandatory whenever they are given; they are the client's notice of what the program does not cover and they may never be shortened, softened, merged, or left out. A final bullet listing the coverages that are recommended but not included in the total premium (name each one; include a separately quoted premium where one exists), closing with the sentence "Supplemental applications may be needed to finalize quotes for the optional coverages." Skip the whole section if there is nothing substantive.
 5. Offer to walk through it.
 6. Sign-off flavor if one was given, then "Stefan" on its own line.
 
@@ -517,17 +671,19 @@ Rules:
 - Never invent numbers, carriers, limits, deductibles, or dates. Use only what you are given. Omit rather than guess.
 - Every key exclusion in the facts must appear in the email, using the exclusion names exactly as given. Never summarize them as "standard exclusions" or "certain exclusions".
 - No em dashes. No emoji. No markdown bold or headers. Plain text for Outlook.
-- Never write a name, carrier, coverage or any other word in all capitals. Hotel and carrier names are given in normal case; keep them that way.
+- Never write a name, carrier, coverage or any other word in all capitals. Hotel and carrier names are given in normal case; keep them that way. Acronyms stay as given: TRIA, EPLI, TIV, HNOA.
 - Warm and direct. No "I hope this email finds you well." No corporate padding. Keep the whole email under about 200 words.
 
 Return exactly two parts:
-SUBJECT: <one line>
+SUBJECT: <the subject line given in the facts, exactly>
 BODY:
 <the email>"""
 
 
 def _context_to_prompt(ctx):
     out = []
+    if ctx.get("subject"):
+        out.append(f"SUBJECT to use exactly: {ctx['subject']}")
     if ctx.get("contact_first_name"):
         out.append(f"Contact first name: {ctx['contact_first_name']}")
     out.append(f"HOTEL NAME to use in the intro: {ctx.get('hotel_name')}")
@@ -572,14 +728,13 @@ def _context_to_prompt(ctx):
             bits.append("deductibles " + "; ".join(c["deductibles"]))
         out.append(", ".join(bits))
 
-    _excl_lines = [c for c in ctx["coverages"] if c.get("key_exclusions")]
-    if _excl_lines:
+    _bullets = ctx.get("exclusion_bullets") or exclusion_bullets(ctx)
+    if _bullets:
         out.append("")
-        out.append("KEY EXCLUSIONS (mandatory 'Please note' bullet - name every one, line by line, exactly as written):")
-        for c in _excl_lines:
-            out.append(f"- {c['coverage']} excludes: " + "; ".join(c["key_exclusions"]))
-        if ctx.get("sublimit_note"):
-            out.append("Add this sentence to the same bullet: " + ctx["sublimit_note"])
+        out.append("KEY EXCLUSION BULLETS (mandatory - copy each one exactly as written, one bullet each, "
+                   "after the deductible bullets and before the optional coverages bullet):")
+        for b in _bullets:
+            out.append(f"- {b}")
 
     rec = [f"{c['coverage']} (quoted separately at {c['proposed_premium']})"
            for c in ctx["optional_coverages"]]
@@ -635,24 +790,18 @@ def draft_email(ctx, instruction=None, previous=None, model=None):
     text = (resp.choices[0].message.content or "").strip()
     result = _split_subject_body(text)
 
-    # Guarantee (Sep 16 2026): every key exclusion in the facts must be in the
-    # email. If the model dropped any, send it back once with the missing list.
-    missing = missing_exclusions(ctx, result.get("body", ""))
-    if missing:
-        logger.warning(f"Client email: model omitted key exclusions {missing}; re-drafting once")
-        messages.append({"role": "assistant", "content": text})
-        messages.append({"role": "user", "content": (
-            "The email left out these key exclusions, which is not acceptable: " + "; ".join(missing) +
-            ". Rewrite the full email keeping every figure unchanged and add a 'Please note' bullet in the "
-            "key points that names every key exclusion from the facts, line by line, exactly as written"
-            + (", followed by this sentence: " + ctx["sublimit_note"] if ctx.get("sublimit_note") else "") + "."
-        )})
-        resp = client.chat.completions.create(model=_model, messages=messages, max_completion_tokens=2000)
-        text2 = (resp.choices[0].message.content or "").strip()
-        result2 = _split_subject_body(text2)
-        if len(missing_exclusions(ctx, result2.get("body", ""))) < len(missing):
-            result = result2
+    # Deterministic finish (Nov 4 2026): each line's key exclusions are their own bullet, exactly
+    # as built from the forms (so none can be dropped or merged - the Sep 16 2026 guarantee), the
+    # subject carries the corporate name, acronyms keep their capitals.
+    result["body"] = _fix_acronyms(apply_exclusion_bullets(result.get("body", ""),
+                                                           ctx.get("exclusion_bullets") or exclusion_bullets(ctx)))
+    if ctx.get("subject") and not (instruction and re.search(r"\bsubject\b", instruction, re.I)):
+        result["subject"] = ctx["subject"]
+    result["subject"] = _fix_acronyms(result.get("subject", ""))
     result["missing_exclusions"] = missing_exclusions(ctx, result.get("body", ""))
+    if result["missing_exclusions"]:
+        logger.warning(f"Client email: exclusions still missing after the bullets were applied: "
+                       f"{result['missing_exclusions']}")
     return result
 
 
