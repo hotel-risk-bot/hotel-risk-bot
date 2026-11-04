@@ -38,7 +38,15 @@ logger = logging.getLogger(__name__)
 # OpenAI client (lazy initialization)
 _client = None
 GPT_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6-sol")
-MINI_MODEL = os.environ.get("OPENAI_MINI_MODEL", "gpt-5.6-luna")  # OCR + fast focused passes
+MINI_MODEL = os.environ.get("OPENAI_MINI_MODEL", "gpt-5.6-luna")  # fast focused passes
+# OCR of image-only quote pages (Nov 4 2026, Harp Hotels / Tower Hill): every page is read at high
+# detail by the main model and checked against a second read; see _ocr_page_verified.
+OCR_MODEL = os.environ.get("OPENAI_OCR_MODEL", GPT_MODEL)
+OCR_CHECK_MODEL = os.environ.get("OPENAI_OCR_CHECK_MODEL", MINI_MODEL)
+try:
+    OCR_WORKERS = max(1, int(os.environ.get("OCR_WORKERS", "4")))
+except ValueError:
+    OCR_WORKERS = 4
 
 
 def _get_openai_client():
@@ -328,46 +336,27 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 100000) -> str:
             if ocr_targets and len(ocr_targets) <= 10:
                 logger.info(f"OCR: {len(missing_pages)} image-only + {len(thin_pages)} thin-critical pages = {ocr_targets}")
                 try:
-                    import base64
-                    from io import BytesIO
+                    # Verified high-detail reads, in parallel (see _ocr_page_verified, Nov 4 2026)
+                    _ocr_res = _ocr_pages(pdf_path, ocr_targets)
                     for pg in ocr_targets:
-                        try:
-                            imgs = convert_from_path(pdf_path, dpi=200, first_page=pg, last_page=pg)
-                            if not imgs:
-                                continue
-                            buffered = BytesIO()
-                            imgs[0].save(buffered, format="JPEG", quality=85)
-                            img_b64 = base64.b64encode(buffered.getvalue()).decode()
-                            ocr_resp = _get_openai_client().chat.completions.create(
-                                model=MINI_MODEL,
-                                messages=[
-                                    {"role": "system", "content": "Extract ALL text visible in this image, preserving tables, columns, and layout."},
-                                    {"role": "user", "content": [
-                                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-                                    ]}
-                                ],
-                                max_completion_tokens=8000
-                            )
-                            ocr_text = ocr_resp.choices[0].message.content.strip()
-                            if ocr_text and len(ocr_text) > 50:
-                                if pg in text_pages_map:
-                                    _ent = text_pages_map[pg]
-                                    _merged = _ent["text"] + "\n" + ocr_text
-                                    _ent["text"] = _merged
-                                    _ent["chars"] = len(_merged)
-                                    _ent["score"] = _score_page(_merged) + 20
-                                    logger.info(f"OCR (thin) page {pg}: merged to {len(_merged)} chars, score={_ent['score']}")
-                                else:
-                                    score = _score_page(ocr_text)
-                                    page_texts.append({
-                                        "page": pg,
-                                        "text": ocr_text,
-                                        "score": score + 20,
-                                        "chars": len(ocr_text)
-                                    })
-                                    logger.info(f"OCR page {pg}: {len(ocr_text)} chars, score={score + 20}")
-                        except Exception as e:
-                            logger.error(f"OCR failed for page {pg}: {e}")
+                        ocr_text = (_ocr_res.get(pg) or ("", "", ""))[0]
+                        if ocr_text and len(ocr_text) > 50:
+                            if pg in text_pages_map:
+                                _ent = text_pages_map[pg]
+                                _merged = _ent["text"] + "\n" + ocr_text
+                                _ent["text"] = _merged
+                                _ent["chars"] = len(_merged)
+                                _ent["score"] = _score_page(_merged) + 20
+                                logger.info(f"OCR (thin) page {pg}: merged to {len(_merged)} chars, score={_ent['score']}")
+                            else:
+                                score = _score_page(ocr_text)
+                                page_texts.append({
+                                    "page": pg,
+                                    "text": ocr_text,
+                                    "score": score + 20,
+                                    "chars": len(ocr_text)
+                                })
+                                logger.info(f"OCR page {pg}: {len(ocr_text)} chars, score={score + 20}")
                 except Exception as e:
                     logger.error(f"OCR fallback setup failed: {e}")
 
@@ -419,91 +408,190 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 100000) -> str:
         return _extract_with_pdfplumber(pdf_path, max_chars)
 
 
+# ─── OCR of image-only pages ─────────────────────────────────────────────────
+# Why (Nov 4 2026, Harp Hotels Inc / Tower Hill quote QT0000152418, a 13-page "Microsoft: Print To
+# PDF" file with no text layer): the old full-file OCR sent every page in one call at OpenAI's
+# "low" image detail (each page squeezed to 512 px), so the model guessed the digits. The Premises
+# and Buildings page (Building $7,250,000, BPP $300,000, Business Income $400,000) came back as
+# $1,250,000 / $50,000 / $412,000 on one run and a $2,170,000 TIV on another.
+# Now each page is rendered at 200 DPI and read at high detail by the main model (OCR_MODEL), a
+# second model reads it in parallel (OCR_CHECK_MODEL) and the dollar amounts / percentages of the
+# two reads are compared. When they differ the page is read again by the main model at 300 DPI and
+# the read the re-read agrees with wins; if nothing agrees a REVIEW REQUIRED note goes to the
+# review screen (_OCR_REVIEW_NOTES, attached in structure_insurance_data).
+
+_OCR_REVIEW_NOTES = {}   # cleaned file name -> [notes]
+
+_OCR_SYSTEM = ("You are a meticulous OCR engine for insurance documents. You transcribe exactly what is "
+               "printed on the page and nothing else.")
+_OCR_INSTRUCTION = (
+    "Transcribe every piece of text on this page exactly as printed. Copy every number, date, percentage "
+    "and dollar amount character for character: never round, estimate, correct or recalculate a figure. "
+    "Keep each table or schedule row on one line, the label first and its value(s) after it, in the printed "
+    "order. Do not summarize, explain or add anything. If a character cannot be read, write [illegible] in "
+    "its place.")
+_OCR_FIGURE_RE = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?|(?<![\w.])\d+(?:\.\d+)?\s?%")
+
+
+def _ocr_note_key(pdf_path: str) -> str:
+    """The file name the rest of the pipeline knows (uploads are saved as '<8 hex>_<name>')."""
+    return re.sub(r"^[0-9a-f]{8}_", "", os.path.basename(str(pdf_path or "")))
+
+
+def _render_page_b64(pdf_path: str, page: int, dpi: int) -> str:
+    """One PDF page as a base64 grayscale PNG (rendered one page at a time to keep memory low)."""
+    import base64
+    from io import BytesIO
+    imgs = convert_from_path(pdf_path, dpi=dpi, first_page=page, last_page=page)
+    if not imgs:
+        return ""
+    buf = BytesIO()
+    imgs[0].convert("L").save(buf, format="PNG", optimize=True)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def _ocr_image(img_b64: str, model: str) -> str:
+    """Transcribe one page image at high detail."""
+    kwargs = dict(
+        model=model,
+        messages=[
+            {"role": "system", "content": _OCR_SYSTEM},
+            {"role": "user", "content": [
+                {"type": "text", "text": _OCR_INSTRUCTION},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}", "detail": "high"}},
+            ]},
+        ],
+        max_completion_tokens=12000,
+    )
+    try:
+        resp = _get_openai_client().chat.completions.create(reasoning_effort="low", **kwargs)
+    except Exception as e:  # a model without reasoning controls
+        if "reasoning" not in str(e).lower():
+            raise
+        resp = _get_openai_client().chat.completions.create(**kwargs)
+    return (resp.choices[0].message.content or "").strip()
+
+
+def _ocr_figures(text: str) -> list:
+    """Dollar amounts and percentages in a read, normalised, as a sorted multiset."""
+    out = []
+    for m in _OCR_FIGURE_RE.findall(text or ""):
+        v = re.sub(r"[\s$,]", "", m)
+        if re.search(r"\.0+$", v) and not v.endswith("%"):
+            v = re.sub(r"\.0+$", "", v)
+        out.append(v)
+    return sorted(out)
+
+
+def _ocr_show(v: str) -> str:
+    """A normalised figure back in display form: '7250000' -> '$7,250,000'."""
+    if v.endswith("%"):
+        return v
+    try:
+        whole, _, dec = v.partition(".")
+        return "$" + f"{int(whole):,}" + (("." + dec) if dec else "")
+    except ValueError:
+        return v
+
+
+def _ocr_page_verified(pdf_path: str, page: int) -> tuple:
+    """Read one page twice (main + check model) and reconcile.
+    Returns (text, note, level): level "" (figures agree), "info" (two reads differed and a third
+    read settled it) or "review" (could not be confirmed)."""
+    from concurrent.futures import ThreadPoolExecutor
+    b64 = _render_page_b64(pdf_path, page, 200)
+    if not b64:
+        return "", "", ""
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        fa = ex.submit(_ocr_image, b64, OCR_MODEL)
+        fb = ex.submit(_ocr_image, b64, OCR_CHECK_MODEL) if OCR_CHECK_MODEL and OCR_CHECK_MODEL != OCR_MODEL else None
+        try:
+            a = fa.result()
+        except Exception as e:
+            logger.error(f"OCR page {page}: main read failed: {e}")
+            a = None
+        b = None
+        if fb is not None:
+            try:
+                b = fb.result()
+            except Exception as e:
+                logger.warning(f"OCR page {page}: check read failed: {e}")
+    if a is None and b is None:
+        return "", f"page {page} could not be read", "review"
+    if a is None:
+        return b, f"page {page} was read only once (the main read failed), so its figures are unconfirmed", "review"
+    if b is None:
+        return a, "", ""
+    fig_a, fig_b = _ocr_figures(a), _ocr_figures(b)
+    if fig_a == fig_b:
+        return a, "", ""
+    only_a = sorted(set(fig_a) - set(fig_b))
+    only_b = sorted(set(fig_b) - set(fig_a))
+    logger.warning(f"OCR page {page}: reads disagree ({only_a[:4]} vs {only_b[:4]}); re-reading at 300 DPI")
+    try:
+        c = _ocr_image(_render_page_b64(pdf_path, page, 300), OCR_MODEL)
+    except Exception as e:
+        logger.error(f"OCR page {page}: re-read failed: {e}")
+        c = None
+
+    def _show(vals):
+        return ", ".join(_ocr_show(v) for v in vals[:6])
+    if c is not None:
+        fig_c = _ocr_figures(c)
+        if fig_c == fig_a:
+            return a, (f"page {page}: two reads differed ({_show(only_a)} vs {_show(only_b)}); a third read "
+                       f"confirmed {_show(only_a) or 'the first'}"), "info"
+        if fig_c == fig_b:
+            return c, (f"page {page}: two reads differed ({_show(only_a)} vs {_show(only_b)}); a third read "
+                       f"confirmed {_show(only_b) or 'the second'}"), "info"
+    detail = "; ".join(x for x in (("one read: " + _show(only_a)) if only_a else "",
+                                   ("other read: " + _show(only_b)) if only_b else "") if x)
+    return (c if c is not None else a), f"page {page}: the figures could not be confirmed by two reads ({detail})", "review"
+
+
+def _ocr_pages(pdf_path: str, pages: list) -> dict:
+    """{page: (text, note, level)} for the given pages, read in parallel. Notes are kept in
+    _OCR_REVIEW_NOTES under the file's name for structure_insurance_data."""
+    from concurrent.futures import ThreadPoolExecutor
+    results = {}
+    if not pages:
+        return results
+    with ThreadPoolExecutor(max_workers=min(OCR_WORKERS, len(pages))) as ex:
+        futs = {ex.submit(_ocr_page_verified, pdf_path, p): p for p in pages}
+        for f, p in futs.items():
+            try:
+                results[p] = f.result()
+            except Exception as e:
+                logger.error(f"OCR page {p} failed: {e}")
+                results[p] = ("", f"page {p} could not be read", "review")
+    notes = [(lvl, n) for _p, (_t, n, lvl) in sorted(results.items()) if n]
+    if notes:
+        _OCR_REVIEW_NOTES.setdefault(_ocr_note_key(pdf_path), []).extend(notes)
+    return results
+
+
 def _extract_with_ocr(pdf_path: str, total_pages: int = 0, max_pages: int = 20) -> str:
-    """OCR fallback for scanned/image-based PDFs using GPT Vision.
-    
-    Converts PDF pages to images and sends them to GPT-4.1-mini with vision
-    to extract text content. Used when both pdftotext and pdfplumber
-    fail to extract any text.
-    
-    Optimized for speed: low DPI, limited pages, fast model, single API call.
-    """
+    """OCR for image-only PDFs (no text layer at all, e.g. Tower Hill "Microsoft: Print To PDF"
+    quotes): every page up to max_pages, read and verified one page at a time (see above)."""
     if not HAS_PDF2IMAGE:
         logger.warning("pdf2image not available, cannot perform OCR")
         return ""
-    
-    import base64
-    from io import BytesIO
-    
     try:
-        logger.info(f"OCR fallback: converting PDF pages to images for {pdf_path}")
-        
-        # Limit pages aggressively - key quote info is in first few pages
-        pages_to_convert = min(total_pages, max_pages) if total_pages > 0 else max_pages
-        images = convert_from_path(
-            pdf_path,
-            first_page=1,
-            last_page=pages_to_convert,
-            dpi=150,  # Lower DPI for speed and memory
-            fmt="jpeg"
-        )
-        
-        if not images:
-            logger.warning("OCR: No images generated from PDF")
-            return ""
-        
-        logger.info(f"OCR: converted {len(images)} pages to images")
-        
-        # Build all image content for a single GPT Vision call
-        content_parts = [
-            {"type": "text", "text": f"Extract ALL text from these {len(images)} insurance document page(s). "
-             "Include all numbers, dates, policy details, premiums, limits, carrier names, and coverage information. "
-             "Return the text content of each page separated by '--- Page X ---' markers."}
-        ]
-        
-        for i, img in enumerate(images):
-            # Convert PIL image to base64 JPEG with moderate quality
-            buffer = BytesIO()
-            img.save(buffer, format="JPEG", quality=70)
-            img_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
-            
-            content_parts.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{img_base64}",
-                    "detail": "low"  # Use low detail for speed
-                }
-            })
-            
-            # Free memory immediately
-            del img
-            buffer.close()
-        
-        # Free the images list
-        del images
-        
-        try:
-            response = _get_openai_client().chat.completions.create(
-                model=MINI_MODEL,  # Faster model for OCR
-                messages=[
-                    {"role": "system", "content": "You are an expert OCR assistant. Extract all text from the provided insurance document images accurately and completely."},
-                    {"role": "user", "content": content_parts}
-                ],
-                max_completion_tokens=16000,
-            )
-            
-            result_text = response.choices[0].message.content
-            if result_text:
-                logger.info(f"OCR: extracted {len(result_text)} chars from {pages_to_convert} pages")
-                return result_text
-            else:
-                logger.warning("OCR: GPT Vision returned empty response")
-                return ""
-                
-        except Exception as e:
-            logger.error(f"OCR GPT Vision call failed: {e}")
-            return ""
-        
+        if total_pages <= 0:
+            try:
+                _pi = subprocess.run(["pdfinfo", pdf_path], capture_output=True, text=True, timeout=30)
+                _pm = re.search(r"Pages:\s+(\d+)", _pi.stdout or "")
+                total_pages = int(_pm.group(1)) if _pm else 0
+            except Exception:
+                total_pages = 0
+        n = min(total_pages, max_pages) if total_pages > 0 else max_pages
+        logger.info(f"OCR: reading {n} page(s) of {os.path.basename(pdf_path)} at high detail "
+                    f"({OCR_MODEL}, checked by {OCR_CHECK_MODEL})")
+        results = _ocr_pages(pdf_path, list(range(1, n + 1)))
+        parts = [f"\n--- Page {p} ---\n{t}" for p, (t, _n, _l) in sorted(results.items()) if t]
+        text = "\n".join(parts)
+        logger.info(f"OCR: extracted {len(text)} chars from {len(parts)} page(s)")
+        return text
     except Exception as e:
         logger.error(f"OCR extraction failed: {e}")
         return ""
@@ -3200,6 +3288,23 @@ TEXT:
             #    Inc.) never appears as one of the client's named insureds
             #  - subjectivity_rules (Oct 28 2026): PartnerRe umbrella / Starr property broker-only
             #    subjectivities left off, PartnerRe paperwork deadlines 30 -> 5 days
+            # OCR review notes (pages whose figures two reads could not confirm, Nov 4 2026)
+            try:
+                _ocr_ws = []
+                for it in all_items:
+                    for _lvl, _on in _OCR_REVIEW_NOTES.pop(it.get("filename", ""), []) or []:
+                        if _lvl == "review":
+                            _ocr_ws.append(f"REVIEW REQUIRED — '{it.get('filename', '')}' is a scanned / image-only "
+                                           f"file and {_on}. Check those values against the quote before sending.")
+                        else:
+                            _ocr_ws.append(f"OCR check — '{it.get('filename', '')}' (scanned / image-only), {_on}.")
+                if _ocr_ws:
+                    _ws0 = data.get("warnings")
+                    if not isinstance(_ws0, list):
+                        _ws0 = [_ws0] if isinstance(_ws0, str) and _ws0.strip() else []
+                    data["warnings"] = _ws0 + _ocr_ws
+            except Exception as _ocr_w_err:
+                logger.warning(f"OCR notes failed (non-fatal): {_ocr_w_err}")
             _qd_items = [{"filename": it.get("filename", ""), "text": it.get("text", "")} for it in all_items]
             for _mod, _fn in (("terrorism_liability", "run_terrorism_liability_pass"),
                               ("workers_comp_quote", "run_workers_comp_pass"),
