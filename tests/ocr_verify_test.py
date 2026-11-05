@@ -57,6 +57,10 @@ BAD = TRUE.replace("$7,250,000", "$1,250,000")
 check(pe._ocr_figures("$7,250,000 $300,000.00 5% $37,243.15") == ["300000", "37243.15", "5%", "7250000"],
       pe._ocr_figures("$7,250,000 $300,000.00 5% $37,243.15"))
 check(pe._ocr_figures(TRUE) != pe._ocr_figures(BAD), "a misread digit changes the figures")
+# dot leaders before a percentage (Tower Hill page 6 "Coinsurance ......90% or 100%"), and 1.5% stays whole
+check(pe._ocr_figures("Coinsurance ...........90% or 100%") == pe._ocr_figures("Coinsurance 90% or 100%")
+      == ["100%", "90%"], pe._ocr_figures("Coinsurance ...........90% or 100%"))
+check(pe._ocr_figures("Wind 1.5% and 2%") == ["1.5%", "2%"], pe._ocr_figures("Wind 1.5% and 2%"))
 check(pe._ocr_show("7250000") == "$7,250,000" and pe._ocr_show("5%") == "5%", "display form")
 check(pe._ocr_note_key("/x/3f9a01bc_Quote Letter.pdf") == "Quote Letter.pdf", "upload prefix stripped")
 

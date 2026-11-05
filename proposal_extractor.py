@@ -430,7 +430,9 @@ _OCR_INSTRUCTION = (
     "Keep each table or schedule row on one line, the label first and its value(s) after it, in the printed "
     "order. Do not summarize, explain or add anything. If a character cannot be read, write [illegible] in "
     "its place.")
-_OCR_FIGURE_RE = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?|(?<![\w.])\d+(?:\.\d+)?\s?%")
+# A percentage may follow dot leaders ("Coinsurance ......90% or 100%"); only a digit + point
+# before it (the tail of "1.5%") rules it out.
+_OCR_FIGURE_RE = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?|(?<!\w)(?<!\d\.)\d+(?:\.\d+)?\s?%")
 
 
 def _ocr_note_key(pdf_path: str) -> str:
@@ -1339,6 +1341,10 @@ def _clean_property_forms_endorsements(forms: list) -> list:
             cleaned.append(f)
             continue
         fn = str(f.get("form_number") or "").upper().strip()
+        # Rows checked against the carrier's own quote (see _restore_property_quote_forms) stay.
+        if f.get("schedule_verified"):
+            cleaned.append(f)
+            continue
         # Allowlist check — property-legit forms that would otherwise be rejected
         if fn and any(fn.startswith(p) for p in _PROPERTY_FORM_ALLOWLIST):
             cleaned.append(f)
@@ -1356,6 +1362,62 @@ def _clean_property_forms_endorsements(forms: list) -> list:
             continue
         cleaned.append(f)
     return cleaned
+
+
+# Interline forms on the property quote itself (Nov 5 2026, Harp Hotels Inc, Tower Hill / Lloyd's
+# property quote QT0000152418): the cleaner above drops every ISO "IL" form from a property
+# section, because GL quotes carry IL forms that GPT sometimes copies into property. A property
+# quote prints IL forms of its own, so 10 of the 35 forms on Tower Hill's Form Schedule went
+# missing from the proposal, six of them exclusions (War and Civil War, Microorganism, Asbestos,
+# Radioactive Contamination, Computer-Related Losses, Electromagnetic / Geomagnetic Storm), plus
+# the TRIA cap and disclosure, Protective Safeguards and EC 00 17 Common Policy Conditions.
+# A form the cleaner removed goes back when its number is printed in the property quote's own
+# file and it is not a liability form (no GL/auto/liquor/umbrella prefix, "liability" nowhere in
+# its title, none of the hospitality liability exclusions).
+_HARD_LIABILITY_FORM_PREFIXES = tuple(p for p in _NONPROPERTY_FORM_PREFIXES if not p.startswith("IL"))
+
+
+def _restorable_property_form(f) -> bool:
+    if not isinstance(f, dict):
+        return False
+    fn = str(f.get("form_number") or "").upper().strip()
+    desc = str(f.get("description") or "").lower()
+    if not fn or "liability" in desc or any(kw in desc for kw in _PROPERTY_ONLY_REJECT_KEYWORDS):
+        return False
+    return not any(fn.startswith(p) for p in _HARD_LIABILITY_FORM_PREFIXES)
+
+
+def _form_base_compact(fn) -> str:
+    """'IL 04 64 (01/38)' -> 'IL0464' (an edition in parentheses dropped, punctuation gone)."""
+    return re.sub(r"[^A-Z0-9]", "", re.sub(r"\([^)]*\)", " ", str(fn or "").upper()))
+
+
+def _restore_property_quote_forms(cov_key: str, cov: dict, original: list, cleaned: list, items: list):
+    """Put back the forms the property cleaner removed that the property quote itself prints.
+    Returns (forms, restored_rows, source_file); the forms keep the quote's own order."""
+    kept_ids = {id(x) for x in cleaned}
+    cand = [x for x in original if id(x) not in kept_ids and _restorable_property_form(x)]
+    if not cand or not items:
+        return cleaned, [], ""
+    from forms_schedule_audit import pick_source_text
+    text, fname = pick_source_text(items, str((cov or {}).get("carrier") or ""), cov_key)
+    if not text:
+        return cleaned, [], ""
+    blob = re.sub(r"[^A-Z0-9]", "", text.upper())
+    have = {_form_base_compact(x.get("form_number")) for x in cleaned if isinstance(x, dict)}
+    back = {}
+    for f in cand:
+        base = _form_base_compact(f.get("form_number"))
+        if len(base) < 4 or base in have or base not in blob:
+            continue
+        g = dict(f)
+        g["schedule_verified"] = True     # printed on the carrier's own quote: no later filter drops it
+        back[id(f)] = g
+        have.add(base)
+    if not back:
+        return cleaned, [], fname
+    merged = [back.get(id(x), x) for x in original if id(x) in kept_ids or id(x) in back]
+    return merged, list(back.values()), fname
 
 
 # Form-number tokens that mark a form as UMBRELLA / EXCESS-native regardless of the
@@ -3218,11 +3280,23 @@ TEXT:
                     if isinstance(_f, list) and _f:
                         _c = _clean_property_forms_endorsements(_f)
                         if len(_c) != len(_f):
+                            _c, _back, _src = _restore_property_quote_forms(_pkey, _pcov, _f, _c, all_items)
                             logger.info(
                                 f"Patch M cleanup ({_pkey}): {len(_f)} -> {len(_c)} forms "
-                                f"(stripped {len(_f) - len(_c)} non-property entries)"
+                                f"(stripped {len(_f) - len(_c)} non-property entries, "
+                                f"kept {len(_back)} printed on the property quote)"
                             )
                             _pcov["forms_endorsements"] = _c
+                            if _back:
+                                _names = "; ".join(f"{b.get('form_number', '')} {b.get('description', '')}".strip()
+                                                   for b in _back[:12])
+                                _more = "" if len(_back) <= 12 else f" (+{len(_back) - 12} more)"
+                                _ws = data.get("warnings")
+                                if not isinstance(_ws, list):
+                                    _ws = [_ws] if isinstance(_ws, str) and _ws.strip() else []
+                                data["warnings"] = _ws + [
+                                    f"Forms check — {_pkey}: kept {len(_back)} interline forms printed on "
+                                    f"'{_src}' that the liability-forms filter would have removed: {_names}{_more}"]
                 for _ukey in ("umbrella", "umbrella_layer_2", "umbrella_layer_3"):
                     _ucov = _covs.get(_ukey)
                     if not isinstance(_ucov, dict):

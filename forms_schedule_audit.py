@@ -440,6 +440,14 @@ def pick_source_text(items: list, carrier: str, coverage_key: str) -> tuple[str,
     elif key.startswith("commercial_auto"):
         kws = ("business auto", "commercial auto", "auto liability")
         anti = ("umbrella", "commercial property")
+    elif key.startswith("property") or key.startswith("excess_property"):
+        # Used by the extractor to tell which file is the property quote (Nov 5 2026); the
+        # schedule audit itself still covers the liability lines only.
+        kws = ("commercial property", "building personal property", "business personal property",
+               "building and personal property", "business income", "causes of loss", "coinsurance",
+               "named storm", "replacement cost")
+        anti = ("commercial general liability", "general liability coverage", "excess liability", "umbrella",
+                "workers compensation", "business auto", "statement of values")
     else:
         return "", ""
     carrier_tokens = [t.lower().strip(",.") for t in (carrier or "").split() if len(t) >= 4
