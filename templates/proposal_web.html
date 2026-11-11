@@ -483,6 +483,8 @@
             box-shadow: var(--shadow-lg);
             z-index: 2000;
             animation: slideIn 0.3s ease;
+            max-width: min(34rem, calc(100vw - 4rem));
+            line-height: 1.4;
         }
         .toast-success { background: var(--success); }
         .toast-error { background: var(--danger); }
@@ -1004,13 +1006,25 @@ function hideLoading() {
 }
 
 // ─── Toast ───
-function showToast(msg, type = 'success') {
+function showToast(msg, type = 'success', ms) {
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
     toast.textContent = msg;
+    toast.title = 'Click to dismiss';
+    toast.style.cursor = 'pointer';
+    toast.addEventListener('click', () => toast.remove());
     document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 4000);
+    // a message that tells you what to do stays up long enough to read
+    setTimeout(() => toast.remove(), ms || (String(msg).length > 70 ? 14000 : 4000));
 }
+
+// A fetch that never reached the server throws the browser's own words: Safari "Load failed",
+// Chrome "Failed to fetch", Firefox "NetworkError...". None of them says what happened.
+function isNetworkError(err) {
+    return err instanceof TypeError &&
+        /load failed|failed to fetch|networkerror|network connection|network request/i.test(err.message || '');
+}
+const NETWORK_MSG = 'Could not reach the proposal builder. Check your internet connection and try again.';
 
 // ─── File Upload ───
 const uploadArea = document.getElementById('upload-area');
@@ -1028,21 +1042,49 @@ uploadArea.addEventListener('drop', (e) => {
 });
 fileInput.addEventListener('change', () => handleFiles(fileInput.files));
 
-function handleFiles(files) {
-    for (const f of files) {
-        const ext = f.name.split('.').pop().toLowerCase();
-        if (!['pdf', 'xlsx', 'xls', 'xlsb', 'csv', 'jpg', 'jpeg', 'png'].includes(ext)) continue;
-        uploadedFiles.push(f);
-    }
+// Each file is copied into memory the moment it is added (Nov 11 2026, Dinari Hospitality).
+// A browser keeps only a pointer to the file on disk and reads it when Extract is clicked. If the
+// file was moved, renamed or re-saved in between, was dragged out of an email, or is a cloud
+// file that is not downloaded, the upload dies part-way with Safari's "Load failed", and every
+// retry fails the same way because the page still holds the dead pointer. A copy taken now
+// cannot go stale, and a file that cannot be read is named here instead of failing later.
+let pendingReads = 0;
+function syncExtractButton() {
+    btnExtract.disabled = pendingReads > 0 || uploadedFiles.length === 0;
+}
+
+async function handleFiles(files) {
+    const picked = Array.from(files || []).filter(f =>
+        ['pdf', 'xlsx', 'xls', 'xlsb', 'csv', 'jpg', 'jpeg', 'png'].includes(f.name.split('.').pop().toLowerCase()));
+    fileInput.value = '';      // so the same file can be picked again after it is removed
+    if (!picked.length) return;
+    // start every read now, while the dropped files are still there
+    const reads = picked.map(f => f.arrayBuffer().then(
+        buf => new File([buf], f.name, { type: f.type, lastModified: f.lastModified }),
+        () => null));
+    pendingReads++;
+    syncExtractButton();       // no Extract click while a file is still being copied
+    const copies = await Promise.all(reads);
+    pendingReads--;
+    const unreadable = [];
+    copies.forEach((c, i) => {
+        if (c && (c.size > 0 || picked[i].size === 0)) uploadedFiles.push(c);
+        else unreadable.push(picked[i].name);
+    });
     renderFileList();
-    btnExtract.disabled = uploadedFiles.length === 0;
+    syncExtractButton();
     tplAutoBm(null);
+    if (unreadable.length) {
+        showToast(`Could not read ${unreadable.join(', ')}. Save ${unreadable.length > 1 ? 'them' : 'it'} to ` +
+                  'this computer first (Downloads or Desktop, not straight from an email or a cloud-only ' +
+                  'folder), then add again.', 'error');
+    }
 }
 
 function removeFile(idx) {
     uploadedFiles.splice(idx, 1);
     renderFileList();
-    btnExtract.disabled = uploadedFiles.length === 0;
+    syncExtractButton();
     tplAutoBm(null);
 }
 
@@ -1085,6 +1127,7 @@ btnExtract.addEventListener('click', async () => {
 
     showLoading('Creating session...', '');
 
+    let stage = 'start';
     try {
         // 1. Create session
         const sessRes = await fetch('/api/session', {
@@ -1097,6 +1140,7 @@ btnExtract.addEventListener('click', async () => {
         sessionId = sessData.session_id;
 
         // 2. Upload files
+        stage = 'upload';
         showLoading('Uploading files...', `${uploadedFiles.length} file(s)`);
         const formData = new FormData();
         for (const f of uploadedFiles) {
@@ -1110,20 +1154,35 @@ btnExtract.addEventListener('click', async () => {
         if (!upRes.ok) throw new Error(upData.error);
 
         // 3. Start extraction (async - returns immediately)
+        stage = 'extract';
         showLoading('Extracting insurance data with AI...', 'This may take 2-4 minutes for scanned PDFs. Please wait...');
         const exRes = await fetch(`/api/extract/${sessionId}`, { method: 'POST' });
         const exStart = await exRes.json();
         if (!exRes.ok) throw new Error(exStart.error);
 
         // 4. Poll for extraction completion
+        stage = 'wait';
         let extractResult = null;
         let pollCount = 0;
+        let pollMisses = 0;
         const maxPolls = 120; // 10 minutes max (120 * 5s)
         while (pollCount < maxPolls) {
             await new Promise(r => setTimeout(r, 5000)); // wait 5 seconds
             pollCount++;
-            const statusRes = await fetch(`/api/extract/${sessionId}/status`);
-            const statusData = await statusRes.json();
+            let statusRes, statusData;
+            try {
+                statusRes = await fetch(`/api/extract/${sessionId}/status`);
+                statusData = await statusRes.json();
+                pollMisses = 0;
+            } catch (pollErr) {
+                // The extraction runs on the server; one dropped check-in does not stop it.
+                if (++pollMisses >= 6) throw pollErr;
+                showLoading('Extracting insurance data with AI...', 'Connection dropped, reconnecting...');
+                continue;
+            }
+            if (statusRes.status === 404) {
+                throw new Error('The proposal builder restarted and cleared this session. Click Extract & Analyze again.');
+            }
             if (statusData.status === 'extracted') {
                 extractResult = statusData;
                 break;
@@ -1163,7 +1222,19 @@ btnExtract.addEventListener('click', async () => {
 
     } catch (err) {
         hideLoading();
-        showToast(err.message || 'Extraction failed', 'error');
+        let msg = err.message || 'Extraction failed';
+        if (isNetworkError(err)) {
+            if (stage === 'upload') {
+                msg = 'The upload did not reach the proposal builder. Check your internet connection and click ' +
+                      'Extract & Analyze again. If it fails again, remove the files and add them again.';
+            } else if (stage === 'wait') {
+                msg = 'Lost the connection while the quotes were being read. Check your internet connection ' +
+                      'and click Extract & Analyze again.';
+            } else {
+                msg = NETWORK_MSG;
+            }
+        }
+        showToast(msg, 'error');
     }
 });
 
@@ -1298,7 +1369,7 @@ async function reapplyTemplates() {
         showToast('Program template applied');
     } catch (err) {
         hideLoading();
-        showToast(err.message || 'Program template failed', 'error');
+        showToast(isNetworkError(err) ? NETWORK_MSG : (err.message || 'Program template failed'), 'error');
     }
 }
 // The card lives on step 1 and moves into Review & Edit (above Coverages) so the inputs can be
@@ -2163,7 +2234,7 @@ document.getElementById('btn-generate').addEventListener('click', async () => {
 
     } catch (err) {
         hideLoading();
-        showToast(err.message || 'Generation failed', 'error');
+        showToast(isNetworkError(err) ? NETWORK_MSG : (err.message || 'Generation failed'), 'error');
     }
 });
 
@@ -2231,7 +2302,7 @@ async function draftEmail(instruction) {
         if (instruction) showToast('Email refined');
     } catch (err) {
         status.classList.remove('hidden');
-        status.textContent = 'Could not draft the email (' + (err.message || 'error') + '). The proposal above is unaffected.';
+        status.textContent = 'Could not draft the email (' + (isNetworkError(err) ? 'no connection to the proposal builder' : (err.message || 'error')) + '). The proposal above is unaffected.';
     }
 }
 
