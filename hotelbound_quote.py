@@ -508,6 +508,34 @@ def _parse_deductible_clauses(text):
     return clauses
 
 
+def _street_from_cell(street, city, state):
+    """Street part of a Cost Break Out Street cell. The cell may hold the whole wrapped address
+    ('1041 Harriman Place, 1041 E, San Bernardino, California, 92408, United States' ->
+    '1041 Harriman Place 1041 E'); a plain street ('4055 Street Road') comes back as is, without
+    a trailing comma. No commas inside the street: the proposal splits addresses on them."""
+    s = re.sub(r"\s+", " ", street or "").strip(" ,")
+    s = re.sub(r",?\s*United States( of America)?$", "", s, flags=re.I).strip(" ,")
+    head = None
+    if city:
+        m = re.search(r",\s*" + re.escape(city) + r"\s*(?:,|$)", s, re.I)
+        if m and m.start() > 0:
+            head = s[:m.start()]
+    if head is None and state:
+        names = [state] + ([STATE_NAMES[state]] if state in STATE_NAMES else [])
+        m = re.search(r",\s*(?:" + "|".join(re.escape(n) for n in names) + r")\b\s*,?\s*(?:\d{5}(?:-\d{4})?)?\s*$", s)
+        if m:
+            parts = [p.strip() for p in s[:m.start()].split(",") if p.strip()]
+            if len(parts) >= 2:
+                head = ", ".join(parts[:-1])          # drop the city in front of the state
+            elif parts:
+                head = parts[0]
+                if city and head.lower().endswith(" " + city.lower()):
+                    head = head[: -len(city)]
+    if head is None:
+        head = s
+    return re.sub(r"\s*,\s*", " ", head).strip(" ,")
+
+
 def _parse_schedule(text):
     """Merge the Schedule of Values table (attributes) with Cost Break Out (clean address + $)."""
     rows = {}
@@ -567,10 +595,27 @@ def _parse_schedule(text):
             r"(?P<county>[A-Za-z .'\-]+?)\s{2,}\$?(?P<agg>[\d,]+(?:\.\d{2})?)\s{2,}\$?(?P<prem>[\d,]+(?:\.\d{2})?)\s{2,}"
             r"\$?(?P<fee>[\d,]+(?:\.\d{2})?)\s{2,}\$?(?P<bldg>[\d,]+)\s{2,}\$?(?P<bpp>[\d,]+)\s{2,}\$?(?P<bi>[\d,]+)\s{2,}\$?(?P<tiv>[\d,]+)"
         )
-        for line in m.group(1).split("\n"):
+        cb_lines = m.group(1).split("\n")
+        for li, line in enumerate(cb_lines):
             mm = cb_re.match(line)
             if not mm:
                 continue
+            # The Street cell can hold the whole address, wrapped over the next lines, and a long
+            # city wraps in its own column (WS Management, Nov 2026: "11855 Avenue of / Industry,
+            # San Diego, / California, 92128, / United States"; "Rancho / Cucamonga").
+            street_parts, city_parts = [mm.group("street").strip()], [mm.group("city").strip()]
+            c_city, c_state = mm.start("city"), mm.start("state")
+            for nxt in cb_lines[li + 1:li + 8]:
+                if (not nxt.strip() or cb_re.match(nxt) or _FOOTER_RE.search(nxt)
+                        or re.search(r"\$\s?\d|\bLID\b", nxt)):
+                    break
+                for seg in re.finditer(r"\S+(?: \S+)*", nxt):
+                    if seg.start() < c_city - 2:
+                        street_parts.append(seg.group(0))
+                    elif seg.start() < c_state - 1:
+                        city_parts.append(seg.group(0))
+            cb_city = " ".join(city_parts).strip()
+            cb_street = _street_from_cell(" ".join(street_parts), cb_city, mm.group("state"))
             lid = mm.group("lid")
             r = rows.get(lid)
             if r is None:
@@ -580,7 +625,7 @@ def _parse_schedule(text):
                 rows[lid] = r
                 order.append(lid)
             r.update({
-                "street": mm.group("street").strip(), "city": mm.group("city").strip(),
+                "street": cb_street, "city": cb_city,
                 "state": mm.group("state"), "zip": mm.group("zip"), "county": mm.group("county").strip(),
                 "agg_premium": _num(mm.group("agg")), "premium": _num(mm.group("prem")), "fee": _num(mm.group("fee")),
                 "bldg_value": _num(mm.group("bldg")), "bpp_value": _num(mm.group("bpp")),
@@ -722,11 +767,304 @@ def applicable_deductibles(hb):
 # ---------------------------------------------------------------------------------------------
 # apply to extracted data
 # ---------------------------------------------------------------------------------------------
-def apply_hotelbound_to_data(data: dict, hb: dict) -> None:
-    """Write the parsed HotelBound quote into the extracted-data dict (mutates in place)."""
+# ---------------------------------------------------------------------------------------------
+# which property slot is the HotelBound quote
+# ---------------------------------------------------------------------------------------------
+# Why (Nov 16 2026, WS Management Inc): the submission had two property policies that both bind,
+# the HotelBound master quote ($407,562.03) and a separate BlueSky / Canopius quote for one hotel
+# (1350 Veterans Blvd, South San Francisco, $53,226.01). The model read both correctly but put
+# Canopius in "property" and HotelBound in "property_alt_1". This pass then wrote the HotelBound
+# figures over "property", so HotelBound showed twice and the Canopius policy was gone, with its
+# carrier participation, UMR and quote number left inside the HotelBound section. Now the
+# HotelBound values only ever go into the HotelBound quote's own entry, which is moved to
+# "property" (the generator's HotelBound blocks and Shared Limits page read that slot), and any
+# other property policy keeps a slot of its own.
+
+_PROPERTY_SLOTS = ("property", "property_alt_1", "property_alt_2")
+_ALT_SLOTS = ("property_alt_1", "property_alt_2")
+
+# Words that say nothing about which quote a carrier name came from.
+_GENERIC_CARRIER_WORDS = {
+    "insurance", "ins", "company", "co", "corp", "corporation", "inc", "incorporated", "llc", "ltd",
+    "limited", "the", "of", "and", "at", "a", "an", "specialty", "surplus", "lines", "us", "usa",
+    "america", "american", "national", "group", "underwriters", "underwriter", "certain", "lloyd",
+    "lloyds", "london", "syndicate", "syndicates", "excess", "property", "casualty", "indemnity",
+    "assurance", "mutual", "general", "fire", "es", "risk", "program", "rt", "s",
+}
+
+
+def _words(text):
+    return set(re.findall(r"[a-z0-9]+", (text or "").lower().replace("'", "").replace("’", "")))
+
+
+def _carrier_tokens(name):
+    """Distinctive words of a carrier name ("Canopius US Insurance Company" -> {"canopius"})."""
+    return {t for t in _words(name) if t not in _GENERIC_CARRIER_WORDS and len(t) > 2 and not t.isdigit()}
+
+
+def _printed_in(value, text):
+    """True when the amount is printed in the text ("$50,476.00", "50,476", "53226.01")."""
+    v = _num(value)
+    if v <= 0 or not text:
+        return False
+    forms = {f"{v:,.2f}", f"{v:.2f}"}
+    if abs(v - round(v)) < 0.005:
+        forms |= {f"{v:,.0f}"} if v >= 1000 else set()
+    for f in forms:
+        if re.search(r"(?<![\d.,])" + re.escape(f) + r"(?!\d|[.,]\d)", text):
+            return True
+    return False
+
+
+def find_hotelbound_item(items):
+    """Given [{'filename','text'}] pick the uploaded file that is a HotelBound quote (full text)."""
+    best = None
+    for it in items or []:
+        t = it.get("text") or ""
+        u = t.upper()
+        if "HOTELBOUND" in u and "QUOTATION MEMORANDUM" in u:
+            if best is None or len(t) > len(best.get("text") or ""):
+                best = it
+    return best
+
+
+def _split_items(items):
+    """(HotelBound file name, its text, the other uploaded quote files)."""
+    hb_item = find_hotelbound_item(items) or {}
+    others = [it for it in (items or [])
+              if it is not hb_item and (it.get("text") or "").strip()
+              and not str(it.get("filename") or "").lower().endswith((".xlsx", ".xls", ".xlsb", ".csv"))]
+    return (hb_item.get("filename") or "").strip(), hb_item.get("text") or "", others
+
+
+def _street_printed(street, text):
+    """True when a street address ("1350 Veterans Boulevard") is printed in the text."""
+    w = (street or "").split()
+    if len(w) < 2 or not w[0][:1].isdigit() or not text:
+        return False
+    return re.search(r"(?<![\w])" + re.escape(w[0]) + r"\s+" + re.escape(w[1]), text, re.I) is not None
+
+
+def _hb_strength(cov, hb, hb_fname=""):
+    """2 = this extracted coverage IS the HotelBound quote (its printed premium or Total Policy
+    Cost, its file, or an earlier HotelBound pass), 1 = it looks like it (HotelBound named, or the
+    same TIV), 0 = no sign of it."""
+    if not isinstance(cov, dict) or not cov:
+        return 0
+    prior = cov.get("hotelbound")
+    if isinstance(prior, dict) and prior.get("detected"):
+        return 2
+    src = str(cov.get("_source_file") or cov.get("_recovered_from") or "").strip()
+    if src and hb_fname and src == hb_fname:
+        return 2
+    tot, prem = _num(cov.get("total_premium")), _num(cov.get("premium"))
+    if hb.get("total_policy_cost") and tot and abs(tot - hb["total_policy_cost"]) <= 1.0:
+        return 2
+    if hb.get("base_premium") and prem and abs(prem - hb["base_premium"]) <= 1.0:
+        return 2
+    blob = " ".join(str(cov.get(k) or "") for k in ("carrier", "program", "policy_form")).lower()
+    if "hotelbound" in blob:
+        return 1
+    tiv = _num(re.sub(r"[^\d.]", "", str(cov.get("tiv") or "")))
+    if hb.get("tiv") and tiv and abs(tiv - hb["tiv"]) <= hb["tiv"] * 0.005:
+        return 1
+    return 0
+
+
+def _source_of(cov, hb_text, others):
+    """Which uploaded file an extracted property coverage was read from:
+    ("hb", "") - the HotelBound quote, ("other", filename) - another quote, ("", "") - can't tell.
+    The figures printed on a quote decide first, the carrier's distinctive name second."""
+    if not isinstance(cov, dict):
+        return "", ""
+    src = str(cov.get("_source_file") or cov.get("_recovered_from") or "").strip()
+    if src:
+        for it in others:
+            if (it.get("filename") or "").strip() == src:
+                return "other", src
+    figs = [cov.get("premium"), cov.get("total_premium")]
+    in_hb = any(_printed_in(f, hb_text) for f in figs)
+    hits = [it for it in others if any(_printed_in(f, it.get("text") or "") for f in figs)]
+    if hits and not in_hb:
+        return "other", hits[0].get("filename") or ""
+    if in_hb and not hits:
+        return "hb", ""
+    toks = _carrier_tokens(cov.get("carrier"))
+    if toks:
+        in_hb_c = toks <= _words(hb_text)
+        hits_c = [it for it in others if toks <= _words(it.get("text") or "")]
+        if hits_c and not in_hb_c:
+            return "other", hits_c[0].get("filename") or ""
+        if in_hb_c and not hits_c:
+            return "hb", ""
+    return "", ""
+
+
+def _filled(cov):
+    return isinstance(cov, dict) and bool(cov)
+
+
+def _compact_alt_slots(coverages):
+    """No gap in the extra property policies: property_alt_2 moves up when property_alt_1 is empty."""
+    if not _filled(coverages.get("property_alt_1")) and _filled(coverages.get("property_alt_2")):
+        coverages["property_alt_1"] = coverages.pop("property_alt_2")
+    for k in _ALT_SLOTS:
+        if k in coverages and not _filled(coverages.get(k)):
+            coverages.pop(k, None)
+
+
+def place_hotelbound_quote(data: dict, hb: dict, items=None) -> list:
+    """Make coverages["property"] the HotelBound quote's own extracted entry before the parsed
+    HotelBound values are written into it. Another property policy that was in "property" moves
+    to a property_alt slot instead of being overwritten; a second copy of the HotelBound quote
+    is dropped. Returns the review-screen notes (also logged)."""
+    coverages = data.setdefault("coverages", {})
+    if not isinstance(coverages, dict):
+        return []
+    hb_fname, hb_text, others = _split_items(items)
+    if not others:
+        # One text for everything (a single upload, or the bot path's combined text): which file
+        # a coverage came from cannot be told, so only the HotelBound figures decide.
+        hb_text = ""
+
+    slots = [k for k in _PROPERTY_SLOTS if _filled(coverages.get(k))]
+    strength = {k: _hb_strength(coverages[k], hb, hb_fname) for k in slots}
+    source = {k: _source_of(coverages[k], hb_text, others) for k in slots}
+
+    hb_key = next((k for k in slots if strength[k] == 2 and source[k][0] != "other"), None)
+    if hb_key is None:
+        hb_key = next((k for k in slots if strength[k] == 1 and source[k][0] != "other"), None)
+
+    def _is_other_policy(k):
+        # keep it as a policy of its own: read from another file, or no sign of HotelBound at all
+        return source[k][0] == "other" or (source[k][0] == "" and strength[k] == 0)
+
+    def _desc(cov):
+        c = str(cov.get("carrier") or "").strip() or "unnamed carrier"
+        t = _num(cov.get("total_premium")) or _num(cov.get("premium"))
+        return f"{c} ({_fmt_money(t, cents=True)})" if t else c
+
+    notes = []
+    hb_label = f"'{hb_fname}'" if hb_fname and hb_fname != "combined" else "the HotelBound quote"
+
+    if hb_key and hb_key != "property":
+        prev = coverages.get("property")
+        coverages["property"] = coverages.pop(hb_key)
+        if _filled(prev):
+            if _is_other_policy("property"):
+                coverages[hb_key] = prev
+                src = source["property"][1]
+                notes.append(
+                    f"Property check — the HotelBound master quote ({hb_label}) is shown as Property and "
+                    f"{_desc(prev)}{f' from {src!r}' if src else ''} is kept as a separate property policy. "
+                    f"Both premiums count in the total; confirm each is shown where you want it.")
+            else:
+                logger.info(f"HotelBound placement: dropped a second reading of the HotelBound quote "
+                            f"that was in 'property' ({_desc(prev)})")
+        logger.info(f"HotelBound placement: HotelBound quote was extracted as {hb_key}; moved to 'property'")
+    elif hb_key is None:
+        prev = coverages.get("property")
+        if (isinstance(prev, dict) and (prev.get("carrier") or prev.get("premium") or prev.get("total_premium"))
+                and source.get("property", ("", ""))[0] == "other"):
+            free = next((k for k in _ALT_SLOTS if not _filled(coverages.get(k))), None)
+            if free:
+                coverages[free] = prev
+                coverages["property"] = {}
+                src = source["property"][1]
+                notes.append(
+                    f"Property check — {_desc(prev)}{f' from {src!r}' if src else ''} is kept as a separate "
+                    f"property policy; Property is built from the HotelBound master quote ({hb_label}). "
+                    f"Both premiums count in the total; confirm each is shown where you want it.")
+                logger.info(f"HotelBound placement: 'property' held another quote ({_desc(prev)}); moved to {free}")
+            else:
+                notes.append(
+                    f"REVIEW REQUIRED — {_desc(prev)} was extracted as Property, but the HotelBound quote "
+                    f"({hb_label}) also needs that slot and both other property slots are taken. The HotelBound "
+                    f"figures replaced it; add that policy back by hand before generating.")
+                logger.warning("HotelBound placement: no free property slot for the other property quote")
+
+    # A second copy of the HotelBound quote in an alt slot (same printed figures) is dropped.
+    for k in _ALT_SLOTS:
+        cov = coverages.get(k)
+        if not _filled(cov) or cov is coverages.get("property"):
+            continue
+        s = _hb_strength(cov, hb, hb_fname)
+        if s == 2 and _source_of(cov, hb_text, others)[0] != "other":
+            coverages.pop(k, None)
+            logger.info(f"HotelBound placement: dropped {k}, a second reading of the HotelBound quote ({_desc(cov)})")
+    _compact_alt_slots(coverages)
+
+    for n in notes:
+        logger.info(n)
+    return notes
+
+
+def _addr_key(street):
+    """House number + first street word, enough to tell scheduled hotels apart."""
+    w = re.findall(r"[a-z0-9]+", (street or "").lower())
+    return " ".join(w[:2]) if w and w[0][:1].isdigit() else ""
+
+
+def _split_address(addr):
+    """'1350 Veterans Boulevard, South San Francisco, CA 94080' -> (street, city, state, zip).
+    Also takes 'City CA, 94080', 'City, California, 94080' and a trailing 'United States'."""
+    s = re.sub(r"\s+", " ", str(addr or "")).strip(" ,")
+    s = re.sub(r",?\s*United States( of America)?$", "", s, flags=re.I)
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    street = parts[0] if parts else ""
+    rest = parts[1:]
+    city = state = zipc = ""
+    if rest and re.fullmatch(r"\d{5}(?:-\d{4})?", rest[-1]):
+        zipc, rest = rest[-1][:5], rest[:-1]
+    if rest:
+        last = rest[-1]
+        m = re.fullmatch(r"(?:(.*?)\s+)?([A-Z]{2})(?:\s+(\d{5})(?:-\d{4})?)?", last)
+        if m and (m.group(2) in STATE_NAMES):
+            state, zipc = m.group(2), m.group(3) or zipc
+            rest = rest[:-1] + ([m.group(1)] if m.group(1) else [])
+        elif last.lower() in _NAME_TO_ABBR:
+            state, rest = _NAME_TO_ABBR[last.lower()], rest[:-1]
+    if rest:
+        city = rest[-1]
+    return street, city, state, zipc
+
+
+def _policy_addresses(cov):
+    """Street addresses an extracted (non-HotelBound) property policy schedules."""
+    out = []
+    for key in ("coverage_by_location", "schedule_of_values"):
+        for row in cov.get(key) or []:
+            if isinstance(row, dict):
+                a = row.get("address") or row.get("location") or ""
+                if isinstance(a, str) and re.search(r"\d+\s+\w+", a):
+                    out.append(re.sub(r"^\s*[\w-]+\s*:\s*(?=\d)", "", a).strip())
+    for key in ("address", "property_address", "location_address", "insured_location"):
+        a = cov.get(key)
+        if isinstance(a, str) and re.search(r"\d+\s+\w+", a):
+            out.append(a.strip())
+    seen, uniq = set(), []
+    for a in out:
+        k = _addr_key(_split_address(a)[0])
+        if k and k not in seen:
+            seen.add(k)
+            uniq.append(a)
+    return uniq
+
+
+def apply_hotelbound_to_data(data: dict, hb: dict, items=None) -> None:
+    """Write the parsed HotelBound quote into the extracted-data dict (mutates in place).
+    items ([{filename, text}], the uploaded files) let the pass find the HotelBound quote's own
+    entry among several property policies; see place_hotelbound_quote."""
     if not hb or not hb.get("detected"):
         return
     coverages = data.setdefault("coverages", {})
+    original_locations = [l for l in (data.get("locations") or []) if isinstance(l, dict)]
+    placement_notes = place_hotelbound_quote(data, hb, items)
+    if placement_notes:
+        ws = data.get("warnings")
+        if not isinstance(ws, list):
+            ws = [ws] if isinstance(ws, str) and ws.strip() else []
+        data["warnings"] = ws + [n for n in placement_notes if n not in ws]
     prop = coverages.get("property")
     if not isinstance(prop, dict):
         prop = {}
@@ -910,12 +1248,58 @@ def apply_hotelbound_to_data(data: dict, hb: dict) -> None:
             loc["tiv"] += r["tiv"]
             loc["num_units"] = (loc["num_units"] or 0) + (r.get("num_units") or 0)
             loc["num_buildings"] += 1
+        # A property policy placed beside the HotelBound master (WS Management: Canopius for
+        # 1350 Veterans Blvd) keeps its hotel on the schedule, as the model read it.
+        on_schedule = {_addr_key(r["street"]) for r in sched} - {""}
+        _, hb_text, other_items = _split_items(items)
+        for k in _ALT_SLOTS:
+            alt = coverages.get(k)
+            if not _filled(alt):
+                continue
+            addrs = _policy_addresses(alt)
+            alt_tiv = _num(re.sub(r"[^\d.]", "", str(alt.get("tiv") or ""))) if len(addrs) == 1 else 0.0
+            wanted = [_split_address(a) for a in addrs]
+            if not wanted:
+                # no address on the extracted policy: the model's locations printed in its own quote
+                src = _source_of(alt, hb_text, other_items)
+                src_text = next((it.get("text") or "" for it in other_items
+                                 if src[0] == "other" and (it.get("filename") or "") == src[1]), "")
+                for l in original_locations:
+                    st = str(l.get("address") or "")
+                    if _street_printed(st, src_text):
+                        wanted.append((st, l.get("city", ""), l.get("state", ""), l.get("zip", "")))
+            for street, city, state, zipc in wanted:
+                akey = _addr_key(street)
+                if not akey or akey in on_schedule:
+                    continue
+                on_schedule.add(akey)
+                match = next((dict(l) for l in original_locations if _addr_key(l.get("address")) == akey), None)
+                loc = match or {
+                    "name": acct, "corporate_entity": (data.get("client_info") or {}).get("named_insured", "") or acct,
+                    "dba": "", "address": street, "city": city, "state": state, "zip": zipc,
+                    "description": "Hotel/Motel", "tiv": 0.0,
+                }
+                if alt_tiv:
+                    loc["tiv"] = alt_tiv
+                loc["number"] = str(len(rebuilt) + 1)
+                rebuilt.append(loc)
+                logger.info(f"HotelBound pass: kept {street} ({k}, {alt.get('carrier')}) on the schedule of locations")
         data["locations"] = rebuilt
 
-    # -- payment options / MEP row for the Payment Options page
+    # -- payment options / MEP row for the Payment Options page. Rows of another property policy
+    # (property_alt_*) stay; the HotelBound row replaces whatever the model wrote for HotelBound.
     po = data.setdefault("payment_options", [])
     if isinstance(po, list):
-        po[:] = [p for p in po if not (isinstance(p, dict) and "property" in (p.get("coverage_type") or "").lower())]
+        keep_tokens = [_carrier_tokens(coverages[k].get("carrier")) for k in _ALT_SLOTS
+                       if _filled(coverages.get(k))]
+        keep_tokens = [t for t in keep_tokens if t]
+
+        def _other_policy_row(p):
+            w = _words(p.get("carrier"))
+            return any(t <= w for t in keep_tokens)
+
+        po[:] = [p for p in po if not (isinstance(p, dict) and "property" in (p.get("coverage_type") or "").lower()
+                                      and not _other_policy_row(p))]
         mep = ""
         if hb.get("mep_amount"):
             mep = (f"{hb.get('mep_percent') or '35%'} of non-admitted premium + 100% aggregate contribution "
@@ -967,11 +1351,5 @@ def apply_hotelbound_to_data(data: dict, hb: dict) -> None:
 
 def find_hotelbound_text(items):
     """Given [{'filename','text'}] pick the file that is a HotelBound quote (full, untruncated text)."""
-    best = None
-    for it in items or []:
-        t = it.get("text") or ""
-        u = t.upper()
-        if "HOTELBOUND" in u and "QUOTATION MEMORANDUM" in u:
-            if best is None or len(t) > len(best):
-                best = t
-    return best
+    best = find_hotelbound_item(items)
+    return best.get("text") if best else None

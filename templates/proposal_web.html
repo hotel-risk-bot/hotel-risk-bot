@@ -795,6 +795,8 @@
                     <select id="add-coverage-select" style="padding:0.5rem; border:1px solid var(--gray-300); border-radius:var(--radius); font-size:0.85rem; min-width:200px;">
                         <option value="">— Select coverage to add —</option>
                         <option value="property">Property</option>
+                        <option value="property_alt_1">Property — Policy 2</option>
+                        <option value="property_alt_2">Property — Policy 3</option>
                         <option value="excess_property">Excess Property Layer 1</option>
                         <option value="excess_property_2">Excess Property Layer 2</option>
                         <option value="general_liability">General Liability</option>
@@ -1511,6 +1513,8 @@ function addNamedInsured() {
 // ─── Coverage Rendering ───
 const COV_DISPLAY = {
     property: 'Property',
+    property_alt_1: 'Property — Policy 2',
+    property_alt_2: 'Property — Policy 3',
     excess_property: 'Excess Property Layer 1',
     excess_property_2: 'Excess Property Layer 2',
     general_liability: 'General Liability',

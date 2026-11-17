@@ -98,24 +98,33 @@ def _gl_alt_label(coverages, alt_key, fallback_option_number):
     Returns strings suitable for inline use like "General Liability (Travelers)"
     or — if carrier is unknown — the legacy 'Option N' fallback.
     """
-    if not isinstance(coverages, dict):
-        return f"General Liability (Option {fallback_option_number})"
-    cov = coverages.get(alt_key) or {}
-    carrier = _short_carrier_label(cov.get("carrier", "") if isinstance(cov, dict) else "")
-    if not carrier:
-        return f"General Liability (Option {fallback_option_number})"
-    return f"General Liability ({carrier})"
+    return _alt_label(coverages, alt_key, "General Liability", fallback_option_number)
 
 
 def _gl_alt_section_title(coverages, alt_key, fallback_option_number):
     """Section-header variant of _gl_alt_label — longer prefix ('Coverage')."""
-    if not isinstance(coverages, dict):
-        return f"General Liability Coverage — Option {fallback_option_number}"
-    cov = coverages.get(alt_key) or {}
+    return _alt_section_title(coverages, alt_key, "General Liability", fallback_option_number)
+
+
+def _alt_label(coverages, alt_key, line_name, fallback_option_number):
+    """'Property (Canopius US)' / 'General Liability (Travelers)' for a second policy or quote
+    of a line, named by its carrier; 'Option N' only when the carrier is unknown. Property gets
+    the same treatment as GL since Nov 16 2026 (WS Management: a separate Canopius policy for
+    one hotel beside the HotelBound master read as 'Property (Option 2)')."""
+    cov = coverages.get(alt_key) if isinstance(coverages, dict) else None
     carrier = _short_carrier_label(cov.get("carrier", "") if isinstance(cov, dict) else "")
     if not carrier:
-        return f"General Liability Coverage — Option {fallback_option_number}"
-    return f"General Liability Coverage — {carrier}"
+        return f"{line_name} (Option {fallback_option_number})"
+    return f"{line_name} ({carrier})"
+
+
+def _alt_section_title(coverages, alt_key, line_name, fallback_option_number):
+    """Section-header variant of _alt_label: 'Property Coverage — Canopius US'."""
+    cov = coverages.get(alt_key) if isinstance(coverages, dict) else None
+    carrier = _short_carrier_label(cov.get("carrier", "") if isinstance(cov, dict) else "")
+    if not carrier:
+        return f"{line_name} Coverage — Option {fallback_option_number}"
+    return f"{line_name} Coverage — {carrier}"
 
 
 def lookup_am_best(carrier_name):
@@ -1266,6 +1275,9 @@ def generate_premium_summary(doc, data):
         coverage_names["general_liability_alt_1"] = _gl_alt_label(coverages, "general_liability_alt_1", 2)
     if "general_liability_alt_2" in coverages:
         coverage_names["general_liability_alt_2"] = _gl_alt_label(coverages, "general_liability_alt_2", 3)
+    for _pa_key, _pa_n in (("property_alt_1", 2), ("property_alt_2", 3)):
+        if _pa_key in coverages:
+            coverage_names[_pa_key] = _alt_label(coverages, _pa_key, "Property", _pa_n)
 
     # Determine if we have expiring data
     has_expiring = bool(expiring) or bool(expiring_details)
@@ -1630,6 +1642,9 @@ def generate_subjectivities(doc, data):
         coverage_names["general_liability_alt_1"] = _gl_alt_label(coverages, "general_liability_alt_1", 2)
     if "general_liability_alt_2" in coverages:
         coverage_names["general_liability_alt_2"] = _gl_alt_label(coverages, "general_liability_alt_2", 3)
+    for _pa_key, _pa_n in (("property_alt_1", 2), ("property_alt_2", 3)):
+        if _pa_key in coverages:
+            coverage_names[_pa_key] = _alt_label(coverages, _pa_key, "Property", _pa_n)
 
     # Carrier-specific clean-up (subjectivity_rules.py, Stefan Oct 28 2026): PartnerRe umbrella
     # and Starr property broker-only items never print; PartnerRe paperwork is due in 5 days.
@@ -2149,6 +2164,10 @@ def generate_information_summary(doc, data):
                 _parts = [p.strip() for p in _a.split(",")]
                 _k = (_normalize_addr(_parts[0]) + "|" + _normalize_city(_parts[1] if len(_parts) > 1 else "")) if _parts and _parts[0] else ""
                 _sov_addr_keys.add(_k or f"row{len(_sov_addr_keys)}")
+            # Hotels on a separate property policy (property_alt_*) are property locations too
+            for _ak, _acov, _aaddrs in _separate_property_policies(coverages):
+                for _st, _ct, _sa in _aaddrs:
+                    _sov_addr_keys.add(_st + "|" + _ct)
             prop_loc_count = len(_sov_addr_keys)
         else:
             # Fall back to num_locations only when no SOV breakdown exists
@@ -2415,7 +2434,12 @@ def generate_information_summary(doc, data):
         prop_cov = coverages.get("property", {})
         if isinstance(prop_cov, dict):
             prop_tiv = prop_cov.get("tiv", "")
-            if prop_tiv:
+            # A separate property policy for other hotels (property_alt_*) adds its values
+            _sep_tiv = sum(_parse_currency(_c.get("tiv") or 0) for _k, _c, _a in _separate_property_policies(coverages))
+            if prop_tiv and _sep_tiv > 0 and _parse_currency(prop_tiv) > 0:
+                rows.append(["Total Insured Value (TIV)", fmt_currency(_parse_currency(prop_tiv) + _sep_tiv)])
+                _tiv_added = True
+            elif prop_tiv:
                 rows.append(["Total Insured Value (TIV)", prop_tiv if isinstance(prop_tiv, str) else fmt_currency(prop_tiv)])
                 _tiv_added = True
             elif prop_cov.get("limits"):
@@ -2653,6 +2677,68 @@ def _fuzzy_addr_match(addr1, addr2):
     return False
 
 
+_PROPERTY_ALT_KEYS = ("property_alt_1", "property_alt_2")
+
+
+def _property_policy_addresses(cov):
+    """(normalized street, normalized city, state) for each hotel a property policy schedules,
+    from its schedule_of_values / coverage_by_location rows or its own address field."""
+    if not isinstance(cov, dict):
+        return []
+    raw = []
+    for key in ("schedule_of_values", "coverage_by_location"):
+        rows = cov.get(key)
+        for row in rows if isinstance(rows, list) else []:
+            if isinstance(row, dict):
+                a = row.get("address") or row.get("location") or ""
+                if isinstance(a, str):
+                    raw.append(a)
+    for key in ("address", "property_address", "location_address", "insured_location"):
+        if isinstance(cov.get(key), str):
+            raw.append(cov[key])
+    out, seen = [], set()
+    for a in raw:
+        a = re.sub(r"^\s*[\w-]+\s*:\s*(?=\d)", "", a.strip())   # "2-1: 4041 Harney Street, ..."
+        if not re.search(r"\d+\s+\w+", a):
+            continue
+        parts = [p.strip() for p in a.split(",") if p.strip()]
+        street, rest = (parts[0] if parts else a), parts[1:]
+        city = state = ""
+        if rest:
+            m = re.fullmatch(r"(?:(.*?)\s+)?([A-Z]{2})(?:\s+\d{5}(?:-\d{4})?)?", rest[-1])
+            if m:
+                state = m.group(2)
+                rest = rest[:-1] + ([m.group(1)] if m.group(1) else [])
+            if rest:
+                city = rest[-1]
+        k = (_normalize_addr(street), _normalize_city(city), state)
+        if k[0] and k not in seen:
+            seen.add(k)
+            out.append(k)
+    return out
+
+
+def _separate_property_policies(coverages):
+    """Property policies placed beside the main one for OTHER hotels: [(key, cov, addresses)]
+    for each property_alt slot whose scheduled hotels are not on the main property policy
+    (WS Management, Nov 16 2026: a Canopius policy for one hotel next to the HotelBound
+    master). A competing quote for the same hotels, or a policy without addresses, is not
+    listed, so its values are never added to the account's."""
+    coverages = coverages if isinstance(coverages, dict) else {}
+    main = [a[0] for a in _property_policy_addresses(coverages.get("property"))]
+    if not main:
+        return []
+    out = []
+    for k in _PROPERTY_ALT_KEYS:
+        cov = coverages.get(k)
+        if not (isinstance(cov, dict) and str(cov.get("carrier") or "").strip()):
+            continue
+        addrs = _property_policy_addresses(cov)
+        if addrs and not any(_fuzzy_addr_match(a[0], m) for a in addrs for m in main):
+            out.append((k, cov, addrs))
+    return out
+
+
 def _dedup_locations(raw_locations):
     """Deduplicate locations by normalized address + building name.
     Preserves distinct buildings at the same campus address (e.g., multi-building hotel)."""
@@ -2744,6 +2830,12 @@ def generate_locations(doc, data):
                            _normalize_city(city) + "|" +
                            state.strip().upper())
                 property_addr_keys.add(addr_key)
+        # A separate property policy for other hotels (property_alt_*, e.g. one hotel placed
+        # outside the HotelBound master) puts those hotels on property as well.
+        if property_addr_keys:
+            for _ak, _acov, _aaddrs in _separate_property_policies(coverages):
+                for _st, _ct, _sa in _aaddrs:
+                    property_addr_keys.add(_st + "|" + _ct + "|" + _sa)
 
     # Property-side keys (Oct 12 2026): the HUB Hospitality SOV lists liability-only hotels
     # with $0 TIV next to the property hotels (Jasmin: Courtyard Orlando on the Starr property
@@ -5547,6 +5639,9 @@ def generate_carrier_rating(doc, data):
         coverage_names["general_liability_alt_1"] = _gl_alt_label(coverages, "general_liability_alt_1", 2)
     if "general_liability_alt_2" in coverages:
         coverage_names["general_liability_alt_2"] = _gl_alt_label(coverages, "general_liability_alt_2", 3)
+    for _pa_key, _pa_n in (("property_alt_1", 2), ("property_alt_2", 3)):
+        if _pa_key in coverages:
+            coverage_names[_pa_key] = _alt_label(coverages, _pa_key, "Property", _pa_n)
 
     for key, display_name in coverage_names.items():
         cov = coverages.get(key)
@@ -6191,9 +6286,11 @@ def generate_proposal(data: dict, output_path: str) -> str:
         # HotelBound (RT Specialty) placements carry a mandatory shared-limits disclosure page
         generate_hotelbound_shared_limits(doc, data)
     if "property_alt_1" in coverages:
-        generate_coverage_section(doc, data, "property_alt_1", "Property Coverage — Option 2")
+        generate_coverage_section(doc, data, "property_alt_1",
+                                  _alt_section_title(coverages, "property_alt_1", "Property", 2))
     if "property_alt_2" in coverages:
-        generate_coverage_section(doc, data, "property_alt_2", "Property Coverage — Option 3")
+        generate_coverage_section(doc, data, "property_alt_2",
+                                  _alt_section_title(coverages, "property_alt_2", "Property", 3))
     if "excess_property" in coverages:
         generate_coverage_section(doc, data, "excess_property", "Excess Property Coverage — Layer 1")
     if "excess_property_2" in coverages:

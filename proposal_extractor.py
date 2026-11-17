@@ -978,12 +978,15 @@ def _run_hotelbound_pass(data: dict, items: list, combined_text: str = "") -> bo
     text = find_hotelbound_text(items) or ""
     if not text and combined_text and "HOTELBOUND" in combined_text.upper():
         text = combined_text
+        items = [{"filename": "combined", "text": combined_text}]
     if not text:
         return False
     hb = parse_hotelbound_quote(text)
     if not hb.get("detected"):
         return False
-    apply_hotelbound_to_data(data, hb)
+    # items let the pass find the HotelBound quote's own entry when there are several property
+    # policies (WS Management, Nov 16 2026), instead of writing over whatever is in "property"
+    apply_hotelbound_to_data(data, hb, items)
     logger.info("HotelBound pass: property section now sourced from the HotelBound quote")
     return True
 

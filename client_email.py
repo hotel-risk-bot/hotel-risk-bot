@@ -16,6 +16,7 @@ import re
 import logging
 
 from proposal_generator import (
+    _alt_label,
     _clean_carrier_name,
     _parse_currency,
     fmt_currency_cents,
@@ -527,6 +528,10 @@ def build_email_context(data, answers=None):
         if not isinstance(cov, dict):
             continue
         label = COVERAGE_LABELS.get(key, key.replace("_", " ").title())
+        # a second property / GL policy is named by its carrier, as on the Premium Summary page
+        _alt_m = re.fullmatch(r"(property|general_liability)_alt_([12])", key)
+        if _alt_m:
+            label = _alt_label(coverages, key, COVERAGE_LABELS[_alt_m.group(1)], int(_alt_m.group(2)) + 1)
         proposed = _num(cov.get("total_premium")) or _num(cov.get("premium"))
         exp = _expiring_for(key, expiring, expiring_details) if has_expiring else 0.0
 
