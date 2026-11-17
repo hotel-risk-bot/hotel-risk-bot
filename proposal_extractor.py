@@ -47,6 +47,15 @@ try:
     OCR_WORKERS = max(1, int(os.environ.get("OCR_WORKERS", "4")))
 except ValueError:
     OCR_WORKERS = 4
+# A file whose text layer is scrambled (fonts without a character map) is read by OCR like a
+# scanned one: its first SCRAMBLED_OCR_MAX_PAGES pages, keeping the best-scored
+# SCRAMBLED_OCR_MAX_CHARS characters so the declarations and schedules fit the file's share
+# of the model's input. See _page_scrambled (Nov 17 2026).
+try:
+    SCRAMBLED_OCR_MAX_PAGES = max(1, int(os.environ.get("SCRAMBLED_OCR_MAX_PAGES", "30")))
+except ValueError:
+    SCRAMBLED_OCR_MAX_PAGES = 30
+SCRAMBLED_OCR_MAX_CHARS = 30000
 
 
 def _get_openai_client():
@@ -269,6 +278,39 @@ def _score_page(page_text: str) -> float:
     return score
 
 
+# Common English and insurance words: a page of real text, a schedule or a list of names
+# carries plenty of them; a page drawn with fonts that have no character map does not.
+_READABLE_VOCAB = frozenset("""
+the of and to in for is on or by with this that be as are any not policy insurance coverage insured
+liability shall which from at your you we our form forms date premium limit limits each total page schedule
+part endorsement endorsements number name address city state zip county location locations building
+buildings value values property general commercial occurrence aggregate damage injury bodily personal
+advertising medical products completed operations rented premises exclusion exclusions conditions
+declarations effective expiration period company insurer named additional deductible retention fee fees
+tax taxes surplus lines amount payment rate rating basis class classification exposure sales hotel hotels
+motel inn suites terrorism notice cancellation will may must has have been other all such its their under
+per than more less only also within after before during against including include includes provided
+provide following above below if no yes see attached included excluded business income extra expense
+contents equipment breakdown flood earthquake wind hail storm named windstorm replacement cost actual cash
+valuation coinsurance agreed sublimit sublimits claim claims made description title line interline liquor
+umbrella excess underlying quote quotation proposal subject
+""".split())
+
+
+def _page_scrambled(text: str) -> bool:
+    """True when a page's extracted text is junk: a text layer drawn with fonts that carry no
+    character map (Burlington GL policy, Nov 17 2026: "8295 30 5 3 012 542 21 295 30043").
+    Readable words are under 3% of its characters and common words under 5 per 1,000. A list of
+    proper names (HotelBound's county list, 13% words) or a schedule of figures with its column
+    labels passes; a nearly empty page is never called scrambled."""
+    nonspace = sum(1 for c in text or "" if not c.isspace())
+    if nonspace < 200:
+        return False
+    words = re.findall(r"[A-Za-z]{3,}", text)
+    hits = sum(1 for w in words if w.lower() in _READABLE_VOCAB)
+    return len(words) < 0.03 * nonspace and hits * 1000 < 5 * nonspace
+
+
 def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 100000) -> str:
     """
     Smart PDF text extraction that prioritizes quote summary pages
@@ -314,10 +356,40 @@ def extract_text_from_pdf_smart(pdf_path: str, max_chars: int = 100000) -> str:
                         "chars": len(page_text)
                     })
 
+        # --- Scrambled text layer (Nov 17 2026, WS Management / Hampton Tulare Burlington GL) ---
+        # A Vertafore "ABCpdf" policy draws its text with Type 3 fonts that carry no character map,
+        # so pdftotext returns digits and symbols on every page ("8295 30 5 3 012 542 21 295"). The
+        # model saw junk (only one Arial box with the premium was readable) and the forms audit then
+        # matched the policy to another file's forms. When most pages read like that, the file is read
+        # like a scanned one: its first pages by OCR, scored and selected as usual.
+        _scrambled_read = False
+        if page_texts and HAS_PDF2IMAGE:
+            _scr = [p["page"] for p in page_texts if _page_scrambled(p["text"])]
+            if len(_scr) >= max(3, 0.5 * len(page_texts)):
+                _n_ocr = min(total_pages, SCRAMBLED_OCR_MAX_PAGES)
+                logger.warning(f"Scrambled text layer: {len(_scr)} of {len(page_texts)} text pages of "
+                               f"{os.path.basename(pdf_path)} are unreadable; reading pages 1-{_n_ocr} by OCR")
+                try:
+                    _res = _ocr_pages(pdf_path, list(range(1, _n_ocr + 1)))
+                    _ocr_pt = []
+                    for pg in range(1, _n_ocr + 1):
+                        _t = (_res.get(pg) or ("", "", ""))[0]
+                        if _t and len(_t.strip()) > 50:
+                            _ocr_pt.append({"page": pg, "text": _t, "score": _score_page(_t), "chars": len(_t)})
+                    if _ocr_pt:
+                        page_texts = _ocr_pt
+                        max_chars = min(max_chars, SCRAMBLED_OCR_MAX_CHARS)
+                        _scrambled_read = True
+                        _rest = (f"; pages {_n_ocr + 1}-{total_pages} were not read" if total_pages > _n_ocr else "")
+                        _OCR_REVIEW_NOTES.setdefault(_ocr_note_key(pdf_path), []).append(
+                            ("scrambled", f"pages 1-{_n_ocr} of {total_pages} were read by OCR{_rest}"))
+                except Exception as e:
+                    logger.error(f"Scrambled-text OCR failed: {e}")
+
         # --- OCR fallback for image-only pages AND thin-critical pages ---
         # Thin-critical: < 500 chars of pdftotext but mentions a tabular keyword
         # (e.g. Tower Hill PREMISES AND BUILDINGS where headers extract but the Bldg# table is image-based)
-        if page_texts and HAS_PDF2IMAGE:
+        if page_texts and HAS_PDF2IMAGE and not _scrambled_read:
             text_pages_map = {p["page"]: p for p in page_texts}
             missing_pages = [p for p in range(1, total_pages + 1) if p not in text_pages_map]
             _thin_crit_kw = (
@@ -1403,7 +1475,7 @@ def _restore_property_quote_forms(cov_key: str, cov: dict, original: list, clean
     if not cand or not items:
         return cleaned, [], ""
     from forms_schedule_audit import pick_source_text
-    text, fname = pick_source_text(items, str((cov or {}).get("carrier") or ""), cov_key)
+    text, fname = pick_source_text(items, str((cov or {}).get("carrier") or ""), cov_key, cov)
     if not text:
         return cleaned, [], ""
     blob = re.sub(r"[^A-Z0-9]", "", text.upper())
@@ -3386,6 +3458,10 @@ TEXT:
                         if _lvl == "review":
                             _ocr_ws.append(f"REVIEW REQUIRED — '{it.get('filename', '')}' is a scanned / image-only "
                                            f"file and {_on}. Check those values against the quote before sending.")
+                        elif _lvl == "scrambled":
+                            _ocr_ws.append(f"OCR check — '{it.get('filename', '')}' has a scrambled text layer (its fonts "
+                                           f"carry no character map), so {_on}. Check its limits, forms and premium "
+                                           f"against the PDF before sending.")
                         else:
                             _ocr_ws.append(f"OCR check — '{it.get('filename', '')}' (scanned / image-only), {_on}.")
                 if _ocr_ws:

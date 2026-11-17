@@ -67,7 +67,8 @@ _FORM_NUMBER_FULL_RE = re.compile(
     r"|[A-Z]{1,4}\d{2,5}[A-Z]{1,2})"                          # letter prefix AND suffix ("BR5269G")
     r"(?:[\s\-/]\d{2,4}){0,4}"                                # edition / further numeric groups
     r"|[A-Z]{2,5}\d{3,5}(?:0[1-9]|1[0-2])\d{2}"               # edition glued on ("EMO30011023")
-    r"|[A-Z]{2,6}(?:-[A-Z0-9]{2,8}){1,3}"                     # dashed carrier codes
+    r"|[A-Z]{2,6}(?:-[A-Z0-9]{1,8}){1,3}(?:\s\d{2}){0,2}"     # dashed carrier codes ("IFG-G-0002-DL 10 25")
+    r"|[A-Z]-\d{1,4}\s\d{2}\s\d{2}"                          # one-letter state notices with edition ("D-2 01 20")
     r"|[A-Z]{2,6}(?:\s+[A-Za-z]{2,8}){0,2}\s*\(\d{2}[-/]\d{2,4}\)"  # edition in parentheses
     r")$"
 )
@@ -80,6 +81,7 @@ _FORM_NUMBER_TAIL_RE = re.compile(
 
 _SCHEDULE_HEADER_RE = re.compile(
     r"^\s*(FORMS?\s*:?|FORMS?\s+(?:AND|&)\s+ENDORSEMENTS?|SCHEDULE\s+OF\s+FORMS?(?:\s+AND\s+ENDORSEMENTS?)?|"
+    r"(?:LISTING|LIST)\s+OF\s+FORMS?(?:\s+(?:AND|&)\s+ENDORSEMENTS?)?|"   # Burlington "LISTING OF FORMS AND ENDORSEMENTS"
     r"FORMS?\s+SCHEDULE|ENDORSEMENTS?\s+SCHEDULE|APPLICABLE\s+FORMS?|POLICY\s+FORMS?(?:\s+AND\s+ENDORSEMENTS?)?)"
     r"(?:\s*[\(\[]?\s*-?\s*CONT(?:INUED|['’]?D)?\.?\s*[\)\]]?)?\s*:?\s*$",   # "(Cont'd)", "Continued"
     re.I,
@@ -151,6 +153,12 @@ def _is_form_number(tok: str) -> bool:
     t = (tok or "").strip()
     if not t or len(t) > 40 or not re.search(r"\d", t):
         return False
+    # A bare number is a row, page or location number, never a form number (Nov 17 2026, WS
+    # Management: Southlake's Schedule of Locations rows "10   7216 55th Street, Sacramento, CA,
+    # 95823" were read as form "10" and added to both GL sections; rows 1-9 escaped only because
+    # one digit was too short to match).
+    if re.fullmatch(r"\d{1,6}", t):
+        return False
     return bool(_FORM_NUMBER_FULL_RE.match(t))
 
 
@@ -173,6 +181,21 @@ def _split_row(line: str):
     m = _FORM_NUMBER_TAIL_RE.search(t)
     if m:
         return t[: m.start("num")].strip(), m.group("num").strip()
+    return _split_single_spaced_number_first(t)
+
+
+def _split_single_spaced_number_first(t: str):
+    """'IFG-I-0101 10 25 Common Policy Declarations' / 'CG 00 01 04 13 Commercial General ...':
+    a number-first row with single spaces, as OCR writes a forms listing (Nov 17 2026, the
+    Burlington GL policy read by OCR). The longest leading run of tokens that is a form number
+    with a letter in it, followed by a title that starts with a capitalised word."""
+    toks = t.strip().split()
+    for k in range(min(6, len(toks) - 1), 0, -1):
+        num = " ".join(toks[:k])
+        rest = " ".join(toks[k:])
+        if (re.search(r"[A-Z]", num) and _is_form_number(num)
+                and re.match(r"[A-Z][A-Za-z'’.]", rest) and sum(1 for c in rest if c.isalpha()) >= 6):
+            return rest, num
     return None
 
 
@@ -195,12 +218,19 @@ def _looks_like_continuation(line: str) -> bool:
     return upper_ratio > 0.85 or t[0].islower() or t.startswith("(") or t.endswith(")")
 
 
+# A street address in the title column: a schedule of locations, not of forms
+# ("7216 55th Street, Sacramento, CA, 95823", "1100 North Cherry Street Tulare, CA 93274").
+_ADDRESS_DESC_RE = re.compile(r"^\d{1,6}\s+\S.*\b[A-Z]{2}\s*,?\s*\d{5}(?:-\d{4})?\s*$")
+
+
 def _row_desc_ok(desc: str) -> bool:
     """A schedule row's title passes: not empty, not money or a reference number, not
-    page furniture (page counter, copyright line)."""
+    page furniture (page counter, copyright line), not a street address."""
     if not desc or "$" in desc or len(desc) > 140 or desc.count(".") > 2:
         return False
     if re.search(r"\b(POLICY|QUOTE|REFERENCE|ACCOUNT)\s*(NO|NUMBER|#)", desc, re.I):
+        return False
+    if _ADDRESS_DESC_RE.match(desc.strip()):
         return False
     return not _FOOTER_DESC_RE.search(desc)
 
@@ -422,11 +452,70 @@ def _default_reject(coverage_key: str):
     return None
 
 
-def pick_source_text(items: list, carrier: str, coverage_key: str) -> tuple[str, str]:
+_GENERIC_CARRIER_WORDS = {"insurance", "company", "specialty", "group", "limited", "underwriters",
+                          "corporation", "national", "american", "mutual", "casualty", "indemnity",
+                          "assurance", "surplus", "lines", "certain", "lloyds", "london", "syndicate"}
+
+
+def _carrier_words(carrier: str) -> list:
+    """Distinctive words of a carrier name ('Burlington Insurance Company' -> ['burlington'])."""
+    return [t for t in re.findall(r"[a-z0-9]+", (carrier or "").lower().replace("'", ""))
+            if len(t) >= 4 and t not in _GENERIC_CARRIER_WORDS and not t.isdigit()]
+
+
+def _amount(v) -> float:
+    try:
+        return float(re.sub(r"[^\d.]", "", str(v)) or 0) if not isinstance(v, (int, float)) else float(v)
+    except ValueError:
+        return 0.0
+
+
+def _printed_in(value, text: str) -> bool:
+    """True when the amount is printed in the text ("$42,559.00", "42,559", "44312.38")."""
+    v = _amount(value)
+    if v < 100 or not text:
+        return False
+    forms = {f"{v:,.2f}", f"{v:.2f}"}
+    if abs(v - round(v)) < 0.005 and v >= 1000:
+        forms.add(f"{v:,.0f}")
+    return any(re.search(r"(?<![\d.,])" + re.escape(f) + r"(?!\d|[.,]\d)", text) for f in forms)
+
+
+def pick_source_text(items: list, carrier: str, coverage_key: str, cov: dict = None) -> tuple[str, str]:
     """Choose the uploaded file that most likely IS this coverage's quote.
-    Scores each file on carrier-name mentions and coverage keywords."""
+
+    Nov 17 2026 (WS Management): the Burlington GL policy for one hotel had a scrambled text
+    layer, so its carrier name was nowhere in its text, and the old keyword score picked the
+    Southlake package (117 mentions of "general liability") for it; the Burlington section got
+    Southlake's 49 forms. The file is now chosen by what ties it to this coverage, strongest
+    first: the file a pass recorded (_source_file / _recovered_from); the one file that prints
+    the coverage's premium or total; then, when the carrier has a distinctive name, only files
+    whose text or file name carry it (none = no audit, never a guess). Coverage keywords and
+    carrier mentions only rank the files that are left."""
     if not items:
         return "", ""
+    files = [it for it in items if it.get("text")]
+    cov = cov if isinstance(cov, dict) else {}
+    src = str(cov.get("_source_file") or cov.get("_recovered_from") or "").strip()
+    if src:
+        for it in files:
+            if (it.get("filename") or "").strip() == src:
+                return it["text"], it.get("filename", "")
+    words = _carrier_words(carrier)
+
+    def _names_carrier(it):
+        low, fname = it["text"].lower(), (it.get("filename") or "").lower()
+        return any(w in low or w in fname for w in words)
+
+    figs = [cov.get("total_premium"), cov.get("premium")]
+    fig_hits = [it for it in files if any(_printed_in(f, it["text"]) for f in figs)]
+    if len(fig_hits) == 1 and (not words or _names_carrier(fig_hits[0])):
+        return fig_hits[0]["text"], fig_hits[0].get("filename", "")
+    if words:
+        named = [it for it in files if _names_carrier(it)]
+        if not named:
+            return "", ""
+        items = [it for it in named if it in fig_hits] or named
     key = (coverage_key or "").lower()
     if key.startswith("umbrella") or key.startswith("excess_liab"):
         kws = ("umbrella", "excess liability", "commercial excess", "following form", "schedule of underlying")
@@ -450,8 +539,7 @@ def pick_source_text(items: list, carrier: str, coverage_key: str) -> tuple[str,
                 "workers compensation", "business auto", "statement of values")
     else:
         return "", ""
-    carrier_tokens = [t.lower().strip(",.") for t in (carrier or "").split() if len(t) >= 4
-                      and t.lower() not in ("insurance", "company", "specialty", "group", "limited", "underwriters")]
+    carrier_tokens = words
     best, best_score, best_name = "", 0, ""
     for it in items:
         txt = it.get("text") or ""
@@ -587,7 +675,7 @@ def run_forms_schedule_audit(data: dict, items: list, reject_fn_factory=None) ->
         if not isinstance(cov, dict):
             continue
         carrier = str(cov.get("carrier") or cov.get("carrier_name") or "")
-        text, fname = pick_source_text(items, carrier, key)
+        text, fname = pick_source_text(items, carrier, key, cov)
         if not text:
             logger.info(f"Forms audit: no distinct source file identified for {key} ({carrier}) - skipped")
             continue
