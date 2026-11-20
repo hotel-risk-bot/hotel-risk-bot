@@ -180,6 +180,10 @@ SERVICE_TEAM_CLAIMS_ADVOCATE = {
 ACCOUNT_EXECUTIVES = {
     "maureen_harvey": {"role": "Account Executive", "name": "Maureen Harvey, CIC, CRM",
         "phone": "O: 407-893-3830\nF: 407-831-3063", "email": "maureen.harvey@hubinternational.com"},
+    # Added Nov 20 2026 (Stefan). The address is as HUB issued it: "millerstewar", cut at 20 characters.
+    "monique_miller_stewart": {"role": "Hotel Franchise Team Lead and Account Executive",
+        "name": "Monique Miller-Stewart",
+        "phone": "O: 312-279-4865", "email": "monique.millerstewar@hubinternational.com"},
     "natalie_clements": {"role": "Account Manager - Hotel Franchise", "name": "Natalie Clements",
         "phone": "O: 312-429-2310", "email": "natalie.clements@hubinternational.com"},
     "becca_hanes": {"role": "Account Manager - Hotel Franchise", "name": "Becca Hanes",
@@ -1197,7 +1201,9 @@ def generate_service_team(doc, data):
     for member in _build_service_team(data):
         rows.append([member["role"], member["name"], member["phone"], member["email"]])
     
-    create_styled_table(doc, headers, rows, col_widths=[1.8, 1.6, 1.4, 2.7],
+    # Widths sized to the longest entries at 10 pt (Nov 20 2026): Monique Miller-Stewart's address
+    # needs 2.6 in on one line and "Maureen Harvey, CIC, CRM" 1.5 in; a phone number needs 1.0 in.
+    create_styled_table(doc, headers, rows, col_widths=[1.75, 1.7, 1.2, 2.85],
                        header_size=11, body_size=10)
     
     # Office locations
