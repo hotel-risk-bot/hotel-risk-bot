@@ -85,6 +85,29 @@ def _describe(cov):
     return f"{carrier} ({lim} excess of the liquor liability)" if lim else f"{carrier} (excess of the liquor liability)"
 
 
+def _drop_tower_rows(covs):
+    """The excess liquor policy is not part of the umbrella tower: it carries no tower table of
+    its own (the model wrote "Parallel primary excess liquor liability; not excess of PartnerRe"
+    under an "Umbrella Tower Structure" heading), and it is not a row in the umbrella's tower."""
+    xl = covs.get(EXCESS_LIQUOR_KEY)
+    if not isinstance(xl, dict):
+        return
+    xl.pop("tower_structure", None)
+    words = _carrier_words(xl.get("carrier"))
+    if not words:
+        return
+    for key in _LAYER_CHAIN + _ALIAS_SLOTS:
+        cov = covs.get(key)
+        rows = cov.get("tower_structure") if isinstance(cov, dict) else None
+        if not isinstance(rows, list):
+            continue
+        kept = [r for r in rows
+                if not (words <= _carrier_words(r.get("carrier") if isinstance(r, dict) else r)
+                        and _LIQUOR_RE.search(" ".join(str(v) for v in r.values()) if isinstance(r, dict) else str(r)))]
+        if len(kept) != len(rows):
+            cov["tower_structure"] = kept
+
+
 def run_excess_liquor(data, items=None):
     """Move an excess policy that sits over the liquor liability alone out of the umbrella
     slots, into its own line. Returns review notes. `items` is unused (same signature as the
@@ -122,6 +145,7 @@ def run_excess_liquor(data, items=None):
             if (isinstance(p, dict) and words and words <= _carrier_words(p.get("carrier"))
                     and re.search(r"umbrella|excess", str(p.get("coverage_type") or ""), re.I)):
                 p["coverage_type"] = EXCESS_LIQUOR_LABEL
+    _drop_tower_rows(covs)
     if notes:
         ws = data.get("warnings")
         if not isinstance(ws, list):

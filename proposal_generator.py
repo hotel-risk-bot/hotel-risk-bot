@@ -2417,6 +2417,16 @@ def generate_information_summary(doc, data):
                     type_name = classification.split("-")[0].strip().title()
                     other_types[type_name] = other_types.get(type_name, 0) + 1
     
+    # Third (no SOV): a hotel on the property quote's own schedule that the GL class schedule
+    # does not list is still one of the account's hotels (WG Hotel, Nov 24 2026: the hotel
+    # insured here for property only was left out, "6 Hotel(s)" beside 7 locations).
+    if hotel_count and not (sov_data and sov_data.get("locations")):
+        for _pk in sorted(_prop_quote_keys):
+            _pa = _pk.split("|")[0]
+            if _pa and not _addr_already_seen(_pa):
+                seen_loc_addrs.append(_pa)
+                hotel_count += 1
+
     type_parts = []
     if hotel_count: type_parts.append(f"{hotel_count} Hotel(s)")
     if office_count: type_parts.append(f"{office_count} Office(s)")
@@ -4938,9 +4948,9 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
             create_styled_table(doc, ["#", "Address"], _xl_rows, col_widths=[0.4, 7.1],
                                 header_size=9, body_size=8, header_alignments={0: _xl_L, 1: _xl_L})
 
-    # Tower Structure (Umbrella)
+    # Tower Structure (Umbrella). Never under Excess Liquor Liability: it is not a layer of the tower.
     tower = cov.get("tower_structure", [])
-    if tower:
+    if tower and coverage_key != "excess_liquor_liability":
         add_subsection_header(doc, "Umbrella Tower Structure")
         headers = ["Layer", "Carrier", "Limits"]
         # Same isinstance guard as underlying_insurance — GPT occasionally

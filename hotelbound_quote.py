@@ -74,7 +74,10 @@ _GULF_ATLANTIC_TIER1_STATES = {"LA", "MS", "AL", "GA", "SC", "NC", "VA"}
 _FOOTER_RE = re.compile(
     r"RT Specialty is a division|subsidiary of Ryan Specialty|In California:\s*RSG|"
     r"150 South US Highway|Phone - \(561\)|^\s*UQT \d|^\s*QUOTATION MEMORANDUM\s*$|Page \|\s*\d+|"
-    r"^\s*B \d\.\d\.\d\s+APP\d+|^\s*\d+ of \d+\s*$"
+    r"^\s*B \d\.\d\.\d\s+APP\d+|^\s*\d+ of \d+\s*$|"
+    # the extraction's own page marker: an item that wraps over a page break otherwise keeps it
+    # ("Consequential --- Page 13 --- Reduction in Value"; WG Consolidated Hotel Group, Nov 2026)
+    r"^\s*-{2,}\s*Page\s+\d+\s*-{2,}\s*$"
 )
 
 
@@ -336,7 +339,8 @@ def parse_hotelbound_quote(text: str) -> dict:
     hb["sublimits"] = _parse_sublimits(text)
     m = re.search(r"ATTACHMENTS:[ \t]*(.*?)\n[ \t]*\n", text, re.S)
     if m:
-        hb["attachments"] = [re.sub(r"\s+", " ", l).strip() for l in m.group(1).split("\n") if l.strip()]
+        # the list can end at the foot of a page, with no blank line before the RT Specialty footer
+        hb["attachments"] = [re.sub(r"\s+", " ", l).strip() for l in _clean_lines(m.group(1)) if l.strip()]
     else:
         hb["attachments"] = []
     m = re.search(r"These limitations may include, but are not limited to, the following:\s*\n(.*?)\n\s*\n", text, re.S)

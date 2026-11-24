@@ -135,13 +135,31 @@ n = xl.run_excess_liquor(d)
 check(d["coverages"]["excess_liquor_liability"]["carrier"] == "Northfield Star Indemnity Company", list(d["coverages"]))
 check(any("second excess liquor policy" in x and "Other Liquor Excess Company" in x for x in n), n)
 
+# the model's tower notes: none on the liquor policy, and it is not a row of the umbrella's tower
+TOWER_ROW = {"layer": "Primary excess over scheduled General Liability", "carrier": "Summit Re Insurance Solutions Ltd.",
+             "limits": "$3,000,000 Excess of Scheduled Policy"}
+LIQ_ROW = {"layer": "Parallel primary excess liquor liability; not excess of Summit Re",
+           "carrier": "Northfield Star Indemnity Company", "limits": "$3,000,000 in excess of underlying Liquor Liability"}
+d = make(umbrella=dict(TOWER, tower_structure=[dict(TOWER_ROW), dict(LIQ_ROW)]),
+         umbrella_layer_2=dict(LIQUOR_XS, tower_structure=[dict(LIQ_ROW)]))
+xl.run_excess_liquor(d)
+check("tower_structure" not in d["coverages"]["excess_liquor_liability"], "no tower table on the liquor policy")
+check(d["coverages"]["umbrella"]["tower_structure"] == [TOWER_ROW], d["coverages"]["umbrella"]["tower_structure"])
+# a session extracted after the move but before this rule: cleaned on the next run
+d = make(umbrella=dict(TOWER, tower_structure=[dict(TOWER_ROW)]),
+         excess_liquor_liability=dict(LIQUOR_XS, tower_structure=[dict(LIQ_ROW)]))
+check(xl.run_excess_liquor(d) == [], "nothing to move")
+check("tower_structure" not in d["coverages"]["excess_liquor_liability"], "tower table dropped on a later run")
+check(d["coverages"]["umbrella"]["tower_structure"] == [TOWER_ROW], "the umbrella keeps its own row")
+
 # ------------------------------------------------------------------ 5. the extraction runs it
 src = open(os.path.join(ROOT, "proposal_extractor.py"), encoding="utf-8").read()
 check('("excess_liquor", "run_excess_liquor")' in src, "pass registered with the quote detail passes")
 check(src.index('("excess_liquor", "run_excess_liquor")') < src.index('("subjectivity_rules"'), "before the subjectivity rules")
 
 # ------------------------------------------------------------------ 6. the proposal (a session extracted before the change)
-d = make(umbrella=TOWER, umbrella_layer_2=LIQUOR_XS)
+d = make(umbrella=dict(TOWER, tower_structure=[dict(TOWER_ROW)]),
+         umbrella_layer_2=dict(LIQUOR_XS, tower_structure=[dict(LIQ_ROW)]))
 d["coverages"]["property"] = {"carrier": "Starr Surplus Lines Insurance Company", "premium": 100000, "total_premium": 104000}
 with tempfile.TemporaryDirectory() as td:
     out = os.path.join(td, "p.docx")
@@ -180,6 +198,8 @@ check(["1", "615 North Lancaster Pike, Exton, PA 19341"] in sec_rows and ["2", "
 check(any(k == "P" and c[0].startswith("This Excess Liquor Liability policy applies only to the following locations")
           for k, c in section), "says it is limited to those hotels")
 check(paras.index("Excess Liquor Liability Coverage") > paras.index("Umbrella / Excess Liability Coverage"), "after the umbrella")
+check(not any(c == ["Umbrella Tower Structure"] for _k, c in section), "no tower table in the liquor section")
+check(paras.count("Umbrella Tower Structure") == 1 and "Parallel primary" not in text, "the umbrella's own tower table only")
 check(any(r[0] == "Northfield Star Indemnity Company" and r[-1] == "Excess Liquor Liability" for r in rows), "carrier ratings row")
 check("--" not in "\n".join(paras[paras.index("Excess Liquor Liability Coverage"):nxt]), "no double dashes")
 

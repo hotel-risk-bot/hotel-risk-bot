@@ -101,6 +101,76 @@ QUOTATION MEMORANDUM
 
         TERRORISM: Included - This premium is included in the Total Premium shown above
 
+     SCHEDULE OF         A. $500,000 per Occurrence per Insured Member as respects Extra Expense;
+       SUBLIMITS:
+                         B. Lesser of $100,000 or 30 days per Occurrence per Insured Member as respects
+                            Ingress / Egress; limit 5 mile radius;
+              RT Specialty is a division of RSG Specialty, LLC, a Delaware limited liability company
+                                  and a subsidiary of Ryan Specialty Group, LLC.
+                   In California: RSG Specialty Insurance Services, LLC (License # 0G97516)
+                              150 South US Highway 1, 3rd Floor, Jupiter, FL 33477
+                                    Phone - (561) 615-5552 Fax - (561) 615-5592                     Page | 6
+UQT 10 2022
+
+--- Page 8 ---
+QUOTATION MEMORANDUM
+
+                         C. $100,000 per Occurrence per Insured Member as respects Consequential
+
+              RT Specialty is a division of RSG Specialty, LLC, a Delaware limited liability company
+                                  and a subsidiary of Ryan Specialty Group, LLC.
+                   In California: RSG Specialty Insurance Services, LLC (License # 0G97516)
+                              150 South US Highway 1, 3rd Floor, Jupiter, FL 33477
+                                    Phone - (561) 615-5552 Fax - (561) 615-5592                     Page | 7
+UQT 10 2022
+
+--- Page 9 ---
+QUOTATION MEMORANDUM
+
+                              Reduction in Value
+                          D. $100,000 per Occurrence per Insured Member as respects Expediting Expense
+
+                      The above may not include all sublimits. Please review the full policy form and
+                      endorsements.
+
+              FORM: HotelBound Manuscript Wording
+
+   ATTACHMENTS: HB Evidence of Coverage
+                HB Shared Limits Disclosure
+                HB Manuscript
+              RT Specialty is a division of RSG Specialty, LLC, a Delaware limited liability company
+                                  and a subsidiary of Ryan Specialty Group, LLC.
+                   In California: RSG Specialty Insurance Services, LLC (License # 0G97516)
+                              150 South US Highway 1, 3rd Floor, Jupiter, FL 33477
+                                    Phone - (561) 615-5552 Fax - (561) 615-5592                     Page | 8
+UQT 10 2022
+
+--- Page 10 ---
+QUOTATION MEMORANDUM
+
+                     HB Schedule of Carriers with Terrorism
+
+     WARRANTIES: Warrant loss runs on file cover all locations on the broker's statement of values.
+                 Warrant no deterioration of loss history since the valuation date of loss runs on file.
+
+              RT Specialty is a division of RSG Specialty, LLC, a Delaware limited liability company
+                                  and a subsidiary of Ryan Specialty Group, LLC.
+                   In California: RSG Specialty Insurance Services, LLC (License # 0G97516)
+                              150 South US Highway 1, 3rd Floor, Jupiter, FL 33477
+                                    Phone - (561) 615-5552 Fax - (561) 615-5592                     Page | 9
+UQT 10 2022
+
+--- Page 11 ---
+QUOTATION MEMORANDUM
+
+                     Warrant no aluminum wiring inside any building.
+                     Warrant active automatic sprinkler system covering 100% of all buildings that are reported
+                     sprinklered.
+
+   SUBJECTIVITIES: Due at binding:
+                      · Request to bind must be in writing
+                      · Statement of Values signed by the insured prior to inception of coverage
+
 PREMIUM AND FEES:          Non-Admitted Premium:                                 $113,729
                            Program Brokerage Fee:                                 $17,060
                            Program Inspection Fee:                                     $0
@@ -212,6 +282,27 @@ check(len({r["location_number"] for r in sched}) == 6, "six addresses")
 # the Schedule of Values attributes still ride along with the corrected address
 check(sched[6]["year_built"] == "1967" and sched[6]["num_units"] == 105, sched[6])
 
+# lists that run over a page break carry neither the page marker nor the wholesaler's footer
+check(hb["attachments"] == ["HB Evidence of Coverage", "HB Shared Limits Disclosure", "HB Manuscript"], hb["attachments"])
+subl = {x["letter"]: (x["description"], x["limit"]) for x in hb["sublimits"]}
+check(subl == {"A": ("Extra Expense", "$500,000 per Occurrence"),
+               "B": ("Ingress / Egress — limit 5 mile radius", "Lesser of $100,000 or 30 days per Occurrence"),
+               "C": ("Consequential Reduction in Value", "$100,000 per Occurrence"),
+               "D": ("Expediting Expense", "$100,000 per Occurrence")}, subl)
+check(hb["warranties"] == [
+    "Warrant loss runs on file cover all locations on the broker's statement of values.",
+    "Warrant no deterioration of loss history since the valuation date of loss runs on file.",
+    "Warrant no aluminum wiring inside any building.",
+    "Warrant active automatic sprinkler system covering 100% of all buildings that are reported sprinklered."],
+    hb["warranties"])
+check(hb["subjectivities"] == ["Request to bind must be in writing",
+                               "Statement of Values signed by the insured prior to inception of coverage"],
+      hb["subjectivities"])
+import json as _json  # noqa: E402
+_blob = _json.dumps({k: v for k, v in hb.items() if k != "program_brokerage_fee_text"}, default=str)
+for junk in ("--- Page", "RSG Specialty", "Ryan Specialty", "(561)", "UQT 10 2022", "Jupiter, FL"):
+    check(junk not in _blob, f"{junk!r} left in the parsed quote")
+
 # ------------------------------------------------------------------ 3. the model's reading, then the pass
 GL_PREMISES = ["6890 LINDBERGH AVENUE, Philadelphia, PA, 19153", "615 North Lancaster Pike, Exton, PA, 19341",
                "2100 Oxford Boulevard West, Langhorne, PA, 19047", "5426 Lower York Road, New Hope, PA, 18938",
@@ -249,14 +340,20 @@ def model_data(premises=GL_PREMISES, classes=CLASSES):
 ITEMS = [{"filename": "Keystone Lodging Group - Hotelbound Quote.pdf", "text": HB_TEXT}]
 
 
-def run(data):
+DOC_TEXT = {}
+
+
+def run(data, tag=""):
     hq.apply_hotelbound_to_data(data, hq.parse_hotelbound_quote(HB_TEXT), ITEMS)
     with tempfile.TemporaryDirectory() as td:
         out = os.path.join(td, "p.docx")
         pg.generate_proposal(copy.deepcopy(data), out)
-        tables = [[[c.text for c in r.cells] for r in t.rows] for t in docx.Document(out).tables]
+        d = docx.Document(out)
+        tables = [[[c.text for c in r.cells] for r in t.rows] for t in d.tables]
+        DOC_TEXT[tag] = "\n".join([p.text for p in d.paragraphs] + [c for t in tables for r in t for c in r])
     sched_tbl = next(t for t in tables if t[0][:3] == ["#", "Property Name", "Address"])
-    info = {r[0]: r[1] for t in tables for r in t if len(r) == 2 and "Locations" in r[0]}
+    info = {r[0]: r[1] for t in tables for r in t if len(r) == 2 and r[0].startswith(("Total Number", "Property Loc",
+                                                                                      "Liability Loc", "Location Type"))}
     return sched_tbl, info
 
 
@@ -295,6 +392,11 @@ check(sched_tbl[-1][5] == "$53,585,302", sched_tbl[-1])
 check(info.get("Total Number of Locations") == "7", info)
 check(info.get("Property Locations") == "6", info)
 check(info.get("Liability Locations") == "6", info)
+check(info.get("Location Types") == "7 Hotel(s)", info)          # was "6 Hotel(s)" beside 7 locations
+# nothing of the wholesaler's page footer or the page markers reaches the client
+for junk in ("--- Page", "RSG Specialty", "Ryan Specialty", "(561) 615", "Jupiter, FL", "License # 0G97516"):
+    check(junk not in DOC_TEXT[""], f"{junk!r} printed in the proposal")
+check("Consequential Reduction in Value" in DOC_TEXT[""], "sublimit that wraps over a page break")
 
 # running the pass again (Refresh, or a second Generate) adds nothing
 before = copy.deepcopy(data["locations"])
@@ -312,6 +414,7 @@ body2 = [r for r in sched2[1:] if r[0].strip().isdigit()]
 check(len(body2) == 6 and all((r[-2], r[-1]) == ("✓", "✓") for r in body2), [(r[2], r[-2], r[-1]) for r in body2])
 check((info2.get("Total Number of Locations"), info2.get("Property Locations"), info2.get("Liability Locations"))
       == ("6", "6", "6"), info2)
+check(info2.get("Location Types") == "6 Hotel(s)", info2)
 
 # ------------------------------------------------------------------ 5. one extra hotel on the liability quote
 extra = same + ["2055 Street Rd, Bensalem, PA, 19020"]
@@ -325,6 +428,7 @@ check(body3["2055 Street Road"] == ("—", "✓"), body3)
 check(body3["2901 Old Mill Road"] == ("✓", "✓"), body3)
 check((info3.get("Total Number of Locations"), info3.get("Property Locations"), info3.get("Liability Locations"))
       == ("7", "6", "7"), info3)
+check(info3.get("Location Types") == "7 Hotel(s)", info3)
 
 # ------------------------------------------------------------------ 6. the street type is spelled out, nothing else
 sp = hq._spell_street_suffix
