@@ -61,6 +61,7 @@ COVERAGE_LABELS = {
     "inland_marine": "Inland Marine",
     "equipment_breakdown": "Equipment Breakdown",
     "liquor_liability": "Liquor Liability",
+    "excess_liquor_liability": "Excess Liquor Liability",
     "innkeepers": "Innkeepers Legal Liability",
     "environmental": "Environmental",
 }
@@ -291,7 +292,7 @@ _LINE_ORDER = [
     "property", "property_alt_1", "property_alt_2",
     "excess_property", "excess_property_2",
     "general_liability", "general_liability_alt_1", "general_liability_alt_2",
-    "liquor_liability", "innkeepers",
+    "liquor_liability", "excess_liquor_liability", "innkeepers",
     "umbrella", "umbrella_alt_1", "umbrella_alt_2", "umbrella_alt_3",
     "umbrella_layer_2", "umbrella_layer_3", "umbrella_layer_4",
     "excess_liability", "excess",

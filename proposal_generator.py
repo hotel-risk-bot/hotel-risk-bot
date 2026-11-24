@@ -797,7 +797,7 @@ _REJECT_PROPERTY_DESCRIPTIONS_IN = {
     "general_liability", "general_liability_alt_1", "general_liability_alt_2",
     "epli", "cyber", "cyber_alt_1", "crime",
     "workers_comp", "workers_compensation", "workers_compensation_alt_1",
-    "commercial_auto", "equipment_breakdown", "liquor_liability",
+    "commercial_auto", "equipment_breakdown", "liquor_liability", "excess_liquor_liability",
     "excess_property", "excess_property_2",  # excess property doesn't list primary's manuscript bullets
 }
 
@@ -1246,6 +1246,7 @@ def generate_premium_summary(doc, data):
         "umbrella_layer_2": "2nd Excess Layer",
         "umbrella_layer_3": "3rd Excess Layer",
         "umbrella_layer_4": "4th Excess Layer",
+        "excess_liquor_liability": "Excess Liquor Liability",
         "excess_liability": "Excess Liability",
         "excess": "Excess Liability",
         "workers_comp": "Workers Compensation",
@@ -1615,6 +1616,7 @@ def generate_subjectivities(doc, data):
         "umbrella_layer_2": "2nd Excess Layer",
         "umbrella_layer_3": "3rd Excess Layer",
         "umbrella_layer_4": "4th Excess Layer",
+        "excess_liquor_liability": "Excess Liquor Liability",
         "excess_liability": "Excess Liability",
         "excess": "Excess Liability",
         "workers_comp": "Workers Compensation",
@@ -1826,7 +1828,7 @@ def generate_named_insureds(doc, data):
     _liab_keys = ("general_liability", "general_liability_alt_1", "general_liability_alt_2",
                   "umbrella", "umbrella_layer_2", "umbrella_layer_3", "umbrella_layer_4",
                   "crime", "workers_comp", "workers_compensation", "commercial_auto",
-                  "epli", "cyber", "liquor_liability", "innkeepers_liability")
+                  "epli", "cyber", "liquor_liability", "excess_liquor_liability", "innkeepers_liability")
     _coverages_for_ni = data.get("coverages", {}) or {}
     for _lk in _liab_keys:
         _cov = _coverages_for_ni.get(_lk)
@@ -2142,6 +2144,7 @@ def generate_information_summary(doc, data):
     # liability-only locations (added to the unified locations list for GL
     # coverage) from inflating the property count.
     _prop_unique_keys = set()
+    _prop_quote_keys = set()
     if sov_locs:
         for loc in sov_locs:
             key = _loc_key(loc)
@@ -2175,6 +2178,10 @@ def generate_information_summary(doc, data):
                 for _st, _ct, _sa in _aaddrs:
                     _sov_addr_keys.add(_st + "|" + _ct)
             prop_loc_count = len(_sov_addr_keys)
+            # The same addresses anchor the account total below (WG Hotel, Nov 24 2026: the
+            # total came from the GL list alone, so a hotel on the property schedule but not
+            # on the GL quote was not counted: 6 locations reported for 7 addresses).
+            _prop_quote_keys = {_k + "|" for _k in _sov_addr_keys if not _k.startswith("row")}
         else:
             # Fall back to num_locations only when no SOV breakdown exists
             prop_loc_count = int(_prop_cov.get("num_locations", 0) or 0)
@@ -2204,10 +2211,12 @@ def generate_information_summary(doc, data):
                 classification = (entry.get("classification", "") or "").lower()
                 if any(skip in classification for skip in _skip_gl_classes):
                     continue
-                # Track unique location IDs (even if not real addresses)
+                # Track unique location IDs (even if not real addresses). "location#4" and
+                # "Location #4" are one location: the class schedule and the liquor schedule
+                # of one quote write it both ways.
                 loc_id = (entry.get("location", "") or "").strip().lower()
                 if loc_id and loc_id not in ("", "n/a", "all", "various"):
-                    _gl_loc_ids.add(loc_id)
+                    _gl_loc_ids.add(_gl_location_id(loc_id))
                 addr = entry.get("address", "")
                 if addr and addr.strip() and len(addr.strip()) > 5:
                     # Only use address if it looks like a real street address (not "Primary" or "location#3")
@@ -2246,8 +2255,8 @@ def generate_information_summary(doc, data):
     # When SOV is available, it is the AUTHORITATIVE source for location count
     # Only supplement with GL locations that are genuinely new (not already in SOV)
     all_unique_keys = set()
-    # Add property keys (from SOV)
-    all_unique_keys.update(_prop_unique_keys)
+    # Add property keys (from the SOV, else from the property quote's own schedule)
+    all_unique_keys.update(_prop_unique_keys or _prop_quote_keys)
     # Add liability keys ONLY if they don't fuzzy-match existing property keys
     for gl_key in gl_loc_keys:
         gl_parts = gl_key.split("|")
@@ -2578,6 +2587,16 @@ def _normalize_addr(s):
     s = _re_norm.sub(r'\s+\d{5}([-\s]\d{4})?\s*$', '', s)
     s = " ".join(s.split())
     return s
+
+
+def _gl_location_id(loc_id):
+    """One spelling for a GL schedule's location label: 'location#4', 'Location #4' and
+    'Loc 4' are the same location; 'Primary' is location 1."""
+    t = re.sub(r"[^a-z0-9]", "", str(loc_id or "").lower())
+    m = re.fullmatch(r"(?:location|loc|premises|prem)(?:no|num|number)?0*(\d+)", t)
+    if m:
+        return "loc" + m.group(1)
+    return "loc1" if t in ("primary", "main") else t
 
 
 def _normalize_city(s):
@@ -2927,7 +2946,7 @@ def generate_locations(doc, data):
                 continue
             # Only count entries that represent physical locations
             if loc_id and loc_id not in ("", "n/a", "all", "various"):
-                gl_unique_loc_ids.add(loc_id)
+                gl_unique_loc_ids.add(_gl_location_id(loc_id))
 
     # If GL schedule has >= as many unique locations as property, GL covers ALL property locations
     # In this case, mark all property addresses as liability-covered
@@ -3161,11 +3180,43 @@ def generate_locations(doc, data):
                         f"{[d['name'] or d['address'] for d in _missing_liability_details]}")
     except Exception as _xc:
         logger.warning(f"SOV cross-check skipped: {_xc}")
-    
+
+    # --- GL PREMISES LIST vs THE PROPERTY QUOTE'S SCHEDULE (no SOV; WG Hotel, Nov 24 2026) ---
+    # HotelBound scheduled 3901 Old Street Road, Bensalem; the GL quote listed five of the six
+    # scheduled hotels plus 4055 Street Rd, Bensalem. The count rules above ("GL lists at least as
+    # many locations as property") then gave every scheduled hotel a liability checkmark. When
+    # the GL's own list matches most of the schedule, names a hotel the schedule does not have
+    # AND leaves a scheduled hotel out, that hotel is not on the GL quote: no checkmark.
+    _gl_not_listed_streets = []
+    if not (sov_data and sov_data.get("locations")) and property_cov_keys:
+        _gl_streets = []
+        for _ga in list(designated_premises) + [(_e.get("address") if isinstance(_e, dict) else "") for _e in gl_classes]:
+            if isinstance(_ga, str) and re.search(r"\d+\s+\w+", _ga):
+                _gn = _normalize_addr(_ga.split(",")[0])
+                if _gn and not any(_fuzzy_addr_match(_gn, _x) for _x in _gl_streets):
+                    _gl_streets.append(_gn)
+        _prop_streets = {_pk: _pk.split("|")[0] for _pk in property_cov_keys if _pk.split("|")[0]}
+        _gl_hits = [_g for _g in _gl_streets if any(_fuzzy_addr_match(_g, _s) for _s in _prop_streets.values())]
+        _gl_only = [_g for _g in _gl_streets if _g not in _gl_hits]
+        _prop_only = [_pk for _pk, _s in _prop_streets.items()
+                      if not any(_fuzzy_addr_match(_g, _s) for _g in _gl_streets)]
+        if _gl_only and _prop_only and len(_gl_hits) * 2 >= len(_gl_streets):
+            _gl_missing_loc_keys.update(_prop_only)
+            _gl_not_listed_streets = [(_prop_streets[_pk], _pk.split("|")[2] if _pk.count("|") == 2 else "")
+                                      for _pk in _prop_only]
+            logger.info(f"Schedule of Locations - GL lists {len(_gl_streets)} premises, {len(_gl_hits)} on the "
+                        f"property schedule; not on the GL list (no liability checkmark): {_prop_only}; "
+                        f"GL only: {_gl_only}")
+
+    def _gl_not_listed(addr_key):
+        _p = addr_key.split("|")
+        return any(_fuzzy_addr_match(_p[0], _s) and (not _st or len(_p) < 3 or not _p[2] or _p[2] == _st)
+                   for _s, _st in _gl_not_listed_streets)
+
     # Helper: check if an addr_key matches any key in liability_addr_keys using fuzzy matching
     def _is_on_liability(addr_key):
         """Check if addr_key is in liability_addr_keys, with fuzzy address matching."""
-        if addr_key in _gl_missing_loc_keys:
+        if addr_key in _gl_missing_loc_keys or _gl_not_listed(addr_key):
             return False
         if addr_key in liability_addr_keys:
             return True
@@ -3608,7 +3659,7 @@ def generate_locations(doc, data):
             _mlk = (_normalize_addr(_ml.get("address", "")) + "|" +
                     _normalize_city(_ml.get("city", "")) + "|" +
                     _normalize_state(_ml.get("state", "")))
-            if _mlk in _gl_missing_loc_keys:
+            if _mlk in _gl_missing_loc_keys or _gl_not_listed(_mlk):
                 _ml["on_liability"] = False
     for ml in master_locations:
         if ml["name"] and ml["name"] == ml["name"].upper() and len(ml["name"]) > 2:
@@ -4866,6 +4917,27 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
         create_styled_table(doc, headers, rows, col_widths=[2.5, 2.5, 2.5],
                           col_alignments={2: WD_ALIGN_PARAGRAPH.CENTER})
 
+    # Excess Liquor Liability: the hotels the quote limits it to (WG Hotel, Nov 24 2026: General
+    # Star wrote it for the two hotels that serve alcohol, not for all seven)
+    if coverage_key == "excess_liquor_liability":
+        _xl_rows, _xl_seen = [], set()
+        _xl_dp = cov.get("designated_premises")
+        for _xa in _xl_dp if isinstance(_xl_dp, list) else ([_xl_dp] if isinstance(_xl_dp, str) else []):
+            _xa = (_xa.get("address") if isinstance(_xa, dict) else _xa) or ""
+            _xk = _normalize_addr(_xa) if isinstance(_xa, str) else ""
+            if _xk and re.search(r"\d", _xk) and _xk not in _xl_seen:
+                _xl_seen.add(_xk)
+                _xl_rows.append([str(len(_xl_rows) + 1), _xa.strip()])
+        if _xl_rows:
+            add_subsection_header(doc, "Covered Locations")
+            add_formatted_paragraph(doc,
+                "This Excess Liquor Liability policy applies only to the following locations, "
+                "as identified on the carrier quote:",
+                size=9, italic=True, color=CHARCOAL)
+            _xl_L = WD_ALIGN_PARAGRAPH.LEFT
+            create_styled_table(doc, ["#", "Address"], _xl_rows, col_widths=[0.4, 7.1],
+                                header_size=9, body_size=8, header_alignments={0: _xl_L, 1: _xl_L})
+
     # Tower Structure (Umbrella)
     tower = cov.get("tower_structure", [])
     if tower:
@@ -5612,6 +5684,7 @@ def generate_carrier_rating(doc, data):
         "umbrella_layer_2": "2nd Excess Layer",
         "umbrella_layer_3": "3rd Excess Layer",
         "umbrella_layer_4": "4th Excess Layer",
+        "excess_liquor_liability": "Excess Liquor Liability",
         "excess_liability": "Excess Liability",
         "excess": "Excess Liability",
         "workers_comp": "Workers Compensation",
@@ -6258,6 +6331,13 @@ def generate_proposal(data: dict, output_path: str) -> str:
     """
     _sanitize_for_render(data)
     logger.info(f"Generating proposal for: {data.get('client_info', {}).get('named_insured', 'Unknown')}")
+    # An excess policy over the liquor liability alone is its own line, never an umbrella layer
+    # (also done after extraction; this covers sessions extracted before Nov 24 2026).
+    try:
+        from excess_liquor import run_excess_liquor
+        run_excess_liquor(data)
+    except Exception as _xl_err:
+        logger.warning(f"Excess liquor pass skipped: {_xl_err}")
     
     doc = Document()
     
@@ -6432,6 +6512,8 @@ def generate_proposal(data: dict, output_path: str) -> str:
         generate_coverage_section(doc, data, "equipment_breakdown", "Equipment Breakdown Coverage")
     if "liquor_liability" in coverages:
         generate_coverage_section(doc, data, "liquor_liability", "Liquor Liability Coverage")
+    if "excess_liquor_liability" in coverages:
+        generate_coverage_section(doc, data, "excess_liquor_liability", "Excess Liquor Liability Coverage")
     if "innkeepers_liability" in coverages:
         generate_coverage_section(doc, data, "innkeepers_liability", "Innkeepers Liability Coverage")
     if "environmental" in coverages:

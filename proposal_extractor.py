@@ -3475,6 +3475,7 @@ TEXT:
             for _mod, _fn in (("terrorism_liability", "run_terrorism_liability_pass"),
                               ("workers_comp_quote", "run_workers_comp_pass"),
                               ("program_sponsor", "run_program_sponsor_pass"),
+                              ("excess_liquor", "run_excess_liquor"),
                               ("subjectivity_rules", "run_subjectivity_rules")):
                 try:
                     _pass = getattr(__import__(_mod), _fn)

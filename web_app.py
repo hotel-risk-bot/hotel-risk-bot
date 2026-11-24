@@ -2029,6 +2029,7 @@ def _build_review_summary(data):
         "terrorism": "Terrorism / TRIA",
         "equipment_breakdown": "Equipment Breakdown",
         "liquor_liability": "Liquor Liability",
+        "excess_liquor_liability": "Excess Liquor Liability",
         "innkeepers_liability": "Innkeepers Liability",
         "environmental": "Environmental / Pollution",
         "workplace_violence": "Workplace Violence",

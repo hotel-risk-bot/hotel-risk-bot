@@ -536,6 +536,51 @@ def _street_from_cell(street, city, state):
     return re.sub(r"\s*,\s*", " ", head).strip(" ,")
 
 
+_STREET_SUFFIXES = {
+    "road", "rd", "street", "st", "avenue", "ave", "boulevard", "blvd", "pike", "drive", "dr", "highway", "hwy",
+    "way", "lane", "ln", "parkway", "pkwy", "court", "ct", "place", "pl", "trail", "trl", "circle", "cir",
+    "turnpike", "tpke", "terrace", "ter", "plaza", "square", "sq", "loop", "freeway", "fwy", "expressway", "expy",
+    "broadway", "causeway", "row", "path", "run", "crossing", "xing",
+}
+_DIRECTIONALS = {"n", "s", "e", "w", "ne", "nw", "se", "sw", "north", "south", "east", "west",
+                 "northeast", "northwest", "southeast", "southwest"}
+
+
+def _split_street_city(addr, hints=()):
+    """Split a Cost Break Out address cell that prints street and city with one space between
+    them ('815 North Pottstown Pike Exton', '7630 Roosevelt Boulevard Philadelphia'; WG
+    Consolidated Hotel Group, Nov 2026). hints are city spellings seen for the same row or
+    elsewhere in the quote, possibly cut short by a wrapped column ('Philadelphi'). Returns
+    (street, city); the city is '' when nothing tells where it starts."""
+    words = re.sub(r"\s+", " ", addr or "").strip(" ,").split(" ")
+    if len(words) < 3:
+        return " ".join(words), ""
+    best = 0
+    for h in hints:
+        h = re.sub(r"\s+", " ", str(h or "")).strip(" ,").lower()
+        if len(h) < 3:
+            continue
+        for k in range(min(4, len(words) - 2), 0, -1):
+            tail = " ".join(words[-k:]).lower()
+            # the hint is the city, or its first letters when the column cut it
+            if tail == h or (len(h) >= 4 and tail.startswith(h) and len(tail) - len(h) <= 4):
+                best = max(best, k)
+                break
+    if not best:
+        # last street-type word (plus a direction after it) ends the street
+        for i in range(len(words) - 2, 0, -1):
+            if words[i].lower().strip(".,") in _STREET_SUFFIXES:
+                j = i + 1
+                if j < len(words) - 1 and words[j].lower().strip(".,") in _DIRECTIONALS:
+                    j += 1
+                if j < len(words) and not any(ch.isdigit() for ch in " ".join(words[j:])):
+                    best = len(words) - j
+                break
+    if not best:
+        return " ".join(words), ""
+    return " ".join(words[:-best]).strip(" ,"), " ".join(words[-best:]).strip(" ,")
+
+
 def _parse_schedule(text):
     """Merge the Schedule of Values table (attributes) with Cost Break Out (clean address + $)."""
     rows = {}
@@ -590,23 +635,40 @@ def _parse_schedule(text):
     # --- Cost Break Out By Location ---
     m = re.search(r"Cost\s+Break\s+Out\s+By\s+Location(.*?)(?:SHARED CAPACITY|\Z)", text, re.S | re.I)
     if m:
-        cb_re = re.compile(
-            r"^\s*(?P<lid>\d{9,15})\s{2,}(?P<street>.+?)\s{2,}(?P<city>.+?)\s{2,}(?P<state>[A-Z]{2})\s+(?P<zip>\d{5})\s{2,}"
+        _cb_tail = (
+            r"\s{2,}(?P<state>[A-Z]{2})\s+(?P<zip>\d{5})\s{2,}"
             r"(?P<county>[A-Za-z .'\-]+?)\s{2,}\$?(?P<agg>[\d,]+(?:\.\d{2})?)\s{2,}\$?(?P<prem>[\d,]+(?:\.\d{2})?)\s{2,}"
             r"\$?(?P<fee>[\d,]+(?:\.\d{2})?)\s{2,}\$?(?P<bldg>[\d,]+)\s{2,}\$?(?P<bpp>[\d,]+)\s{2,}\$?(?P<bi>[\d,]+)\s{2,}\$?(?P<tiv>[\d,]+)"
         )
+        # street and city in their own columns (the city starts on a letter or digit, never on the
+        # padding: with ".+?" a blank passed for the city and "815 North Pottstown Pike Exton"
+        # became the street) ...
+        cb_re = re.compile(r"^\s*(?P<lid>\d{9,15})\s{2,}(?P<street>\S.*?)\s{2,}(?P<city>\S.*?)" + _cb_tail)
+        # ... or printed with a single space between them, when the street is long
+        cb_re_joined = re.compile(r"^\s*(?P<lid>\d{9,15})\s{2,}(?P<addr>\S.*?)" + _cb_tail)
         cb_lines = m.group(1).split("\n")
+        cb_cities = []
         for li, line in enumerate(cb_lines):
             mm = cb_re.match(line)
-            if not mm:
-                continue
+            if mm:
+                street0, city0, c_city = mm.group("street").strip(), mm.group("city").strip(), mm.start("city")
+            else:
+                mm = cb_re_joined.match(line)
+                if not mm:
+                    continue
+                _sov_row = rows.get(mm.group("lid")) or {}
+                street0, city0 = _split_street_city(
+                    mm.group("addr"), [_sov_row.get("city")] + cb_cities + [mm.group("county")])
+                c_city = (mm.start("addr") + mm.group("addr").rfind(city0)) if city0 else mm.start("state")
+            if city0 and city0 not in cb_cities:
+                cb_cities.append(city0)
             # The Street cell can hold the whole address, wrapped over the next lines, and a long
             # city wraps in its own column (WS Management, Nov 2026: "11855 Avenue of / Industry,
             # San Diego, / California, 92128, / United States"; "Rancho / Cucamonga").
-            street_parts, city_parts = [mm.group("street").strip()], [mm.group("city").strip()]
-            c_city, c_state = mm.start("city"), mm.start("state")
+            street_parts, city_parts = [street0], [city0]
+            c_state = mm.start("state")
             for nxt in cb_lines[li + 1:li + 8]:
-                if (not nxt.strip() or cb_re.match(nxt) or _FOOTER_RE.search(nxt)
+                if (not nxt.strip() or cb_re.match(nxt) or cb_re_joined.match(nxt) or _FOOTER_RE.search(nxt)
                         or re.search(r"\$\s?\d|\bLID\b", nxt)):
                     break
                 for seg in re.finditer(r"\S+(?: \S+)*", nxt):
@@ -1051,6 +1113,132 @@ def _policy_addresses(cov):
     return uniq
 
 
+_LIABILITY_LINE_KEYS = ("general_liability", "general_liability_alt_1", "general_liability_alt_2")
+
+
+def _liability_premises(coverages):
+    """Street addresses the liability quotes list as their own premises (designated premises and
+    the class schedule), in the order printed, each once per quote."""
+    out = []
+    for key in _LIABILITY_LINE_KEYS:
+        cov = coverages.get(key) if isinstance(coverages, dict) else None
+        if not isinstance(cov, dict):
+            continue
+        rows = []
+        dp = cov.get("designated_premises")
+        for d in dp if isinstance(dp, list) else ([dp] if isinstance(dp, str) else []):
+            rows.append(d.get("address") if isinstance(d, dict) else d)
+        for e in cov.get("schedule_of_classes") or []:
+            if isinstance(e, dict):
+                rows.append(e.get("address"))
+        for a in rows:
+            if isinstance(a, str) and re.search(r"\d+\s+\w+", a):
+                out.append(a.strip())
+    return out
+
+
+def _addr_matchers():
+    """The proposal's own address rules, so a hotel this pass calls new is new there too."""
+    try:
+        from proposal_generator import _normalize_addr, _fuzzy_addr_match
+        return _normalize_addr, _fuzzy_addr_match
+    except Exception:                                    # pragma: no cover - generator unavailable
+        return (lambda s: " ".join(re.findall(r"[a-z0-9]+", str(s or "").lower())),
+                lambda a, b: bool(a) and a == b)
+
+
+def _loc_line(loc):
+    return ", ".join(x for x in (str(loc.get("address") or "").strip(), str(loc.get("city") or "").strip()) if x)
+
+
+_SUFFIX_SPELLED = {"rd": "Road", "ave": "Avenue", "av": "Avenue", "blvd": "Boulevard", "dr": "Drive",
+                   "hwy": "Highway", "pkwy": "Parkway", "ln": "Lane", "ct": "Court", "pl": "Place",
+                   "cir": "Circle", "ter": "Terrace", "trl": "Trail", "st": "Street"}
+
+
+def _spell_street_suffix(street):
+    """'4055 Street Rd' -> '4055 Street Road': a liability quote abbreviates the street type, the
+    HotelBound schedule spells it out, and both print in one Schedule of Locations. Only the last
+    word (or the one before a trailing direction) is touched, so 'St Charles Ave' keeps its St."""
+    words = str(street or "").split()
+    i = len(words) - 1
+    if i >= 2 and words[i].strip(".").lower() in _DIRECTIONALS:
+        i -= 1
+    if i >= 2:
+        full = _SUFFIX_SPELLED.get(words[i].strip(".,").lower())
+        if full:
+            words[i] = full
+    return " ".join(words)
+
+
+def merge_liability_only_locations(rebuilt, coverages, original_locations, default_name="", corporate=""):
+    """Add the hotels a liability quote lists that no property schedule carries, and say what
+    differs. WG Hotel, Nov 24 2026: HotelBound scheduled six addresses, the GL quote six, five in
+    common (HotelBound: 3901 Old Street Road, Bensalem; GL: 4055 Street Rd, Bensalem). The
+    schedule replaced the whole location list, so 4055 Street Rd disappeared and the account
+    showed six locations for seven addresses.
+
+    rebuilt (the property locations) is extended in place with one $0 TIV row per liability-only
+    address. Returns the review notes."""
+    premises = _liability_premises(coverages)
+    if not premises or not rebuilt:
+        return []
+    norm, same = _addr_matchers()
+
+    def _st(v):
+        return str(v or "").strip().upper()
+
+    prop = [(norm(l.get("address")), _st(l.get("state")), l) for l in rebuilt]
+    prop_hit, added, seen = set(), [], []
+    for raw in premises:
+        street, city, state, zipc = _split_address(raw)
+        n = norm(street)
+        if not n or not n[:1].isdigit():
+            continue
+        hit = next((i for i, (p, ps, _l) in enumerate(prop)
+                    if same(n, p) and (not state or not ps or _st(state) == ps)), None)
+        if hit is not None:
+            prop_hit.add(hit)
+            continue
+        if any(same(n, s) for s in seen):
+            continue
+        seen.append(n)
+        loc = next((dict(l) for l in original_locations if same(n, norm(l.get("address")))), None) or {}
+        loc.setdefault("corporate_entity", corporate)
+        loc.setdefault("dba", "")
+        loc.setdefault("description", "Hotel/Motel")
+        for k, v in (("address", street), ("city", city), ("state", state), ("zip", zipc)):
+            if not str(loc.get(k) or "").strip():
+                loc[k] = v
+        loc["address"] = _spell_street_suffix(loc.get("address"))
+        if not str(loc.get("name") or "").strip():
+            loc["name"] = default_name
+        loc["tiv"] = 0.0
+        loc["number"] = str(len(rebuilt) + 1)
+        rebuilt.append(loc)
+        added.append(loc)
+        logger.info(f"HotelBound pass: kept {_loc_line(loc)} on the locations list (liability quote only)")
+    prop_only = [l for i, (_p, _ps, l) in enumerate(prop) if i not in prop_hit]
+    notes = []
+    if added and prop_only:
+        notes.append(
+            "Locations check — the liability quote and the property schedule do not list the same hotels. "
+            f"On the liability quote only: {'; '.join(_loc_line(l) for l in added)}. "
+            f"On the property schedule only: {'; '.join(_loc_line(l) for l in prop_only)}. "
+            "Both are listed, each checked only for the line that quotes it. Confirm the other line is "
+            "placed elsewhere; if two of these are the same hotel, one quote has the wrong address.")
+    elif added:
+        notes.append(
+            f"Locations check — on the liability quote but not on the property schedule: "
+            f"{'; '.join(_loc_line(l) for l in added)}. Listed as liability only, with no insured value.")
+    elif prop_only and prop_hit:
+        notes.append(
+            f"Locations check — the liability quote lists {len(prop_hit)} of the {len(prop)} scheduled hotels. "
+            f"Not on its list: {'; '.join(_loc_line(l) for l in prop_only)}. Confirm the liability covers "
+            f"{'it' if len(prop_only) == 1 else 'them'}.")
+    return notes
+
+
 def apply_hotelbound_to_data(data: dict, hb: dict, items=None) -> None:
     """Write the parsed HotelBound quote into the extracted-data dict (mutates in place).
     items ([{filename, text}], the uploaded files) let the pass find the HotelBound quote's own
@@ -1284,7 +1472,16 @@ def apply_hotelbound_to_data(data: dict, hb: dict, items=None) -> None:
                 loc["number"] = str(len(rebuilt) + 1)
                 rebuilt.append(loc)
                 logger.info(f"HotelBound pass: kept {street} ({k}, {alt.get('carrier')}) on the schedule of locations")
+        # Hotels only a liability quote lists stay on the list too, after the property hotels.
+        loc_notes = merge_liability_only_locations(
+            rebuilt, coverages, original_locations, default_name=acct,
+            corporate=(data.get("client_info") or {}).get("named_insured", "") or acct)
         data["locations"] = rebuilt
+        if loc_notes:
+            ws = data.get("warnings")
+            if not isinstance(ws, list):
+                ws = [ws] if isinstance(ws, str) and ws.strip() else []
+            data["warnings"] = [w for w in ws if not str(w).startswith("Locations check")] + loc_notes
 
     # -- payment options / MEP row for the Payment Options page. Rows of another property policy
     # (property_alt_*) stay; the HotelBound row replaces whatever the model wrote for HotelBound.

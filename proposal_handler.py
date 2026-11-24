@@ -643,7 +643,8 @@ def build_verification_summary(data: dict) -> str:
         "equipment_breakdown": "EQUIPMENT BREAKDOWN",
         "inland_marine": "INLAND MARINE",
         "umbrella_layer_2": "2ND EXCESS LAYER",
-        "umbrella_layer_3": "3RD EXCESS LAYER"
+        "umbrella_layer_3": "3RD EXCESS LAYER",
+        "excess_liquor_liability": "EXCESS LIQUOR LIABILITY",
     }
     
     total_premium = 0
