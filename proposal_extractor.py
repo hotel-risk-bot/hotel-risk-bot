@@ -3449,7 +3449,9 @@ TEXT:
             #  - program_sponsor: the umbrella program's sponsor (Paramount Real Estate Group,
             #    Inc.) never appears as one of the client's named insureds
             #  - subjectivity_rules (Oct 28 2026): PartnerRe umbrella / Starr property broker-only
-            #    subjectivities left off, PartnerRe paperwork deadlines 30 -> 5 days
+            #    subjectivities left off, PartnerRe paperwork deadlines 30 -> 5 days; on every
+            #    carrier the surplus lines licensee warranty and "quotes are valid for 30 days"
+            #    are left off (Nov 24 2026)
             # OCR review notes (pages whose figures two reads could not confirm, Nov 4 2026)
             try:
                 _ocr_ws = []

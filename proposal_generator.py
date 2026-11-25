@@ -1654,8 +1654,9 @@ def generate_subjectivities(doc, data):
         if _pa_key in coverages:
             coverage_names[_pa_key] = _alt_label(coverages, _pa_key, "Property", _pa_n)
 
-    # Carrier-specific clean-up (subjectivity_rules.py, Stefan Oct 28 2026): PartnerRe umbrella
-    # and Starr property broker-only items never print; PartnerRe paperwork is due in 5 days.
+    # Clean-up (subjectivity_rules.py): PartnerRe umbrella and Starr property broker-only items
+    # never print and PartnerRe paperwork is due in 5 days (Stefan, Oct 28 2026); on every carrier
+    # the surplus lines licensee warranty and "quotes are valid for 30 days" never print (Nov 24 2026).
     try:
         from subjectivity_rules import clean_items as _clean_subj, _text as _subj_text
     except Exception:
@@ -1664,13 +1665,13 @@ def generate_subjectivities(doc, data):
     for key, display_name in coverage_names.items():
         cov = coverages.get(key)
         subs = cov.get("subjectivities") if isinstance(cov, dict) else None
+        if isinstance(subs, (str, dict)):
+            subs = [subs]
         if subs and _clean_subj:
             try:
                 subs, _rm, _ch = _clean_subj(key, cov, list(subs))
             except Exception as _subj_err:
                 logger.warning(f"Subjectivity rules failed for {key} (non-fatal): {_subj_err}")
-        if isinstance(subs, (str, dict)):
-            subs = [subs]
         lines = []
         for subj in (subs or []):
             txt = (_subj_text(subj) if (_subj_text and isinstance(subj, dict)) else str(subj or "")).strip()
@@ -4974,7 +4975,7 @@ def generate_coverage_section(doc, data, coverage_key, display_name):
     if isinstance(_tc_src, list) and _tc_src:
         try:
             from subjectivity_rules import clean_items as _clean_tc
-            _tc_src, _tc_rm, _tc_ch = _clean_tc(coverage_key, cov, list(_tc_src), rewrite=False)
+            _tc_src, _tc_rm, _tc_ch = _clean_tc(coverage_key, cov, list(_tc_src), rewrite=False, general=False)
         except Exception as _tc_err:
             logger.warning(f"Terms clean-up failed for {coverage_key} (non-fatal): {_tc_err}")
     _terms = [str(t if not isinstance(t, dict) else (t.get("description") or t.get("text") or "")).strip()

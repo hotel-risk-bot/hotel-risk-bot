@@ -7,6 +7,8 @@ Self-contained, no OpenAI calls. The quoted items are the carriers' own wording 
   * Starr property: the broker's three surplus lines items left off
   * other umbrellas / other Starr lines untouched; idempotent; the generator never prints them;
     the PartnerRe program template carries the same wording
+  * every carrier (Nov 24 2026): the surplus lines licensee warranty and "quotes are valid for
+    30 days" left off Binding Subjectivities; Terms & Conditions keep their validity line
 """
 import copy
 import os
@@ -156,5 +158,86 @@ check(not any("certificates" in t.lower() or "underlying polic" in t.lower() or 
 tpl = {"program_template": "partnerre_umbrella", "carrier": "PartnerRe Insurance Solutions Bermuda Ltd.",
        "subjectivities": list(pt._PARTNERRE_SUBJECTIVITIES), "terms_conditions": list(pt._PARTNERRE_TERMS)}
 check(sr.clean_coverage("umbrella", copy.deepcopy(tpl)) == ([], []), "template already clean")
+
+# 9. Every carrier (Stefan, Nov 24 2026): the surplus lines licensee warranty and the 30-day quote
+#    validity line are left off; a validity sentence on a real item drops and the rest stays.
+SL_LICENSEE = ("With your signature, you hereby warrant and represent that the surplus lines licensee indicated "
+               "above is responsible for the collection and remittance of the surplus lines taxes, stamping fees "
+               "and/or other charges in connection with the surplus lines placement of this policy.")
+VALID_30 = ["Quotes are valid for 30 days.",
+            "This quote is valid for thirty (30) days from the date of issue.",
+            "Quotation valid for 30 days",
+            "Valid for 30 days from the quote date",
+            "Terms quoted are good for 30 days or until the effective date, whichever is earlier."]
+GEN_KEEP = ["Signed and dated TRIA election form within 30 days of binding",
+            "Surplus lines licensee name and license number prior to binding",
+            "Premium is due no later than twenty (20) days from inception.",
+            "Coverage cannot be bound without a signed application.",
+            "Signed TRIA election required; the TRIA offer is valid for 30 days from binding."]
+MIXED = "No known or reported losses since the quote date. Quotes are valid for 30 days."
+
+
+def gen_fresh():
+    return {"coverages": {
+        "property": {"carrier": "Certain Underwriters at Lloyd's, London",
+                     "subjectivities": ["☐  " + SL_LICENSEE, VALID_30[0], GEN_KEEP[0], MIXED, GEN_KEEP[1]]},
+        "general_liability": {"carrier": "Southlake Specialty Insurance Company",
+                              "subjectivities": [{"description": "4. " + SL_LICENSEE}] + VALID_30[1:] + GEN_KEEP[2:]
+                              + [{"description": "Signed application; quotes are valid for 30 days."}]},
+        "umbrella": {"carrier": "PartnerRe Insurance Solutions Bermuda Ltd.",
+                     "subjectivities": ALTA_REMOVE + [a for a, _ in ALTA_FIVE] + [VALID_30[0]] + ALTA_KEEP},
+    }}
+
+
+g = gen_fresh()
+gnotes = sr.run_subjectivity_rules(g)
+gp = g["coverages"]["property"]["subjectivities"]
+check(gp == [GEN_KEEP[0], "No known or reported losses since the quote date.", GEN_KEEP[1]], f"Lloyd's property: {gp}")
+gl = g["coverages"]["general_liability"]["subjectivities"]
+check(gl == GEN_KEEP[2:] + [{"description": "Signed application"}], f"Southlake GL: {gl}")
+gu = g["coverages"]["umbrella"]["subjectivities"]
+check(gu == [b for _, b in ALTA_FIVE] + ALTA_KEEP, f"PartnerRe also loses the validity line: {gu}")
+check(any("PartnerRe umbrella" in n and "6 broker items" in n and "3 deadlines" in n for n in gnotes), gnotes)
+check(any(n.startswith("Subjectivities: left off 10 items (surplus lines licensee warranty, quotes valid for 30 days)")
+          for n in gnotes), gnotes)
+check(sr.general_rule(SL_LICENSEE) == "surplus lines licensee warranty", "Stefan's exact wording")
+check(all(sr.general_rule(v) == "quotes valid for 30 days" for v in VALID_30), "validity rewordings")
+check(not any(sr.general_rule(k) for k in GEN_KEEP + OTHER_UMB + STARR_KEEP + ALTA_KEEP), "real items kept")
+snap = copy.deepcopy(g["coverages"])
+check(sr.run_subjectivity_rules(g) == [] and g["coverages"] == snap, "general rules idempotent")
+
+# 10. Terms & Conditions keep the template's validity line (Binding Subjectivities only)
+tpl2 = copy.deepcopy(tpl)
+sr.clean_coverage("umbrella", tpl2)
+check("Quotation is valid for 30 days from the quote date." in tpl2["terms_conditions"], tpl2["terms_conditions"])
+
+# 11. Generator: an un-cleaned session never prints them; single-string / single-dict lists print whole
+gen2 = gen_fresh()
+gen2["client_info"] = {"named_insured": "Sample Hotel LLC"}
+gen2["coverages"]["crime"] = {"carrier": "Travelers", "subjectivities": "Signed crime application prior to binding"}
+gen2["coverages"]["cyber"] = {"carrier": "Coalition",
+                              "subjectivities": {"description": "Signed cyber application. Quotes are valid for 30 days."}}
+gen2["coverages"]["umbrella_layer_2"] = dict(tpl, carrier="PartnerRe Insurance Solutions Bermuda Ltd.")
+for k, c in gen2["coverages"].items():
+    c.update(premium=1000, total_premium=1000)
+with tempfile.TemporaryDirectory() as td:
+    out = os.path.join(td, "s2.docx")
+    pg.generate_proposal(gen2, out)
+    d2doc = docx.Document(out)
+paras = [p.text for p in d2doc.paragraphs]
+start = max(i for i, t in enumerate(paras) if t.strip() == "Binding Subjectivities")
+end = next((i for i in range(start + 1, len(paras)) if paras[i].strip() == "Named Insureds"), len(paras))
+subj2 = "\n".join(paras[start:end])
+check("warrant and represent that the surplus lines licensee" not in subj2.lower(), "licensee warranty not printed")
+for v in VALID_30 + ["Quotes are valid for 30 days", "quotes are valid for 30 days"]:
+    check(v.rstrip(".") not in subj2, f"validity line not printed: {v}")
+for k in GEN_KEEP:
+    check("☐  " + k in subj2, f"kept item printed: {k}")
+check("☐  No known or reported losses since the quote date." in subj2, "rest of a mixed item printed")
+check("☐  Signed application" in subj2, "rest of a dict item printed")
+check("☐  Signed crime application prior to binding" in subj2, "a single-string list prints as one line")
+check("☐  Signed cyber application." in subj2, "a single-dict list prints as one line")
+cells = "\n".join(c.text for t in d2doc.tables for r in t.rows for c in r.cells)
+check("Quotation is valid for 30 days from the quote date." in cells, "template Terms & Conditions keep it")
 
 print(f"subjectivity_rules_test: {PASS} checks passed")

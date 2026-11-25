@@ -26,6 +26,16 @@ gets 5 days, not 30, for the umbrella paperwork.
     "2) The broker/agent accepts full responsibility for compliance, including ... the filing of
      the surplus lines affidavit ... Surplus Lines Filings Confirmation form."
 
+Stefan (Nov 24 2026): every carrier, every coverage - two lines quotes print with their
+subjectivities that are not the client's binding requirements never go into Binding Subjectivities:
+    "With your signature, you hereby warrant and represent that the surplus lines licensee
+     indicated above is responsible for the collection and remittance of the surplus lines taxes,
+     stamping fees and/or other charges in connection with the surplus lines placement of this policy."
+    "Quotes are valid for 30 days." (and its rewordings: "This quote is valid for thirty (30) days ...")
+  These are matched one sentence at a time, so a validity sentence tacked onto a real item drops
+  and the rest of the item stays. Binding Subjectivities only: a program template's Terms &
+  Conditions keep their own "Quotation is valid for 30 days" line.
+
 The rules match on key phrases, not exact text, so numbering ("4.", "1)"), checkboxes and the
 model's small rewordings do not matter. They run after extraction (the review screen shows the
 cleaned list) and again in the generator, so an item never prints however it got into the data
@@ -66,6 +76,21 @@ _STARR_REMOVE = (
 )
 _THIRTY_RE = re.compile(r"\b(within\s+)30(\s+days?\b)", re.I)
 _THIRTY_WORDS_RE = re.compile(r"\bthirty\s*\(30\)\s*(days?)\b", re.I)
+
+# Every carrier, every coverage (Stefan, Nov 24 2026). Each test takes one normalised sentence.
+_THIRTY_DAYS = r"\b(?:30|thirty)\b(?:\s*\(30\))?[\s-]*(?:calendar\s+)?days?\b"
+_GENERAL_REMOVE = (
+    ("surplus lines licensee warranty",
+     lambda t: re.search(r"surplus[\s-]+lines?[\s-]+licensee", t)
+     and re.search(r"warrant|represent|indicated above|collection|remit", t)),
+    # a TRIA / terrorism offer's 30 days is a real deadline, never the quote's validity
+    ("quotes valid for 30 days",
+     lambda t: not re.search(r"\btria\b|terroris", t)
+     and (re.search(r"\b(?:quotes?|quotations?|quoted|indications?|proposals?|offers?|terms|pricing)\b"
+                    r".{0,80}?\b(?:valid|good|open|expire[sd]?)\b.{0,40}?" + _THIRTY_DAYS, t)
+          or re.match(r"valid (?:for )?(?:a period of )?" + _THIRTY_DAYS, t))),
+)
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+")
 
 
 def _text(item):
@@ -128,13 +153,40 @@ def _set_text(item, new):
     return new
 
 
-def clean_items(key, cov, items, rewrite=True):
-    """Return (kept_items, removed_texts, changed_pairs) for one list on one coverage."""
+def general_rule(text):
+    """Name of the every-carrier rule one sentence matches ("" when none)."""
+    t = _norm(text)
+    if t:
+        for name, test in _GENERAL_REMOVE:
+            if test(t):
+                return name
+    return ""
+
+
+def _strip_general(raw):
+    """Drop the sentences of one item that an every-carrier rule matches.
+    Returns (new_text, removed_sentences); new_text is None when nothing of the item is left."""
+    pieces = _SENTENCE_SPLIT_RE.split(str(raw or "").strip())
+    kept, gone = [], []
+    for p in pieces:
+        (gone if general_rule(p) else kept).append(p.strip())
+    if not gone:
+        return raw, []
+    rest = " ".join(p for p in kept if p).strip().rstrip(";,:-– ").strip()
+    left = _norm(rest)
+    if not re.search(r"[a-z]{2}", left) or re.fullmatch(r"(?:please )?note:?", left):
+        return None, gone
+    return rest, gone
+
+
+def clean_items(key, cov, items, rewrite=True, general=True):
+    """Return (kept_items, removed_texts, changed_pairs) for one list on one coverage.
+    `general` applies the every-carrier rules (Binding Subjectivities, not Terms & Conditions)."""
     if not isinstance(items, list):
         return items, [], []
     partnerre = is_partnerre(key, cov)
     starr = is_starr_property(key, cov)
-    if not (partnerre or starr):
+    if not (partnerre or starr or general):
         return items, [], []
     removes = (_PARTNERRE_REMOVE if partnerre else ()) + (_STARR_REMOVE if starr else ())
     kept, removed, changed = [], [], []
@@ -144,6 +196,14 @@ def clean_items(key, cov, items, rewrite=True):
         if t and any(test(t) for _n, test in removes):
             removed.append(raw.strip())
             continue
+        if general and t:
+            new, gone = _strip_general(raw)
+            if gone:
+                removed.extend(gone)
+                if new is None:
+                    continue
+                it = _set_text(it, new)
+                raw, t = new, _norm(new)
         if rewrite and partnerre and t and any(test(t) for _n, test in _PARTNERRE_FIVE_DAYS):
             new = _THIRTY_RE.sub(lambda m: m.group(1) + "5" + m.group(2), raw)
             new = _THIRTY_WORDS_RE.sub(lambda m: "five (5) " + m.group(1), new)
@@ -163,7 +223,7 @@ def clean_coverage(key, cov):
     subs, r1, c1 = clean_items(key, cov, cov.get("subjectivities"))
     if r1 or c1:
         cov["subjectivities"] = subs
-    terms, r2, _c2 = clean_items(key, cov, cov.get("terms_conditions"), rewrite=False)
+    terms, r2, _c2 = clean_items(key, cov, cov.get("terms_conditions"), rewrite=False, general=False)
     if r2:
         cov["terms_conditions"] = terms
     return r1 + r2, c1
@@ -176,18 +236,33 @@ def run_subjectivity_rules(data, items=None):
     covs = data.get("coverages") if isinstance(data, dict) else None
     if not isinstance(covs, dict):
         return notes
+    general = {}
     for key, cov in covs.items():
+        partnerre, starr = is_partnerre(key, cov), is_starr_property(key, cov)
         removed, changed = clean_coverage(key, cov)
         if not (removed or changed):
             continue
-        who = "PartnerRe umbrella" if is_partnerre(key, cov) else "Starr property"
+        logger.info(f"Subjectivity rules [{key}]: removed {removed}; changed {changed}")
+        own = []
+        for r in removed:
+            name = general_rule(r)
+            if name:
+                general[name] = general.get(name, 0) + 1
+            else:
+                own.append(r)
+        if not (own or changed):
+            continue
+        who = "PartnerRe umbrella" if partnerre else ("Starr property" if starr else key)
         parts = []
-        if removed:
-            parts.append(f"left off {len(removed)} broker item{'s' if len(removed) != 1 else ''}")
+        if own:
+            parts.append(f"left off {len(own)} broker item{'s' if len(own) != 1 else ''}")
         if changed:
             parts.append(f"changed {len(changed)} deadline{'s' if len(changed) != 1 else ''} from 30 to 5 days")
         notes.append(f"Subjectivities ({who}): " + " and ".join(parts) + " per the standing rule.")
-        logger.info(f"Subjectivity rules [{key}]: removed {removed}; changed {changed}")
+    if general:
+        n = sum(general.values())
+        notes.append(f"Subjectivities: left off {n} item{'s' if n != 1 else ''} ({', '.join(general)}) "
+                     f"per the standing rule.")
     if notes:
         ws = data.get("warnings")
         if not isinstance(ws, list):
