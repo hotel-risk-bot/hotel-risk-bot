@@ -1952,6 +1952,8 @@ def client_email_draft(session_id):
             "subject": result.get("subject", ""),
             "body": result.get("body", ""),
             "missing_exclusions": result.get("missing_exclusions") or [],
+            "model": result.get("model") or "",
+            "models_failed": result.get("models_failed") or [],
             "context": ctx,
         })
     except Exception as e:

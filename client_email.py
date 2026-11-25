@@ -157,6 +157,7 @@ _TOPIC_ACRONYMS = frozenset({
     "BIPA", "FCRA", "COVID", "COVID-19", "HIV", "NBCR", "CBRN", "CGL", "GL", "ACV", "RCV", "EMF", "UV",
 })
 _ENDORSEMENT_TAIL_RE = re.compile(r"\s*[-\u2013\u2014:]*\s*\bendorsement\s*$", re.I)
+_CG2165_CUT_RE = re.compile(r"pollution\s+exclusion\s+with\s+a\s+building\s+heating,?\s+cooling\s+and\s+dehumidifying\s*$", re.I)
 _EXCEPTION_TAIL_RE = re.compile(r"^(.*?)\s+exclusion\s+with\s+(.+?\s+exceptions?)\s*$", re.I)
 
 
@@ -186,6 +187,10 @@ def _exclusion_topic(desc):
     'No Coverage for Sublimits of Insurance Endorsement' -> 'No Coverage for Sublimits of Insurance'."""
     t = " ".join(str(desc or "").split())
     t = _ENDORSEMENT_TAIL_RE.sub("", t)
+    # CG 21 65: a forms list that wraps the title can stop at "... Cooling and Dehumidifying"
+    # (Southlake, WG Hotel, Nov 24 2026), which read as a broken sentence in the email.
+    if _CG2165_CUT_RE.search(t):
+        t += " Equipment Exception and a Hostile Fire Exception"
     tail = ""
     m = _EXCEPTION_TAIL_RE.match(t)
     if m:
@@ -433,25 +438,65 @@ def _join_items(items):
     return ", ".join(items[:-1]) + ", and " + items[-1]
 
 
+def _is_excess_line(name):
+    low = str(name or "").lower()
+    return low.startswith(("umbrella", "excess", "2nd excess", "3rd excess", "4th excess")) and "property" not in low
+
+
+def _is_tower_line(name):
+    """An umbrella / excess layer over the General Liability, not the excess liquor policy."""
+    return _is_excess_line(name) and "liquor" not in str(name or "").lower()
+
+
+def _names_sublimit(exclusions):
+    return any("sublimit" in str(x).lower() or "reduced limit" in str(x).lower() for x in exclusions or [])
+
+
 def exclusion_bullets(ctx):
-    """One 'Please note' bullet per line of coverage (Nov 4 2026, Stefan: keep the umbrella
-    exclusions separate from the liability ones). The sublimit sentence goes with the first
-    umbrella / excess bullet. Deterministic, so nothing is dropped or merged."""
-    out, note_used = [], False
+    """One bullet per line of coverage that states its key exclusions (Nov 4 2026, Stefan: keep
+    the umbrella exclusions separate from the liability ones). Deterministic, so nothing is
+    dropped or merged.
+
+    Nov 24 2026, Stefan (WG Hotel, five lines with exclusions): "need to reduce all the please".
+    Every bullet opened "Please note the ...". Each now opens with the line itself, the way he
+    rewrote them: "Property policy excludes ...", "Umbrella/Excess excludes ...".
+
+    The sublimit sentence goes with the umbrella / excess layer that carries the sublimit
+    exclusion (else the first such layer), never with the excess liquor policy."""
+    out, note_at, first_tower = [], None, None
     for c in ctx.get("coverages") or []:
         ex = c.get("key_exclusions") or []
         if not ex:
             continue
-        line = c.get("coverage") or "this"
-        low = line.lower()
-        excess = low.startswith(("umbrella", "excess", "2nd excess", "3rd excess", "4th excess")) and "property" not in low
-        subject = f"the {line}" if excess else f"the {line} policy"
-        b = f"Please note {subject} excludes {_join_items(ex)}."
-        if excess and ctx.get("sublimit_note") and not note_used:
-            b += " " + ctx["sublimit_note"]
-            note_used = True
-        out.append(b)
+        line = c.get("coverage") or "This"
+        subject = line if _is_excess_line(line) else f"{line} policy"
+        if _is_tower_line(line):
+            if first_tower is None:
+                first_tower = len(out)
+            if note_at is None and _names_sublimit(ex):
+                note_at = len(out)
+        out.append(f"{subject[:1].upper()}{subject[1:]} excludes {_join_items(ex)}.")
+    at = note_at if note_at is not None else first_tower
+    if ctx.get("sublimit_note") and at is not None:
+        out[at] += " " + ctx["sublimit_note"]
     return out
+
+
+# A lead-in the model may still write, on any line ("Please note the roof ...", "- Please be
+# advised that ..."). The point is stated without it.
+_PLEASE_LEAD_RE = re.compile(
+    r"^(\s*(?:[-\u2022*]\s+)?)please\s+(?:note|be\s+advised|be\s+aware)(?:\s+that)?\s*[,:]?\s+(\S)", re.I)
+
+
+def drop_please_lead(body):
+    """'- Please note the roof is 2019' -> '- The roof is 2019'."""
+    out = []
+    for ln in (body or "").split("\n"):
+        m = _PLEASE_LEAD_RE.match(ln)
+        if m:
+            ln = m.group(1) + m.group(2).upper() + ln[m.end():]
+        out.append(ln)
+    return "\n".join(out)
 
 
 _EXCL_BULLET_RE = re.compile(r"\bexcludes?\b|\bexclusions?\b", re.I)
@@ -462,7 +507,7 @@ _KEEP_BULLET_RE = re.compile(r"recommended but not included|supplemental applica
 
 def _is_exclusion_line(st):
     """True for a line the model wrote to state exclusions: a bullet that says excludes /
-    exclusions, or any line that opens 'Please note ... exclud...'."""
+    exclusions, or any line that opens 'Please note ... exclud...' (it may still write one)."""
     is_bullet = st[:1] in ("-", "\u2022", "*")
     t = st.lstrip("-\u2022* ").strip()
     if not t or _KEEP_BULLET_RE.search(t):
@@ -600,8 +645,8 @@ def build_email_context(data, answers=None):
     # coverage at all. State it plainly; owners assume the umbrella follows.
     _sublimit_note = ""
     _umb_has_sublimit_excl = any(
-        any("sublimit" in x.lower() or "reduced limit" in x.lower() for x in e.get("key_exclusions") or [])
-        for e in lines if e["coverage"].lower().startswith(("umbrella", "excess"))
+        _names_sublimit(e.get("key_exclusions"))
+        for e in lines if _is_tower_line(e["coverage"])   # not the excess liquor policy: its underlying is not the GL
     )
     if _umb_has_sublimit_excl:
         _subs = _underlying_sublimits(coverages)
@@ -651,8 +696,8 @@ Proposed carriers are Starr Surplus Lines Insurance Company for Property, Berkle
 The key points are:
 - Property includes a $10,000 property damage deductible, $10,000 time element deductible, $25,000 water damage deductible, $50,000 wind deductible, and 3% named windstorm subject to a $100,000 minimum per occurrence.
 - Equipment Breakdown carries a $25,000 combined deductible with $4,000 property damage and 24 hours business income.
-- Please note the General Liability policy excludes Human Trafficking and Total Pollution.
-- Please note the Umbrella/Excess excludes Assault or Battery, Total Firearms, Sexual Misconduct, and Coverage Subject to Sublimits or Other Reduced Limits in Underlying Insurance. Because the excess excludes coverage that is sublimited underneath, the excess limit does not apply above the $300,000 Limited Assault and Battery limit in the General Liability policy.
+- General Liability policy excludes Human Trafficking and Total Pollution.
+- Umbrella/Excess excludes Assault or Battery, Total Firearms, Sexual Misconduct, and Coverage Subject to Sublimits or Other Reduced Limits in Underlying Insurance. Because the excess excludes coverage that is sublimited underneath, the excess limit does not apply above the $300,000 Limited Assault and Battery limit in the General Liability policy.
 - Crime and Cyber are recommended but not included in the total premium; Cyber was quoted separately at $3,476.42. Supplemental applications may be needed to finalize quotes for the optional coverages.
 
 Let me know if you would like to walk through the proposal next week or if you have any questions.
@@ -678,7 +723,8 @@ Rules:
 - Every key exclusion in the facts must appear in the email, using the exclusion names exactly as given. Never summarize them as "standard exclusions" or "certain exclusions".
 - No em dashes. No emoji. No markdown bold or headers. Plain text for Outlook.
 - Never write a name, carrier, coverage or any other word in all capitals. Hotel and carrier names are given in normal case; keep them that way. Acronyms stay as given: TRIA, EPLI, TIV, HNOA.
-- Warm and direct. No "I hope this email finds you well." No corporate padding. Keep the whole email under about 200 words.
+- Never write "Please note", "Please be advised" or "Please be aware", and never open a sentence or bullet with "Please". State each point directly: "Property policy excludes ...", not "Please note the Property policy excludes ...". Use the word "please" only where Stefan's highlights or instruction use it.
+- Warm and direct. No "I hope this email finds you well." No corporate padding. Keep the whole email under about 200 words; the key exclusion bullets do not count toward that.
 
 Return exactly two parts:
 SUBJECT: <the subject line given in the facts, exactly>
@@ -763,6 +809,24 @@ def _context_to_prompt(ctx):
     return "\n".join(out)
 
 
+# The model that writes the client email (Nov 24 2026, Stefan: "update with better model").
+# OpenAI's flagship; the email is short, so the cost is a few cents a draft. The Railway variable
+# EMAIL_MODEL still decides when it is set. If the chosen model errors, times out or returns
+# nothing, the next one in the chain writes the email, so the feature never depends on one model.
+EMAIL_MODEL_DEFAULT = "gpt-6.2-astra"
+EMAIL_FALLBACK_MODELS = ("gpt-6.2-sol", "gpt-6.1-sol")
+
+
+def email_models(model=None):
+    """Models to try, in order, without repeats."""
+    chain = [model or os.environ.get("EMAIL_MODEL") or EMAIL_MODEL_DEFAULT]
+    extra = os.environ.get("EMAIL_FALLBACK_MODELS")
+    for m in ([x.strip() for x in extra.split(",")] if extra else EMAIL_FALLBACK_MODELS):
+        if m and m not in chain:
+            chain.append(m)
+    return chain
+
+
 def draft_email(ctx, instruction=None, previous=None, model=None):
     """Draft (or refine) the client email. Raises on API failure."""
     from openai import OpenAI
@@ -786,21 +850,50 @@ def draft_email(ctx, instruction=None, previous=None, model=None):
             ),
         })
 
-    client = OpenAI()
-    _model = model or os.environ.get("EMAIL_MODEL", "gpt-5.6-terra")
-    resp = client.chat.completions.create(
-        model=_model,
-        messages=messages,
-        max_completion_tokens=2000,
-    )
-    text = (resp.choices[0].message.content or "").strip()
+    def _env_num(name, default):
+        try:
+            return float(os.environ.get(name) or default)
+        except ValueError:
+            return float(default)
+
+    # A reasoning model spends part of this allowance thinking before it writes, so the old 2,000
+    # could leave nothing for the email itself.
+    max_tokens = int(_env_num("EMAIL_MAX_TOKENS", 8000))
+    client = OpenAI(timeout=_env_num("EMAIL_TIMEOUT_SECONDS", 150), max_retries=1)
+    effort = (os.environ.get("EMAIL_REASONING_EFFORT") or "").strip()
+    text, used, tried, last_err = "", "", [], None
+    for _model in email_models(model):
+        kwargs = {"model": _model, "messages": messages, "max_completion_tokens": max_tokens}
+        if effort:
+            kwargs["reasoning_effort"] = effort
+        try:
+            resp = client.chat.completions.create(**kwargs)
+            text = (resp.choices[0].message.content or "").strip()
+        except Exception as e:  # unknown model, timeout, rate limit: the next model writes it
+            last_err = e
+            tried.append(_model)
+            logger.warning(f"Client email: {_model} failed ({type(e).__name__}: {str(e)[:200]})")
+            continue
+        if text:
+            used = _model
+            break
+        last_err = RuntimeError(f"{_model} returned an empty draft")
+        tried.append(_model)
+        logger.warning(f"Client email: {_model} returned an empty draft")
+    if not text:
+        raise last_err or RuntimeError("No model returned a draft")
+    logger.info(f"Client email drafted with {used}" + (f" after {', '.join(tried)} failed" if tried else ""))
     result = _split_subject_body(text)
+    result["model"] = used
+    result["models_failed"] = tried
 
     # Deterministic finish (Nov 4 2026): each line's key exclusions are their own bullet, exactly
     # as built from the forms (so none can be dropped or merged - the Sep 16 2026 guarantee), the
     # subject carries the corporate name, acronyms keep their capitals.
     result["body"] = _fix_acronyms(apply_exclusion_bullets(result.get("body", ""),
                                                            ctx.get("exclusion_bullets") or exclusion_bullets(ctx)))
+    if not (instruction and re.search(r"\bplease\b", instruction, re.I)):
+        result["body"] = drop_please_lead(result["body"])
     if ctx.get("subject") and not (instruction and re.search(r"\bsubject\b", instruction, re.I)):
         result["subject"] = ctx["subject"]
     result["subject"] = _fix_acronyms(result.get("subject", ""))

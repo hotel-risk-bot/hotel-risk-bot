@@ -935,6 +935,7 @@
                     <label>Body</label>
                     <textarea id="email-body" rows="18" style="width:100%;padding:0.65rem;border:1px solid var(--gray-300);border-radius:var(--radius);font-size:0.85rem;font-family:inherit;line-height:1.5;"></textarea>
                 </div>
+                <div id="email-model" style="font-size:0.72rem;color:var(--gray-500);margin-top:0.25rem;"></div>
                 <div id="email-excl-check" class="hidden" style="border:1px solid var(--gray-300);border-radius:var(--radius);padding:0.5rem 0.75rem;font-size:0.78rem;margin-top:0.5rem;"></div>
                 <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.75rem;">
                     <button class="btn btn-primary btn-sm" onclick="copyEmail()">&#128203; Copy Email</button>
@@ -2303,6 +2304,11 @@ async function draftEmail(instruction) {
         if (!res.ok) throw new Error(d.error || 'Draft failed');
         document.getElementById('email-subject').value = d.subject || '';
         document.getElementById('email-body').value = d.body || '';
+        const modelNote = document.getElementById('email-model');
+        if (modelNote) {
+            const failed = (d.models_failed || []).length ? ' (' + d.models_failed.join(', ') + ' did not respond)' : '';
+            modelNote.textContent = d.model ? 'Drafted with ' + d.model + failed : '';
+        }
         renderEmailExclusionCheck(d);
         content.classList.remove('hidden');
         status.classList.add('hidden');
